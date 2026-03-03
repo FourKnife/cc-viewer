@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.9 (2026-03-03)
+
+- Feat: Git Changes panel — displays modified/added/deleted files in left sidebar
+- Feat: Git diff viewer — click file in Git Changes to view full-file diff with context
+- Feat: full-file diff view — shows complete file content with highlighted change lines
+- Feat: change line markers — green for additions, orange for modifications, red for deletions
+- Feat: hover to view old content — modified lines show original text on hover with strikethrough
+- Feat: diff statistics — displays +N additions, ~N modifications, -N deletions at top
+- Feat: syntax highlighting in diff view — supports 20+ languages with highlight.js
+- Feat: deleted file support — shows original content with all lines marked as deleted
+- Feat: new file support — shows all lines marked as added
+- API: `/api/git-diff` endpoint — fetches diff data for specified files with binary/large file detection
+- UI: FileExplorer and GitChanges panels — mutually exclusive, only one visible at a time
+- i18n: added `ui.loadingDiff`, `ui.binaryFileNotice`, `ui.largeFileWarning`, `ui.openInEditor`, `ui.fileSize` entries for all 18 languages
+
 ## 1.4.8 (2026-03-03)
 
 - Feat: smart line-level DiffView — uses `diff` library (Myers algorithm) for accurate line-level diffing

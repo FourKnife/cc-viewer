@@ -1,6 +1,6 @@
 {
   "name": "cc-viewer",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "Claude Code Logger visualization management tool",
   "license": "MIT",
   "main": "server.js",
@@ -62,6 +62,7 @@
     "@xterm/xterm": "^6.0.0",
     "antd": "^5.29.2",
     "diff": "^8.0.3",
+    "highlight.js": "^11.11.1",
     "marked": "^17.0.2",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",

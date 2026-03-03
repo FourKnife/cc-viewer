@@ -313,3 +313,55 @@
   font-size: 14px;
   flex-shrink: 0;
 }
+
+.navSidebar {
+  width: 40px;
+  flex-shrink: 0;
+  background: #0d0d0d;
+  border-right: 1px solid #2a2a2a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 4px;
+}
+
+.navBtn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  color: #666;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.navBtn:hover {
+  color: #ccc;
+  background: #1a1a1a;
+}
+
+.navBtnActive {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(74, 158, 255, 0.15);
+  color: #4a9eff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.navBtnActive:hover {
+  background: rgba(74, 158, 255, 0.25);
+  color: #6ab4ff;
+}

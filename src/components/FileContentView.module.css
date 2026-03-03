@@ -1,0 +1,133 @@
+.fileContentView {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0d0d0d;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid #2a2a2a;
+  background: #111;
+  flex-shrink: 0;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.backBtn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: #666;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.backBtn:hover {
+  color: #ccc;
+  background: #1a1a1a;
+}
+
+.filePath {
+  font-size: 13px;
+  color: #ccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileSize {
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.contentContainer {
+  flex: 1;
+  overflow: auto;
+  background: #0d0d0d;
+}
+
+.codeBlock {
+  min-height: 100%;
+}
+
+.codeContent {
+  padding: 0;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #e0e0e0;
+  overflow-x: auto;
+  tab-size: 2;
+  margin: 0;
+}
+
+.codeContent code {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  background: none;
+  padding: 0;
+  display: block;
+}
+
+.codeLine {
+  display: flex;
+  min-height: 1.5em;
+}
+
+.codeLine:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.lineNumber {
+  flex-shrink: 0;
+  width: 50px;
+  padding: 0 16px 0 16px;
+  text-align: right;
+  color: #555;
+  user-select: none;
+  border-right: 1px solid #2a2a2a;
+}
+
+.lineContent {
+  flex: 1;
+  padding: 0 16px;
+  white-space: pre;
+  overflow-x: visible;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #666;
+  font-size: 14px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #ff6b6b;
+  font-size: 14px;
+}

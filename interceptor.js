@@ -143,7 +143,7 @@ const _initPromise = (async () => {
 
 export { LOG_FILE, _initPromise, _resumeState, _choicePromise, resolveResumeChoice, _projectName, _logDir };
 
-const MAX_LOG_SIZE = 500 * 1024 * 1024; // 500MB
+const MAX_LOG_SIZE = 300 * 1024 * 1024; // 300MB
 
 function isPreflightEntry(entry) {
   if (entry.mainAgent || entry.isHeartbeat || entry.isCountTokens) return false;
@@ -484,7 +484,7 @@ export function setupInterceptor() {
       }
     } catch { }
 
-    // 用户新指令边界：检查日志文件大小，超过 500MB 则切换新文件
+    // 用户新指令边界：检查日志文件大小，超过 300MB 则切换新文件
     if (requestEntry?.mainAgent) {
       checkAndRotateLogFile();
       // 仅 mainAgent 请求时缓存模型名，避免 SubAgent 覆盖

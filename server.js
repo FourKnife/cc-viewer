@@ -523,10 +523,190 @@ function handleRequest(req, res) {
     return;
   }
 
+  // 文件浏览器 API（CLI 模式下项目目录浏览）
+  if (url === '/api/files' && method === 'GET') {
+    const reqPath = parsedUrl.searchParams.get('path') || '.';
+    // 安全校验：拒绝绝对路径和 .. 路径穿越
+    if (reqPath.startsWith('/') || reqPath.includes('..')) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid path' }));
+      return;
+    }
+    const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
+    const targetDir = join(cwd, reqPath);
+    try {
+      const entries = readdirSync(targetDir, { withFileTypes: true });
+      const HIDDEN = new Set(['node_modules', '.git', '.svn', '.hg', '.DS_Store', '__pycache__', '.next', '.nuxt', 'dist', '.cache', '.idea', '.vscode']);
+      const items = entries
+        .filter(e => !e.name.startsWith('.') && !HIDDEN.has(e.name))
+        .map(e => ({ name: e.name, type: e.isDirectory() ? 'directory' : 'file' }))
+        .sort((a, b) => {
+          if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(items));
+    } catch (err) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Directory not found' }));
+    }
+    return;
+  }
+
+  // 读取文件内容 API
+  if (url === '/api/file-content' && method === 'GET') {
+    const reqPath = parsedUrl.searchParams.get('path');
+    if (!reqPath || reqPath.startsWith('/') || reqPath.includes('..')) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid path' }));
+      return;
+    }
+    const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
+    const targetFile = join(cwd, reqPath);
+    try {
+      if (!existsSync(targetFile)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `File not found: ${targetFile}` }));
+        return;
+      }
+      const stat = statSync(targetFile);
+      if (!stat.isFile()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not a file' }));
+        return;
+      }
+      // 限制文件大小 5MB
+      if (stat.size > 5 * 1024 * 1024) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'File too large' }));
+        return;
+      }
+      const content = readFileSync(targetFile, 'utf-8');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ path: reqPath, content, size: stat.size }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Cannot read file: ${err.message}` }));
+    }
+    return;
+  }
+
   // CLI 模式检测
   if (url === '/api/cli-mode' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ cliMode: isCliMode }));
+    return;
+  }
+
+  // Git 状态
+  if (url === '/api/git-status' && method === 'GET') {
+    try {
+      const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
+      const output = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
+      const lines = output.split('\n').filter(line => line.trim());
+      const changes = lines.map(line => {
+        const status = line.substring(0, 2).trim();
+        const file = line.substring(3).trim();
+        return { status, file };
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ changes }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message, changes: [] }));
+    }
+    return;
+  }
+
+  // Git diff 数据获取
+  if (url.startsWith('/api/git-diff') && method === 'GET') {
+    try {
+      const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
+      const filesParam = parsedUrl.searchParams.get('files');
+
+      if (!filesParam) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing files parameter' }));
+        return;
+      }
+
+      const files = filesParam.split(',').map(f => f.trim()).filter(Boolean);
+      const diffs = [];
+
+      for (const file of files) {
+        // 安全检查：防止路径穿越
+        if (file.includes('..') || file.startsWith('/')) continue;
+
+        try {
+          const statusOutput = execSync(`git status --porcelain "${file}"`, { cwd, encoding: 'utf-8', timeout: 3000 });
+          if (!statusOutput.trim()) continue;
+
+          const status = statusOutput.substring(0, 2).trim();
+          const is_new = status === 'A' || status === '??';
+          const is_deleted = status === 'D';
+
+          // 检查是否为二进制文件
+          let is_binary = false;
+          try {
+            const diffCheck = execSync(`git diff --numstat HEAD "${file}"`, { cwd, encoding: 'utf-8', timeout: 3000 });
+            if (diffCheck.includes('-\t-\t')) {
+              is_binary = true;
+            }
+          } catch {}
+
+          let old_content = '';
+          let new_content = '';
+
+          if (!is_binary) {
+            // 获取旧内容（HEAD 版本）
+            if (!is_new) {
+              try {
+                old_content = execSync(`git show HEAD:"${file}"`, { cwd, encoding: 'utf-8', timeout: 5000, maxBuffer: 5 * 1024 * 1024 });
+              } catch {
+                old_content = '';
+              }
+            }
+
+            // 获取新内容（工作区版本）
+            if (!is_deleted) {
+              try {
+                const filePath = join(cwd, file);
+                if (existsSync(filePath)) {
+                  const stat = statSync(filePath);
+                  if (stat.size > 5 * 1024 * 1024) {
+                    // 文件过大
+                    diffs.push({ file, status, is_large: true, size: stat.size });
+                    continue;
+                  }
+                  new_content = readFileSync(filePath, 'utf-8');
+                }
+              } catch {
+                new_content = '';
+              }
+            }
+          }
+
+          diffs.push({
+            file,
+            status,
+            old_content,
+            new_content,
+            is_binary,
+            is_new,
+            is_deleted
+          });
+        } catch (err) {
+          // 跳过无法处理的文件
+          continue;
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ diffs }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message, diffs: [] }));
+    }
     return;
   }
 
@@ -758,8 +938,8 @@ export async function startViewer() {
         currentServer.listen(port, HOST, () => {
           server = currentServer;
           actualPort = port;
-          const url = `http://${HOST}:${port}`;
-          console.error(t('server.started', { host: HOST, port }));
+          const url = `http://127.0.0.1:${port}`;
+          console.error(t('server.started', { host: '127.0.0.1', port }));
           // v2.0.69 之前的版本会清空控制台，自动打开浏览器确保用户能看到界面
           try {
             const ccPkgPath = join(__dirname, '..', '@anthropic-ai', 'claude-code', 'package.json');

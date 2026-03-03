@@ -2,6 +2,10 @@ import React from 'react';
 import { Empty, Typography, Divider, Spin } from 'antd';
 import ChatMessage from './ChatMessage';
 import TerminalPanel from './TerminalPanel';
+import FileExplorer from './FileExplorer';
+import FileContentView from './FileContentView';
+import GitChanges from './GitChanges';
+import GitDiffView from './GitDiffView';
 import { extractToolResultText, getModelInfo } from '../utils/helpers';
 import { isSystemText, classifyUserContent, isMainAgent } from '../utils/contentFilter';
 import { classifyRequest, formatRequestTag } from '../utils/requestType';
@@ -85,6 +89,11 @@ class ChatView extends React.Component {
       ptyPrompt: null,
       ptyPromptHistory: [],
       inputSuggestion: null,
+      fileExplorerOpen: true,
+      currentFile: null,
+      currentGitDiff: null,
+      fileExplorerExpandedPaths: new Set(),
+      gitChangesOpen: false,
     };
     this._queueTimer = null;
     this._prevItemsLen = 0;
@@ -747,6 +756,18 @@ class ChatView extends React.Component {
     document.body.style.userSelect = 'none';
   };
 
+  handleToggleExpandPath = (path) => {
+    this.setState(state => {
+      const newSet = new Set(state.fileExplorerExpandedPaths);
+      if (newSet.has(path)) {
+        newSet.delete(path);
+      } else {
+        newSet.add(path);
+      }
+      return { fileExplorerExpandedPaths: newSet };
+    });
+  };
+
   render() {
     const { mainAgentSessions, cliMode, terminalVisible } = this.props;
     const { allItems, visibleCount, loading, splitRatio } = this.state;
@@ -862,58 +883,117 @@ class ChatView extends React.Component {
 
     return (
       <div ref={this.splitContainerRef} className={styles.splitContainer}>
-        <div className={styles.chatSection} style={terminalVisible ? { flex: splitRatio, minWidth: 0 } : { flex: 1, minWidth: 0 }}>
-          {messageList}
-          {!terminalVisible && (
-            <div className={styles.chatInputBar}>
-              <div className={styles.chatInputWrapper}>
-                <div className={styles.chatTextareaWrap}>
-                  <textarea
-                    ref={this._inputRef}
-                    className={styles.chatTextarea}
-                    placeholder={this.state.inputSuggestion ? '' : t('ui.chatInput.placeholder')}
-                    rows={1}
-                    onKeyDown={this.handleInputKeyDown}
-                    onInput={this.handleInputChange}
-                  />
-                  {this.state.inputSuggestion && this.state.inputEmpty && (
-                    <div className={styles.ghostText}>{this.state.inputSuggestion}</div>
-                  )}
+        <div className={styles.navSidebar}>
+          <button
+            className={this.state.fileExplorerOpen ? styles.navBtnActive : styles.navBtn}
+            onClick={() => this.setState({
+              fileExplorerOpen: true,
+              gitChangesOpen: false,
+              currentFile: null
+            })}
+            title={t('ui.fileExplorer')}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+          <button
+            className={this.state.gitChangesOpen ? styles.navBtnActive : styles.navBtn}
+            onClick={() => this.setState({
+              gitChangesOpen: true,
+              fileExplorerOpen: false,
+              currentFile: null
+            })}
+            title={t('ui.gitChanges')}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="6" y1="3" x2="6" y2="15"/>
+              <circle cx="18" cy="6" r="3"/>
+              <circle cx="6" cy="18" r="3"/>
+              <path d="M18 9a9 9 0 0 1-9 9"/>
+            </svg>
+          </button>
+        </div>
+        {this.state.fileExplorerOpen && (
+          <FileExplorer
+            onClose={() => this.setState({ fileExplorerOpen: false })}
+            onFileClick={(path) => this.setState({ currentFile: path })}
+            expandedPaths={this.state.fileExplorerExpandedPaths}
+            onToggleExpand={this.handleToggleExpandPath}
+          />
+        )}
+        {this.state.gitChangesOpen && (
+          <GitChanges
+            onClose={() => this.setState({ gitChangesOpen: false })}
+            onFileClick={(path) => this.setState({ currentGitDiff: path, currentFile: null })}
+          />
+        )}
+        <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
+          <div className={styles.chatSection} style={terminalVisible ? { flex: splitRatio, minWidth: 0 } : { flex: 1, minWidth: 0 }}>
+            {this.state.currentGitDiff ? (
+              <GitDiffView
+                filePath={this.state.currentGitDiff}
+                onClose={() => this.setState({ currentGitDiff: null })}
+              />
+            ) : this.state.currentFile ? (
+              <FileContentView
+                filePath={this.state.currentFile}
+                onClose={() => this.setState({ currentFile: null })}
+              />
+            ) : (
+              messageList
+            )}
+            {!terminalVisible && (
+              <div className={styles.chatInputBar}>
+                <div className={styles.chatInputWrapper}>
+                  <div className={styles.chatTextareaWrap}>
+                    <textarea
+                      ref={this._inputRef}
+                      className={styles.chatTextarea}
+                      placeholder={this.state.inputSuggestion ? '' : t('ui.chatInput.placeholder')}
+                      rows={1}
+                      onKeyDown={this.handleInputKeyDown}
+                      onInput={this.handleInputChange}
+                    />
+                    {this.state.inputSuggestion && this.state.inputEmpty && (
+                      <div className={styles.ghostText}>{this.state.inputSuggestion}</div>
+                    )}
+                  </div>
+                  <div className={styles.chatInputHint}>
+                    {this.state.inputSuggestion && this.state.inputEmpty
+                      ? t('ui.chatInput.hintTab')
+                      : t('ui.chatInput.hintEnter')}
+                  </div>
                 </div>
-                <div className={styles.chatInputHint}>
-                  {this.state.inputSuggestion && this.state.inputEmpty
-                    ? t('ui.chatInput.hintTab')
-                    : t('ui.chatInput.hintEnter')}
-                </div>
+                <button
+                  className={styles.chatSendBtn}
+                  onClick={this.handleInputSend}
+                  disabled={this.state.inputEmpty}
+                  title={t('ui.chatInput.send')}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13" />
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                </button>
               </div>
-              <button
-                className={styles.chatSendBtn}
-                onClick={this.handleInputSend}
-                disabled={this.state.inputEmpty}
-                title={t('ui.chatInput.send')}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </button>
-            </div>
-          )}
-          {terminalVisible && this.state.inputSuggestion && (
-            <div className={styles.suggestionChip} onClick={this.handleSuggestionToTerminal}>
-              <span className={styles.suggestionChipText}>{this.state.inputSuggestion}</span>
-              <span className={styles.suggestionChipAction}>↵</span>
-            </div>
+            )}
+            {terminalVisible && this.state.inputSuggestion && (
+              <div className={styles.suggestionChip} onClick={this.handleSuggestionToTerminal}>
+                <span className={styles.suggestionChipText}>{this.state.inputSuggestion}</span>
+                <span className={styles.suggestionChipAction}>↵</span>
+              </div>
+            )}
+          </div>
+          {terminalVisible && (
+            <>
+              <div className={styles.vResizer} onMouseDown={this.handleSplitMouseDown} />
+              <div style={{ flex: 1 - splitRatio, minWidth: 200, display: 'flex', flexDirection: 'column' }}>
+                <TerminalPanel />
+              </div>
+            </>
           )}
         </div>
-        {terminalVisible && (
-          <>
-            <div className={styles.vResizer} onMouseDown={this.handleSplitMouseDown} />
-            <div style={{ flex: 1 - splitRatio, minWidth: 200, display: 'flex', flexDirection: 'column' }}>
-              <TerminalPanel />
-            </div>
-          </>
-        )}
       </div>
     );
   }
