@@ -13,19 +13,79 @@ const STATUS_COLORS = {
   '?': '#73c991',
 };
 
+const EXT_COLORS = {
+  js: '#e8d44d', jsx: '#61dafb', ts: '#3178c6', tsx: '#3178c6',
+  json: '#999', md: '#519aba', css: '#a86fd9', scss: '#cd6799',
+  html: '#e34c26', py: '#3572a5', go: '#00add8', rs: '#dea584',
+};
+
 function getFileIcon(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-  const EXT_COLORS = {
-    js: '#e8d44d', jsx: '#61dafb', ts: '#3178c6', tsx: '#3178c6',
-    json: '#999', md: '#519aba', css: '#a86fd9', scss: '#cd6799',
-    html: '#e34c26', py: '#3572a5', go: '#00add8', rs: '#dea584',
-  };
   const color = EXT_COLORS[ext] || '#888';
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
       <polyline points="14 2 14 8 20 8"/>
     </svg>
+  );
+}
+
+function getFolderIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="#c09553" stroke="none">
+      <path d="M2 6c0-1.1.9-2 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z"/>
+    </svg>
+  );
+}
+
+function buildTree(changes) {
+  const root = { dirs: {}, files: [] };
+  for (const change of changes) {
+    const parts = change.file.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node.dirs[parts[i]]) node.dirs[parts[i]] = { dirs: {}, files: [] };
+      node = node.dirs[parts[i]];
+    }
+    node.files.push({ name: parts[parts.length - 1], status: change.status, fullPath: change.file });
+  }
+  return root;
+}
+
+function TreeDir({ name, node, depth, selectedFile, onFileClick }) {
+  const dirNames = Object.keys(node.dirs).sort();
+  const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
+  return (
+    <>
+      {name && (
+        <div className={styles.dirItem} style={{ paddingLeft: 8 + depth * 16 }}>
+          <span className={styles.dirArrow}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: 'rotate(90deg)' }}>
+              <polyline points="9 6 15 12 9 18"/>
+            </svg>
+          </span>
+          <span className={styles.icon}>{getFolderIcon()}</span>
+          <span className={styles.dirName}>{name}</span>
+        </div>
+      )}
+      {dirNames.map(dir => (
+        <TreeDir key={dir} name={dir} node={node.dirs[dir]} depth={name ? depth + 1 : depth} selectedFile={selectedFile} onFileClick={onFileClick} />
+      ))}
+      {files.map(file => (
+        <div
+          key={file.fullPath}
+          className={`${styles.changeItem} ${selectedFile === file.fullPath ? styles.changeItemActive : ''}`}
+          style={{ paddingLeft: 8 + (name ? depth + 1 : depth) * 16 }}
+          onClick={() => onFileClick && onFileClick(file.fullPath)}
+        >
+          <span className={styles.icon}>{getFileIcon(file.name)}</span>
+          <span className={styles.fileName}>{file.name}</span>
+          <span className={styles.status} style={{ color: STATUS_COLORS[file.status] || '#888' }}>
+            {file.status}
+          </span>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -108,19 +168,9 @@ export default function MobileGitDiff() {
           {!loading && !error && changes && changes.length === 0 && (
             <div className={styles.emptyText}>No changes</div>
           )}
-          {!loading && !error && changes && changes.length > 0 && changes.map((change, idx) => (
-            <div
-              key={idx}
-              className={`${styles.changeItem} ${selectedFile === change.file ? styles.changeItemActive : ''}`}
-              onClick={() => setSelectedFile(change.file)}
-            >
-              <span className={styles.status} style={{ color: STATUS_COLORS[change.status] || '#888' }}>
-                {change.status}
-              </span>
-              <span className={styles.icon}>{getFileIcon(change.file)}</span>
-              <span className={styles.fileName}>{change.file}</span>
-            </div>
-          ))}
+          {!loading && !error && changes && changes.length > 0 && (
+            <TreeDir name="" node={buildTree(changes)} depth={0} selectedFile={selectedFile} onFileClick={setSelectedFile} />
+          )}
         </div>
       </div>
 

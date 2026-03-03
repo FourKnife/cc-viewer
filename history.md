@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.13 (2026-03-04)
+
+- Feat: FileExplorer selected file highlight — active file shows background matching hover state
+- Feat: FileExplorer remembers folder expanded state when panel is closed and reopened
+- UI: folder expand arrow changed from text triangles (▸/▾) to SVG chevron with rotation animation
+- Feat: Git Changes tree view — files displayed in directory hierarchy instead of flat list (desktop & mobile)
+- Feat: terminal auto-focus on page load in CLI mode
+- Feat: sub-agent avatars differentiated by type (search/explore, plan, default)
+- UI: "Live Monitoring" label renamed to "Project" across all i18n languages
+- UI: snap lines reduced to show only the closest one during terminal resize drag
+- Fix: git diff commands hardened with `--` separator and suppressed stderr via stdio pipes
+- Fix: skip binary file check for deleted files in git diff API
+
 ## 1.4.12 (2026-03-03)
 
 - Perf: WebGL renderer for terminal — GPU-accelerated character drawing with automatic Canvas fallback

@@ -462,6 +462,15 @@ class ChatMessage extends React.Component {
     );
   }
 
+  _getSubAvatarType() {
+    const label = this.props.label || '';
+    const match = label.match(/SubAgent:\s*(\w+)/i);
+    const st = match ? match[1].toLowerCase() : '';
+    if (st === 'explore' || st === 'search') return 'sub-search';
+    if (st === 'plan') return 'sub-plan';
+    return 'sub';
+  }
+
   renderSubAgentChatMessage() {
     const { content, toolResultMap = {}, label } = this.props;
     const innerContent = this.renderAssistantContent(content, toolResultMap);
@@ -478,8 +487,8 @@ class ChatMessage extends React.Component {
           </div>
           {this.renderHighlightBubble(styles.bubbleAssistant, innerContent)}
         </div>
-        <div className={styles.avatar} style={{ background: '#4a1d96' }}
-          dangerouslySetInnerHTML={{ __html: getSvgAvatar('sub') }}
+        <div className={styles.avatar} style={{ background: 'rgba(255, 255, 255, 0.1)' }}
+          dangerouslySetInnerHTML={{ __html: getSvgAvatar(this._getSubAvatarType()) }}
         />
       </div>
     );
@@ -489,8 +498,8 @@ class ChatMessage extends React.Component {
     const { label, resultText, toolName, toolInput } = this.props;
     return (
       <div className={styles.messageRow}>
-        <div className={styles.avatar} style={{ background: '#4a1d96' }}
-          dangerouslySetInnerHTML={{ __html: getSvgAvatar('sub') }}
+        <div className={styles.avatar} style={{ background: 'rgba(255, 255, 255, 0.1)' }}
+          dangerouslySetInnerHTML={{ __html: getSvgAvatar(this._getSubAvatarType()) }}
         />
         <div className={styles.contentCol}>
           {this.renderLabel(label)}

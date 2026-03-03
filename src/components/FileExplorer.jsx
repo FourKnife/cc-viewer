@@ -31,13 +31,35 @@ function getFileIcon(name, type) {
   );
 }
 
-function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand }) {
+function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile }) {
   const [children, setChildren] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const childPath = path ? `${path}/${item.name}` : item.name;
   const expanded = expandedPaths.has(childPath);
+
+  const fetchChildren = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/files?path=${encodeURIComponent(childPath)}`);
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      setChildren(data);
+    } catch {
+      setError('Error');
+    } finally {
+      setLoading(false);
+    }
+  }, [childPath]);
+
+  // 组件挂载时如果已在展开状态，自动加载子节点（用于恢复展开状态）
+  useEffect(() => {
+    if (item.type === 'directory' && expanded && children === null && !loading) {
+      fetchChildren();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = useCallback(async () => {
     if (item.type !== 'directory') {
@@ -50,33 +72,27 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
       return;
     }
     if (children === null) {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(`/api/files?path=${encodeURIComponent(childPath)}`);
-        if (!res.ok) throw new Error('Failed');
-        const data = await res.json();
-        setChildren(data);
-      } catch {
-        setError('Error');
-      } finally {
-        setLoading(false);
-      }
+      await fetchChildren();
     }
     onToggleExpand(childPath);
-  }, [expanded, children, childPath, item, onFileClick, onToggleExpand]);
+  }, [expanded, children, childPath, item, onFileClick, onToggleExpand, fetchChildren]);
 
   const isDir = item.type === 'directory';
+  const isSelected = !isDir && currentFile && currentFile === childPath;
 
   return (
     <>
       <div
-        className={styles.treeItem}
+        className={`${styles.treeItem}${isSelected ? ' ' + styles.treeItemSelected : ''}`}
         style={{ paddingLeft: 8 + depth * 16 }}
         onClick={toggle}
       >
         <span className={styles.arrow}>
-          {isDir ? (expanded ? '▾' : '▸') : ''}
+          {isDir ? (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>
+              <polyline points="9 6 15 12 9 18"/>
+            </svg>
+          ) : ''}
         </span>
         <span className={styles.icon}>{getFileIcon(item.name, item.type)}</span>
         <span className={styles.fileName}>{item.name}</span>
@@ -88,13 +104,13 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         <div className={styles.error} style={{ paddingLeft: 24 + depth * 16 }}>{error}</div>
       )}
       {expanded && children && children.map(child => (
-        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} />
+        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} />
       ))}
     </>
   );
 }
 
-export default function FileExplorer({ onClose, onFileClick, expandedPaths, onToggleExpand }) {
+export default function FileExplorer({ onClose, onFileClick, expandedPaths, onToggleExpand, currentFile }) {
   const [items, setItems] = useState(null);
   const [error, setError] = useState(null);
   const mounted = useRef(true);
@@ -123,7 +139,7 @@ export default function FileExplorer({ onClose, onFileClick, expandedPaths, onTo
         {error && <div className={styles.error}>{error}</div>}
         {!items && !error && <div className={styles.loading}>Loading...</div>}
         {items && items.map(item => (
-          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} />
+          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} />
         ))}
       </div>
     </div>

@@ -98,6 +98,7 @@ class TerminalPanel extends React.Component {
     } else {
       requestAnimationFrame(() => {
         this.fitAddon.fit();
+        this.terminal.focus();
       });
     }
 

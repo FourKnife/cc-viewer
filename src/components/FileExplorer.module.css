@@ -67,12 +67,17 @@
   background: #1a1a1a;
 }
 
+.treeItemSelected {
+  background: #1a1a1a;
+}
+
 .arrow {
   width: 16px;
   flex-shrink: 0;
-  font-size: 10px;
   color: #666;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .icon {

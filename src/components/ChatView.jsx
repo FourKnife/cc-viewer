@@ -801,7 +801,7 @@ class ChatView extends React.Component {
       // 吸附逻辑
       let activeSnapLine = null;
       if (enableSnap && snapLines.length > 0) {
-        const snapThreshold = 50; // 50px 的吸附阈值
+        const snapThreshold = 60; // 60px 的吸附阈值
         let minDistance = Infinity;
         let closestSnap = null;
 
@@ -1046,28 +1046,27 @@ class ChatView extends React.Component {
               />
             );
           })()}
-          {/* 吸附线：只显示距离当前位置最近的两条 */}
+          {/* 吸附线：只显示距离当前位置最近的一条 */}
           {this.state.isDragging && (() => {
             const container = this.innerSplitRef.current;
             if (!container) return null;
             const containerWidth = container.getBoundingClientRect().width;
             const resizerWidth = 5;
             const currentLinePos = containerWidth - this.state.terminalWidth - resizerWidth;
-            // 按距离排序，取最近的两条
+            // 按距离排序，取最近的一条
             const sorted = [...this.state.snapLines]
               .map(snap => ({ ...snap, dist: Math.abs(snap.linePosition - currentLinePos) }))
-              .sort((a, b) => a.dist - b.dist)
-              .slice(0, 2);
-            return sorted.map((snap, idx) => {
-              const isActive = this.state.activeSnapLine && this.state.activeSnapLine.cols === snap.cols;
-              return (
-                <div
-                  key={idx}
-                  className={isActive ? styles.snapLineActive : styles.snapLine}
-                  style={{ left: `${snap.linePosition}px` }}
-                />
-              );
-            });
+              .sort((a, b) => a.dist - b.dist);
+            if (sorted.length === 0) return null;
+            const snap = sorted[0];
+            const isActive = this.state.activeSnapLine && this.state.activeSnapLine.cols === snap.cols;
+            return (
+              <div
+                key={snap.cols}
+                className={isActive ? styles.snapLineActive : styles.snapLine}
+                style={{ left: `${snap.linePosition}px` }}
+              />
+            );
           })()}
           {this.state.fileExplorerOpen && (
             <FileExplorer
@@ -1075,6 +1074,7 @@ class ChatView extends React.Component {
               onFileClick={(path) => this.setState({ currentFile: path })}
               expandedPaths={this.state.fileExplorerExpandedPaths}
               onToggleExpand={this.handleToggleExpandPath}
+              currentFile={this.state.currentFile}
             />
           )}
           {this.state.gitChangesOpen && (

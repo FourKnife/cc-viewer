@@ -602,7 +602,7 @@ function handleRequest(req, res) {
   if (url === '/api/git-status' && method === 'GET') {
     try {
       const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
-      const output = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
+      const output = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
       const lines = output.split('\n').filter(line => line.trim());
       const changes = lines.map(line => {
         const status = line.substring(0, 2).trim();
@@ -638,21 +638,23 @@ function handleRequest(req, res) {
         if (file.includes('..') || file.startsWith('/')) continue;
 
         try {
-          const statusOutput = execSync(`git status --porcelain "${file}"`, { cwd, encoding: 'utf-8', timeout: 3000 });
+          const statusOutput = execSync(`git status --porcelain -- "${file}"`, { cwd, encoding: 'utf-8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] });
           if (!statusOutput.trim()) continue;
 
           const status = statusOutput.substring(0, 2).trim();
           const is_new = status === 'A' || status === '??';
           const is_deleted = status === 'D';
 
-          // 检查是否为二进制文件
+          // 检查是否为二进制文件（已删除文件跳过）
           let is_binary = false;
-          try {
-            const diffCheck = execSync(`git diff --numstat HEAD "${file}"`, { cwd, encoding: 'utf-8', timeout: 3000 });
-            if (diffCheck.includes('-\t-\t')) {
-              is_binary = true;
-            }
-          } catch {}
+          if (!is_deleted) {
+            try {
+              const diffCheck = execSync(`git diff --numstat HEAD -- "${file}"`, { cwd, encoding: 'utf-8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] });
+              if (diffCheck.includes('-\t-\t')) {
+                is_binary = true;
+              }
+            } catch {}
+          }
 
           let old_content = '';
           let new_content = '';
@@ -661,7 +663,7 @@ function handleRequest(req, res) {
             // 获取旧内容（HEAD 版本）
             if (!is_new) {
               try {
-                old_content = execSync(`git show HEAD:"${file}"`, { cwd, encoding: 'utf-8', timeout: 5000, maxBuffer: 5 * 1024 * 1024 });
+                old_content = execSync(`git show HEAD:"${file}"`, { cwd, encoding: 'utf-8', timeout: 5000, maxBuffer: 5 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
               } catch {
                 old_content = '';
               }
