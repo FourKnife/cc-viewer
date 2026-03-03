@@ -21,22 +21,6 @@ body {
   *::-webkit-scrollbar-thumb:hover { background: #555; }
 }
 
-.diff-view {
-  background: #1a1a2e;
-  border: 1px solid #2a2a3e;
-  border-radius: 8px;
-  padding: 8px 12px;
-}
-.diff-line-del {
-  background: rgba(239, 68, 68, 0.15);
-  color: #fca5a5;
-  padding: 0 4px;
-}
-.diff-line-add {
-  background: rgba(34, 197, 94, 0.15);
-  color: #86efac;
-  padding: 0 4px;
-}
 
 /* Syntax highlight */
 .code-highlight { color: #e6edf3; }

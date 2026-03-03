@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.8 (2026-03-03)
+
+- Feat: smart line-level DiffView — uses `diff` library (Myers algorithm) for accurate line-level diffing
+- Feat: DiffView now shows dual line numbers (old/new), context lines in gray, deletions in red, additions in green
+- Feat: DiffView displays `+N -M` change summary in header
+- Feat: DiffView resolves real file line numbers from prior Read results in the same conversation
+- Refactor: DiffView migrated from global CSS to CSS Modules with monospace table layout
+- UI: mobile chat zoom reduced from 0.7 to 0.6 for better fit on small screens
+- i18n: added `ui.diffSummary` entry for all 18 languages
+
 ## 1.4.7 (2026-03-03)
 
 - UI: language selector moved from AppHeader right side to CC-Viewer dropdown as submenu

@@ -29,6 +29,7 @@ function buildToolResultMap(messages) {
   }
 
   const toolResultMap = {};
+  const readContentMap = {};
   for (const msg of messages) {
     if (msg.role === 'user' && Array.isArray(msg.content)) {
       for (const block of msg.content) {
@@ -48,17 +49,22 @@ function buildToolResultMap(messages) {
               label = t('ui.toolReturnNamed', { name: matchedTool.name });
             }
           }
+          const resultText = extractToolResultText(block);
           toolResultMap[block.tool_use_id] = {
             label,
             toolName,
             toolInput,
-            resultText: extractToolResultText(block),
+            resultText,
           };
+          // 收集 Read 结果，用于 Edit diff 行号定位
+          if (matchedTool && matchedTool.name === 'Read' && matchedTool.input?.file_path) {
+            readContentMap[matchedTool.input.file_path] = resultText;
+          }
         }
       }
     }
   }
-  return { toolUseMap, toolResultMap };
+  return { toolUseMap, toolResultMap, readContentMap };
 }
 
 class ChatView extends React.Component {
@@ -277,7 +283,7 @@ class ChatView extends React.Component {
 
   renderSessionMessages(messages, keyPrefix, modelInfo, tsToIndex) {
     const { userProfile, collapseToolResults, expandThinking, onViewRequest } = this.props;
-    const { toolUseMap, toolResultMap } = buildToolResultMap(messages);
+    const { toolUseMap, toolResultMap, readContentMap } = buildToolResultMap(messages);
 
     const renderedMessages = [];
 
@@ -347,11 +353,11 @@ class ChatView extends React.Component {
       } else if (msg.role === 'assistant') {
         if (Array.isArray(content)) {
           renderedMessages.push(
-            <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={content} toolResultMap={toolResultMap} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} {...viewReqProps} />
+            <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={content} toolResultMap={toolResultMap} readContentMap={readContentMap} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} {...viewReqProps} />
           );
         } else if (typeof content === 'string') {
           renderedMessages.push(
-            <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} {...viewReqProps} />
+            <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} readContentMap={readContentMap} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} {...viewReqProps} />
           );
         }
       }

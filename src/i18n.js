@@ -1736,6 +1736,26 @@ const i18nData = {
     "tr": "\"Düşünce süreci\"ni genişlet",
     "uk": "Розгорнути \"Процес мислення\""
   },
+  "ui.diffSummary": {
+    "zh": "+{added} -{removed}",
+    "en": "+{added} -{removed}",
+    "zh-TW": "+{added} -{removed}",
+    "ko": "+{added} -{removed}",
+    "ja": "+{added} -{removed}",
+    "de": "+{added} -{removed}",
+    "es": "+{added} -{removed}",
+    "fr": "+{added} -{removed}",
+    "it": "+{added} -{removed}",
+    "da": "+{added} -{removed}",
+    "pl": "+{added} -{removed}",
+    "ru": "+{added} -{removed}",
+    "ar": "+{added} -{removed}",
+    "no": "+{added} -{removed}",
+    "pt-BR": "+{added} -{removed}",
+    "th": "+{added} -{removed}",
+    "tr": "+{added} -{removed}",
+    "uk": "+{added} -{removed}"
+  },
   "ui.expandDiff": {
     "zh": "默认展开 Body Diff JSON",
     "en": "Expand Body Diff JSON by default",

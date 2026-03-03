@@ -119,12 +119,38 @@ class ChatMessage extends React.Component {
 
     // Edit → diff 视图
     if (tu.name === 'Edit' && tu.input && tu.input.old_string != null && tu.input.new_string != null) {
+      const readContentMap = this.props.readContentMap || {};
+      const filePath = tu.input.file_path || '';
+      let startLine = 1;
+      const readContent = readContentMap[filePath];
+      if (readContent && tu.input.old_string) {
+        // Read 结果是 cat -n 格式，提取纯内容并定位 old_string
+        const readLines = readContent.split('\n');
+        const plainLines = [];
+        const lineNums = [];
+        for (const rl of readLines) {
+          const m = rl.match(/^\s*(\d+)\t(.*)$/);
+          if (m) {
+            lineNums.push(parseInt(m[1], 10));
+            plainLines.push(m[2]);
+          }
+        }
+        const plainText = plainLines.join('\n');
+        const idx = plainText.indexOf(tu.input.old_string);
+        if (idx >= 0) {
+          // 计算 old_string 起始位于第几行
+          const before = plainText.substring(0, idx);
+          const lineOffset = before.split('\n').length - 1;
+          startLine = lineNums[lineOffset] ?? (lineOffset + 1);
+        }
+      }
       return (
         <DiffView
           key={tu.id}
-          file_path={tu.input.file_path || ''}
+          file_path={filePath}
           old_string={tu.input.old_string}
           new_string={tu.input.new_string}
+          startLine={startLine}
         />
       );
     }
