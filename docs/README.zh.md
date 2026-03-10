@@ -1,6 +1,7 @@
 # CC-Viewer
 
 Claude Code 请求监控系统，实时捕获并可视化展示 Claude Code 的所有 API 请求与响应(原始文本，不做阉割)。方便开发者监控自己的 Context，以便于 Vibe Coding 过程中回顾和排查问题。
+最新版本的 CC-Viewer 还提供了服务器部署web编程的方案，以及移动端编程的工具。欢迎大家在自己的项目中应用，未来也将开放更多插件功能，支持云端部署。
 
 [English](../README.md) | [繁體中文](./README.zh-TW.md) | [한국어](./README.ko.md) | [日本語](./README.ja.md) | [Deutsch](./README.de.md) | [Español](./README.es.md) | [Français](./README.fr.md) | [Italiano](./README.it.md) | [Dansk](./README.da.md) | [Polski](./README.pl.md) | [Русский](./README.ru.md) | [العربية](./README.ar.md) | [Norsk](./README.no.md) | [Português (Brasil)](./README.pt-BR.md) | [ไทย](./README.th.md) | [Türkçe](./README.tr.md) | [Українська](./README.uk.md)
 
