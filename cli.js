@@ -383,11 +383,12 @@ async function runCliModeWorkspaceSelector(extraClaudeArgs = []) {
 // === 主逻辑 ===
 
 const args = process.argv.slice(2);
+
+// ccv 自有命令判断
+const isLogger = args.includes('-logger');
 const isUninstall = args.includes('--uninstall');
 const isHelp = args.includes('--help') || args.includes('-h') || args[0] === 'help';
 const isVersion = args.includes('--v') || args.includes('--version') || args.includes('-v');
-const isCliMode = args.includes('--c') || args.includes('-c');
-const isDangerousMode = args.includes('-d') || args.includes('--d');
 
 if (isHelp) {
   console.log(t('cli.help'));
@@ -404,31 +405,13 @@ if (isVersion) {
   process.exit(0);
 }
 
-if (isCliMode || isDangerousMode) {
-  const extraArgs = isDangerousMode ? ['--dangerously-skip-permissions'] : [];
-
-  // 解析 -d/-c 后的可选路径参数
-  const flagIndex = args.findIndex(a => a === '-d' || a === '--d' || a === '-c' || a === '--c');
-  let workspacePath = null;
-  if (flagIndex >= 0 && flagIndex + 1 < args.length && !args[flagIndex + 1].startsWith('-')) {
-    workspacePath = resolve(args[flagIndex + 1]);
-  }
-
-  // 默认用 cwd 启动，支持可选路径参数
-  runCliMode(extraArgs, workspacePath || process.cwd()).catch(err => {
-    console.error('CLI mode error:', err);
-    process.exit(1);
-  });
-} else if (args[0] === 'run') {
-  runProxyCommand(args);
-} else if (isUninstall) {
+if (isUninstall) {
   const cliResult = removeCliJsInjection();
   const shellResult = removeShellHook();
 
   if (cliResult === 'removed' || cliResult === 'clean') {
     console.log(t('cli.uninstall.cliCleaned'));
   } else if (cliResult === 'not_found') {
-    // console.log(t('cli.uninstall.cliNotFound'));
     // Silent is better for mixed mode uninstall
   } else {
     console.log(t('cli.uninstall.cliFail'));
@@ -444,12 +427,13 @@ if (isCliMode || isDangerousMode) {
   console.log(t('cli.uninstall.reloadShell'));
   console.log(t('cli.uninstall.done'));
   process.exit(0);
-} else {
-  // Installation Logic
+}
+
+if (isLogger) {
+  // 安装/修复 hook 逻辑（原来无参数 ccv 的行为）
   let mode = 'unknown';
 
-  // Check PATH to determine priority
-  let prefersNative = true; // default to native if not found in PATH
+  let prefersNative = true;
   const paths = (process.env.PATH || '').split(':');
   for (const dir of paths) {
     if (!dir) continue;
@@ -542,4 +526,17 @@ if (isCliMode || isDangerousMode) {
       process.exit(1);
     }
   }
+  process.exit(0);
+}
+
+if (args[0] === 'run') {
+  runProxyCommand(args);
+} else {
+  // 默认行为：所有参数透传给 claude（通过 PTY + Web Viewer）
+  // 展开 --d 快捷方式为 --dangerously-skip-permissions
+  const claudeArgs = args.map(a => a === '--d' ? '--dangerously-skip-permissions' : a);
+  runCliMode(claudeArgs, process.cwd()).catch(err => {
+    console.error('CLI mode error:', err);
+    process.exit(1);
+  });
 }

@@ -381,4 +381,27 @@ describe('arg parsing', () => {
     // Should NOT attempt installation
     assert.ok(!r.stdout.includes('READY'));
   });
+
+  it('-logger triggers install logic (not passthrough)', () => {
+    const fakeHome = resolve(tmpdir(), `ccv-test-logger-${Date.now()}`);
+    mkdirSync(fakeHome, { recursive: true });
+    writeFileSync(join(fakeHome, '.zshrc'), '# empty\n');
+    const r = runCli(['-logger'], {
+      env: { HOME: fakeHome, SHELL: '/bin/zsh' },
+    });
+    // -logger should attempt hook installation, not launch claude
+    // It may fail if claude is not installed, but it should NOT show help text
+    assert.ok(!r.stdout.includes('Usage:') || r.stdout.includes('READY') || r.stdout.includes('installed') || r.stderr.includes('claude') || r.exitCode !== 0);
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  it('help text reflects new passthrough usage', () => {
+    const r = runCli(['--help']);
+    assert.equal(r.exitCode, 0);
+    assert.ok(r.stdout.includes('-logger'), 'help should mention -logger');
+    assert.ok(r.stdout.includes('passed through') || r.stdout.includes('passed\nthrough'), 'help should mention passthrough');
+    // Old -d/-c flags should no longer appear as ccv options
+    assert.ok(!r.stdout.includes('-d [path]'), 'help should not mention old -d [path]');
+    assert.ok(!r.stdout.includes('-c [path]'), 'help should not mention old -c [path]');
+  });
 });

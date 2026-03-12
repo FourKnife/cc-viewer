@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.19 (2026-03-12)
+
+- Refactor: ccv argument passthrough — ccv is now a drop-in replacement for claude, all args passed through directly
+- Remove: `-c`/`-d` flags as ccv-specific options (now passed through to claude as `--continue`/`--debug`)
+- Add: `ccv -logger` command for hook installation (replaces bare `ccv`)
+- Add: `--d` shortcut for `--dangerously-skip-permissions`
+- Update: help text (`ccv -h`) now shows both ccv-specific and claude passthrough options
+- Update: all 18 language README files to reflect new command format
+
 ## 1.5.18 (2026-03-11)
 
 - Improve: compact JSON log format — remove pretty-print indentation to reduce log file size

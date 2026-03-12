@@ -21,16 +21,15 @@ npm install -g cc-viewer --registry=https://registry.npmjs.org
 
 ### 编程模式
 
-== claude 
+ccv 是 claude 的直接替身，所有参数透传给 claude，同时启动 Web Viewer。
 
 ```bash
-ccv -c
-```
-
-== claude --dangerously-skip-permissions
-
-```bash
-ccv -d
+ccv                    # == claude（交互模式）
+ccv -c                 # == claude --continue（继续上次对话）
+ccv -r                 # == claude --resume（恢复对话）
+ccv -p "hello"         # == claude --print "hello"（打印模式）
+ccv --d                # == claude --dangerously-skip-permissions（快捷方式）
+ccv --model opus       # == claude --model opus
 ```
 
 编程模式启动以后，会主动打开web页面。
@@ -44,13 +43,13 @@ ccv -d
 
 ⚠️如果你仍然习惯使用claude 原生工具，或者VS code插件，请使用该模式。
 
-这个模式下面启动 ```claude``` 或者 ```claude --dangerously-skip-permissions``` 
+这个模式下面启动 ```claude``` 或者 ```claude --dangerously-skip-permissions```
 
 会自动启动一个日志进程自动记录请求日志到~/.claude/cc-viewer/*yourproject*/date.jsonl
 
 启动日志模式：
 ```bash
-ccv
+ccv -logger
 ```
 
 在控制台无法打印具体端口的时候，默认第一个启动端口是127.0.0.1:7008。同时存在多个末尾顺延，如7009、7010
@@ -101,7 +100,7 @@ ccv -h
 
 ### 编程模式
 
-在使用 ccv -c 或者 ccv -d 启动以后可以看见：
+在使用 ccv 启动以后可以看见：
 
 <img width="1500" height="725" alt="image" src="https://github.com/user-attachments/assets/a64a381e-5a68-430c-b594-6d57dc01f4d3" />
 
