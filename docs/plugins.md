@@ -160,7 +160,7 @@ Triggered whenever a new JSONL log entry is detected. Useful for forwarding log 
 | Property | Description |
 |----------|-------------|
 | **Type** | Parallel (concurrent notification) |
-| **Parameters** | `entry` — the full JSONL log entry object containing request/response data, token usage, etc. |
+| **Parameters** | `entry` — the full JSONL log entry object containing request/response data, token usage, etc. Includes `entry.pid` (Claude process PID: PTY child PID in CLI mode, `process.pid` in hook-injection mode; may be `null` if PTY is not running) |
 | **Returns** | Ignored |
 | **Timing** | When a new entry is appended to the JSONL log file |
 

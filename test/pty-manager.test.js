@@ -8,14 +8,19 @@ import {
   _setPtyImportForTests,
   onPtyData,
   onPtyExit,
+  getPtyPid,
   getPtyState,
   getCurrentWorkspace,
   getOutputBuffer,
 } from '../pty-manager.js';
 
-// ─── getPtyState / getCurrentWorkspace (no PTY running) ───
+// ─── getPtyPid / getPtyState / getCurrentWorkspace (no PTY running) ───
 
 describe('pty-manager: state queries without PTY', () => {
+  it('getPtyPid returns null when no PTY', () => {
+    assert.equal(getPtyPid(), null);
+  });
+
   it('getPtyState returns not running when no PTY', () => {
     const state = getPtyState();
     assert.equal(state.running, false);
@@ -92,6 +97,7 @@ describe('pty-manager: spawnClaude integration', () => {
         const exitHandlers = [];
         let killed = false;
         const inst = {
+          pid: 12345 + spawned.length,
           command,
           args,
           opts,
@@ -117,6 +123,13 @@ describe('pty-manager: spawnClaude integration', () => {
   afterEach(() => {
     killPty();
     _setPtyImportForTests(null);
+  });
+
+  it('getPtyPid returns PID when PTY is running', async () => {
+    await spawnClaude(9999, process.cwd(), [], '/bin/echo');
+    assert.equal(getPtyPid(), 12345);
+    killPty();
+    assert.equal(getPtyPid(), null);
   });
 
   it('getPtyState reflects running state after spawn', async () => {

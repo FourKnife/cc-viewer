@@ -43,6 +43,22 @@ const PREFS_FILE = join(LOG_DIR, 'preferences.json');
 const isCliMode = process.env.CCV_CLI_MODE === '1';
 const isWorkspaceMode = process.env.CCV_WORKSPACE_MODE === '1';
 
+// 获取 Claude 进程 PID（CLI 模式下从 pty-manager 获取）
+let _getPtyPidFn = null;
+function getClaudePid() {
+  if (!isCliMode) return process.pid;
+  if (_getPtyPidFn) return _getPtyPidFn();
+  // lazy load 尚未完成，尝试同步获取（pty-manager 可能已被其他路径加载）
+  return null;
+}
+if (isCliMode) {
+  import('./pty-manager.js').then(m => {
+    _getPtyPidFn = m.getPtyPid;
+  }).catch(err => {
+    console.error('[CC Viewer] Failed to load pty-manager for PID tracking:', err.message);
+  });
+}
+
 // 统一的文件/目录忽略规则（仅隐藏系统和版本控制目录）
 const IGNORED_PATTERNS = new Set([
   '.git', '.svn', '.hg', '.DS_Store',
@@ -213,6 +229,10 @@ function watchLogFile(logFile) {
         entries.forEach(entry => {
           try {
             const parsed = JSON.parse(entry);
+            // 注入 Claude 进程 PID：CLI 模式从 PTY 获取，非 CLI 模式使用当前进程 PID
+            if (!parsed.pid) {
+              parsed.pid = getClaudePid();
+            }
             sendToClients(parsed);
             runParallelHook('onNewEntry', parsed).catch(() => {});
           } catch (err) {

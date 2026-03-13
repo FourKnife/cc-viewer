@@ -206,6 +206,7 @@ hooks: {
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `entry` | `object` | 完整的 JSONL 日志条目对象，包含请求/响应信息、token 用量等 |
+| `entry.pid` | `number \| null` | Claude 进程 PID。CLI 模式下为 PTY 子进程 PID；非 CLI 模式（hook 注入）下为当前进程 PID。PTY 未启动或已退出时可能为 `null` |
 
 ```javascript
 hooks: {
