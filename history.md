@@ -3,6 +3,7 @@
 ## 1.5.32 (2026-03-14)
 
 - Refactor: move proxy-errors.js and proxy-env.js into lib/ directory
+- Fix: skip redundant interceptor setup when CCV_PROXY_MODE is set (prevents duplicate fetch patching in Claude subprocess)
 - Chore: remove stale `locales/` entry from package.json files array
 
 ## 1.5.31 (2026-03-14)

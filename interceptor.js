@@ -483,7 +483,9 @@ export function setupInterceptor() {
 }
 
 // 自动执行拦截器设置
-if (!_ccvSkip) setupInterceptor();
+// proxy 模式下（ccv CLI 或 ccv run），外层 proxy.js 已显式调用 setupInterceptor()，
+// 这里跳过自动执行，避免 Claude 进程中重复拦截 fetch
+if (!_ccvSkip && !process.env.CCV_PROXY_MODE) setupInterceptor();
 
 // 等待日志文件初始化完成后启动 Web Viewer 服务
 // 如果是 ccv --c 通过 proxy 模式启动的，外层已有 server，跳过
