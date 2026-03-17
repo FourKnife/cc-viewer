@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.45 (2026-03-17)
+
+- Fix: KV-Cache user prompt navigation — added SVG marching-ants dashed border animation on highlighted cache blocks (matching ChatMessage style)
+- Fix: highlight timing — detect actual scroll completion via `scrollend` event + 500ms minimum delay, so animation appears after scroll settles instead of during
+- Feature: raw mode cross-navigation — clicking user prompt nav in header popover now selects the MainAgent request, switches to KV-Cache-Text tab, and scrolls to the message with animation in DetailPanel
+- Fix: DetailPanel performance — added `componentWillUnmount` timer cleanup, limited highlight state re-renders to kv-cache-text tab only, clear timers on request switch
+- i18n: added `ui.userPromptNav` entries for all 18 supported languages, changed `ui.tokens` zh/zh-TW from "令牌" to "Token"
+
 ## 1.5.43 (2026-03-17)
 
 - Fix: AskUserQuestion multi-question submit — replaced stale React state closure check with synchronous instance variable (`_currentPtyPrompt`) for reliable prompt detection across sequential question submissions

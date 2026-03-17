@@ -35,7 +35,7 @@ const LANG_OPTIONS = [
 class AppHeader extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { countdownText: '', promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false };
+    this.state = { countdownText: '', promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false, cacheHighlightIdx: null, cacheHighlightFading: false };
     this._rafId = null;
     this._expiredTimer = null;
     this.updateCountdown = this.updateCountdown.bind(this);
@@ -57,6 +57,8 @@ class AppHeader extends React.Component {
   componentWillUnmount() {
     if (this._rafId) cancelAnimationFrame(this._rafId);
     if (this._expiredTimer) clearTimeout(this._expiredTimer);
+    if (this._cacheFadeClearTimer) clearTimeout(this._cacheFadeClearTimer);
+    this._cacheUnbindScrollFade();
   }
 
   startCountdown() {
@@ -364,7 +366,86 @@ class AppHeader extends React.Component {
     );
   }
 
-  renderCacheContentPopover() {
+  _cacheUnbindScrollFade() {
+    if (this._cacheOnScrollFade && this._cacheScrollEl) {
+      this._cacheScrollEl.removeEventListener('scroll', this._cacheOnScrollFade);
+      this._cacheOnScrollFade = null;
+    }
+  }
+
+  _cacheBindScrollFade() {
+    this._cacheUnbindScrollFade();
+    const el = this._cacheScrollEl;
+    if (!el) return;
+    this._cacheOnScrollFade = () => {
+      clearTimeout(this._cacheAutoFadeTimer);
+      this.setState({ cacheHighlightFading: true });
+      this._cacheFadeClearTimer = setTimeout(() => {
+        this.setState({ cacheHighlightIdx: null, cacheHighlightFading: false });
+      }, 3000);
+      this._cacheUnbindScrollFade();
+    };
+    el.addEventListener('scroll', this._cacheOnScrollFade, { passive: true });
+  }
+
+  scrollToCacheMsg(idx) {
+    // In raw mode, also navigate to the request in DetailPanel
+    if (this.props.viewMode === 'raw' && this.props.onNavigateCacheMsg) {
+      this.props.onNavigateCacheMsg(idx);
+    }
+    const el = this._cacheScrollEl;
+    if (!el) return;
+    const target = el.querySelector(`[data-msg-idx="${idx}"]`);
+    if (!target) return;
+    clearTimeout(this._cacheScrollSettleTimer);
+    clearTimeout(this._cacheFadeClearTimer);
+    clearTimeout(this._cacheAutoFadeTimer);
+    clearTimeout(this._cacheHighlightDelayTimer);
+    this._cacheUnbindScrollFade();
+    if (this._cacheScrollEndHandler) {
+      el.removeEventListener('scrollend', this._cacheScrollEndHandler);
+    }
+    this.setState({ cacheHighlightIdx: null, cacheHighlightFading: false });
+
+    let scrollDone = false, minPassed = false;
+    const showHighlight = () => {
+      if (!scrollDone || !minPassed) return;
+      this.setState({ cacheHighlightIdx: idx, cacheHighlightFading: false });
+      this._cacheScrollSettleTimer = setTimeout(() => this._cacheBindScrollFade(), 200);
+      this._cacheAutoFadeTimer = setTimeout(() => {
+        if (this.state.cacheHighlightIdx === idx && !this.state.cacheHighlightFading) {
+          this.setState({ cacheHighlightFading: true });
+          this._cacheFadeClearTimer = setTimeout(() => {
+            this.setState({ cacheHighlightIdx: null, cacheHighlightFading: false });
+          }, 3000);
+          this._cacheUnbindScrollFade();
+        }
+      }, 3000);
+    };
+
+    // Detect actual scroll completion
+    this._cacheScrollEndHandler = () => {
+      el.removeEventListener('scrollend', this._cacheScrollEndHandler);
+      scrollDone = true;
+      showHighlight();
+    };
+    el.addEventListener('scrollend', this._cacheScrollEndHandler, { once: true });
+    // Fallback if scrollend doesn't fire (element already in view)
+    this._cacheScrollSettleTimer = setTimeout(() => {
+      el.removeEventListener('scrollend', this._cacheScrollEndHandler);
+      scrollDone = true;
+      showHighlight();
+    }, 800);
+    // Minimum 500ms delay
+    this._cacheHighlightDelayTimer = setTimeout(() => {
+      minPassed = true;
+      showHighlight();
+    }, 500);
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  renderCacheContentPopover(contextPercent) {
     const { requests = [] } = this.props;
     const cached = extractCachedContent(requests);
 
@@ -372,16 +453,32 @@ class AppHeader extends React.Component {
       return <div className={styles.cachePopoverEmpty}>{t('ui.noCachedContent')}</div>;
     }
 
-    const truncate = (text, max = 2000) => text.length > max ? text.substring(0, max) + '...' : text;
-
-    const renderSection = (title, items) => {
+    const renderSection = (title, items, blockClass) => {
       if (items.length === 0) return null;
+      const isMessages = title === t('ui.messages');
       return (
         <div className={styles.cacheSection}>
           <div className={styles.cacheSectionTitle}>{title} ({items.length})</div>
-          {items.map((text, i) => (
-            <pre key={i} className={styles.cacheCodeBlock}>{truncate(text)}</pre>
-          ))}
+          {items.map((text, i) => {
+            const extraProps = isMessages ? { 'data-msg-idx': i } : {};
+            let cls = blockClass || styles.cacheCodeBlock;
+            const isHl = isMessages && i === this.state.cacheHighlightIdx;
+            if (isHl) {
+              cls += ' ' + (this.state.cacheHighlightFading ? styles.cacheBlockHighlightFading : styles.cacheBlockHighlight);
+            }
+            return (
+              <pre key={i} className={cls} {...extraProps} style={isHl ? { position: 'relative' } : undefined}>
+                {isHl && (
+                  <svg className={`${styles.cacheBorderSvg}${this.state.cacheHighlightFading ? ' ' + styles.cacheBorderSvgFading : ''}`} preserveAspectRatio="none">
+                    <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="4" ry="4"
+                      fill="none" stroke="#1668dc" strokeWidth="1" strokeDasharray="6 4"
+                      className={styles.cacheBorderRect} />
+                  </svg>
+                )}
+                {text}
+              </pre>
+            );
+          })}
         </div>
       );
     };
@@ -403,6 +500,38 @@ class AppHeader extends React.Component {
       return parts.join('\n\n');
     };
 
+    const userPrompts = cached.messages
+      .map((text, i) => ({ text, msgIdx: i }))
+      .filter(({ text }) => text.startsWith('[user]'))
+      .map(({ text, msgIdx }) => {
+        const raw = text.replace(/^\[user\]\s*/, '').trim();
+        // 与 extractUserTexts 对齐：先对整体文本做 isSystemText 检查
+        if (!raw || isSystemText(raw)) return { cleaned: '', msgIdx };
+        const segments = AppHeader.parseSegments(raw);
+        const cleaned = segments
+          .filter(s => s.type === 'text')
+          .map(s => s.content.trim())
+          .filter(s => s && !isSystemText(s))
+          .join(' ')
+          .trim();
+        return { cleaned, msgIdx };
+      })
+      .filter(({ cleaned }) => {
+        if (!cleaned) return false;
+        if (/^Implement the following plan:/i.test(cleaned)) return false;
+        return true;
+      });
+
+    const userPromptNavList = userPrompts.length > 0 ? (
+      <div className={styles.cacheNavList}>
+        {userPrompts.map(({ cleaned, msgIdx }) => (
+          <div key={msgIdx} className={styles.cacheNavItem} onClick={() => this.scrollToCacheMsg(msgIdx)}>
+            {cleaned}
+          </div>
+        ))}
+      </div>
+    ) : null;
+
     return (
       <div className={styles.cachePopover}>
         <div className={styles.cachePopoverHeader}>
@@ -418,15 +547,29 @@ class AppHeader extends React.Component {
             />
           </div>
         </div>
-        {(cached.cacheCreateTokens > 0 || cached.cacheReadTokens > 0) && (
+        {(cached.cacheCreateTokens > 0 || cached.cacheReadTokens > 0 || userPromptNavList) && (
           <div className={styles.cacheTokenInfo}>
-            {t('ui.tokens')}: <span style={{ color: '#faad14' }}>write {formatTokenCount(cached.cacheCreateTokens)}</span>
-            {' / '}
-            <span style={{ color: '#52c41a' }}>read {formatTokenCount(cached.cacheReadTokens)}</span>
+            {(cached.cacheCreateTokens > 0 || cached.cacheReadTokens > 0) && <>
+              {t('ui.tokens')}: <span style={{ color: '#faad14' }}>write {formatTokenCount(cached.cacheCreateTokens)}</span>
+              {' / '}
+              <span style={{ color: '#52c41a' }}>read {formatTokenCount(cached.cacheReadTokens)}</span>
+              {contextPercent > 0 && <span style={{ color: '#888', marginLeft: 6 }}>(ctx:{contextPercent}%)</span>}
+            </>}
+            {userPromptNavList && (
+              <Popover content={userPromptNavList} trigger="hover" placement="left">
+                <span className={styles.cacheNavBtn}>{t('ui.userPromptNav')}</span>
+              </Popover>
+            )}
           </div>
         )}
-        <div className={styles.cacheScrollArea}>
-          {renderSection(t('ui.systemPrompt'), cached.system)}
+        <div className={styles.cacheScrollArea} ref={el => {
+          this._cacheScrollEl = el;
+          if (el && !this._cacheScrollInited) {
+            this._cacheScrollInited = true;
+            requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+          }
+        }}>
+          {renderSection(t('ui.systemPrompt'), cached.system, styles.cacheCodeBlockSystem)}
           {renderSection(t('ui.messages'), cached.messages)}
           {renderSection(t('ui.tools'), cached.tools)}
         </div>
@@ -1008,10 +1151,11 @@ class AppHeader extends React.Component {
               </Tag>
             ) : (
               <Popover
-                content={this.renderCacheContentPopover()}
+                content={this.renderCacheContentPopover(contextPercent)}
                 trigger="hover"
                 placement="bottomLeft"
                 overlayInnerStyle={{ background: '#1e1e1e', border: '1px solid #3a3a3a', borderRadius: 8, padding: '8px 8px' }}
+                onOpenChange={(open) => { if (!open) this._cacheScrollInited = false; }}
               >
                 <span className={styles.liveTag} style={{ borderColor: ctxColor, color: ctxColor }}>
                   <span className={styles.liveTagFill} style={{ width: `${contextPercent}%`, backgroundColor: ctxColor }} />

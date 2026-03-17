@@ -3766,9 +3766,9 @@ const i18nData = {
     "uk": "Інструменти"
   },
   "ui.tokens": {
-    "zh": "令牌",
+    "zh": "Token",
     "en": "Tokens",
-    "zh-TW": "令牌",
+    "zh-TW": "Token",
     "ko": "토큰",
     "ja": "トークン",
     "de": "Token",
@@ -3784,6 +3784,26 @@ const i18nData = {
     "th": "โทเค็น",
     "tr": "Tokenler",
     "uk": "Токени"
+  },
+  "ui.userPromptNav": {
+    "zh": "用户 Prompt 导航",
+    "en": "User Prompt Nav",
+    "zh-TW": "使用者 Prompt 導航",
+    "ko": "사용자 프롬프트 탐색",
+    "ja": "ユーザープロンプトナビ",
+    "de": "Benutzer-Prompt-Navigation",
+    "es": "Navegación de prompts",
+    "fr": "Navigation des prompts",
+    "it": "Navigazione prompt utente",
+    "da": "Bruger-prompt navigation",
+    "pl": "Nawigacja promptów",
+    "ru": "Навигация по промптам",
+    "ar": "تنقل المطالبات",
+    "no": "Bruker-prompt navigasjon",
+    "pt-BR": "Navegação de prompts",
+    "th": "นำทางพรอมต์ผู้ใช้",
+    "tr": "Kullanıcı İstemi Gezinme",
+    "uk": "Навігація промптів"
   }
 };
 

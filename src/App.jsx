@@ -34,6 +34,7 @@ class App extends React.Component {
       selectedIndex: null,
       viewMode: 'raw',
       currentTab: 'request',
+      pendingCacheHighlight: null,
       cacheExpireAt,
       cacheType,
       leftPanelWidth: 380,
@@ -909,6 +910,16 @@ class App extends React.Component {
     this.setState({ currentTab: key });
   };
 
+  handleNavigateCacheMsg = (msgIdx) => {
+    const filteredRequests = this.state.showAll ? this.state.requests : filterRelevantRequests(this.state.requests);
+    let targetIdx = -1;
+    for (let i = filteredRequests.length - 1; i >= 0; i--) {
+      if (isMainAgent(filteredRequests[i])) { targetIdx = i; break; }
+    }
+    if (targetIdx < 0) return;
+    this.setState({ selectedIndex: targetIdx, scrollCenter: true, currentTab: 'kv-cache-text', pendingCacheHighlight: { msgIdx, key: Date.now() } });
+  };
+
   handleResize = (clientX) => {
     const container = this.mainContainerRef.current;
     if (!container) return;
@@ -1630,6 +1641,7 @@ class App extends React.Component {
               onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))}
               onReturnToWorkspaces={this.state.cliMode ? this.handleReturnToWorkspaces : null}
               contextWindow={this.state.contextWindow}
+              onNavigateCacheMsg={this.handleNavigateCacheMsg}
             />
           </Layout.Header>
 
@@ -1697,6 +1709,8 @@ class App extends React.Component {
                     onTabChange={this.handleTabChange}
                     onViewInChat={this.handleViewInChat}
                     expandDiff={this.state.expandDiff}
+                    pendingCacheHighlight={this.state.pendingCacheHighlight}
+                    onCacheHighlightDone={() => this.setState({ pendingCacheHighlight: null })}
                   />
                 </div>
               </div>

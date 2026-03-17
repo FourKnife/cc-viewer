@@ -1,5 +1,5 @@
 import React from 'react';
-import { Tabs, Typography, Button, Tag, Empty, Space, Select, message } from 'antd';
+import { Tabs, Typography, Button, Tag, Empty, Space, Select, Popover, message } from 'antd';
 import { CopyOutlined, FileTextOutlined, CodeOutlined, RightOutlined, DownOutlined } from '@ant-design/icons';
 import JsonViewer from './JsonViewer';
 import ConceptHelp from './ConceptHelp';
@@ -7,7 +7,8 @@ import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
 import { formatTokenCount, stripPrivateKeys, hasClaudeMdReminder, isClaudeMdReminder, hasSkillsReminder, isSkillsReminder, extractCachedContent } from '../utils/helpers';
 import { classifyRequest } from '../utils/requestType';
-import { isMainAgent } from '../utils/contentFilter';
+import { isMainAgent, isSystemText } from '../utils/contentFilter';
+import AppHeader from './AppHeader';
 import ContextTab from './ContextTab';
 import styles from './DetailPanel.module.css';
 
@@ -22,26 +23,133 @@ class DetailPanel extends React.Component {
       requestHeadersExpanded: false,
       responseHeadersExpanded: false,
       reminderFilters: null,
+      cacheHighlightIdx: null,
+      cacheHighlightFading: false,
     };
+  }
+
+  _cacheUnbindScrollFade() {
+    if (this._cacheOnScrollFade && this._cacheScrollEl) {
+      this._cacheScrollEl.removeEventListener('scroll', this._cacheOnScrollFade);
+      this._cacheOnScrollFade = null;
+    }
+  }
+
+  _cacheClearAllTimers() {
+    clearTimeout(this._cacheScrollSettleTimer);
+    clearTimeout(this._cacheFadeClearTimer);
+    clearTimeout(this._cacheAutoFadeTimer);
+    clearTimeout(this._cacheHighlightDelayTimer);
+    this._cacheUnbindScrollFade();
+    if (this._cacheScrollEndHandler && this._cacheScrollEl) {
+      this._cacheScrollEl.removeEventListener('scrollend', this._cacheScrollEndHandler);
+      this._cacheScrollEndHandler = null;
+    }
+  }
+
+  componentWillUnmount() {
+    this._cacheClearAllTimers();
+  }
+
+  _cacheBindScrollFade() {
+    this._cacheUnbindScrollFade();
+    const el = this._cacheScrollEl;
+    if (!el) return;
+    this._cacheOnScrollFade = () => {
+      clearTimeout(this._cacheAutoFadeTimer);
+      this.setState({ cacheHighlightFading: true });
+      this._cacheFadeClearTimer = setTimeout(() => {
+        this.setState({ cacheHighlightIdx: null, cacheHighlightFading: false });
+      }, 3000);
+      this._cacheUnbindScrollFade();
+    };
+    el.addEventListener('scroll', this._cacheOnScrollFade, { passive: true });
+  }
+
+  scrollToCacheMsg(idx) {
+    const el = this._cacheScrollEl;
+    if (!el) return;
+    const target = el.querySelector(`[data-msg-idx="${idx}"]`);
+    if (!target) return;
+    clearTimeout(this._cacheScrollSettleTimer);
+    clearTimeout(this._cacheFadeClearTimer);
+    clearTimeout(this._cacheAutoFadeTimer);
+    clearTimeout(this._cacheHighlightDelayTimer);
+    this._cacheUnbindScrollFade();
+    if (this._cacheScrollEndHandler) {
+      el.removeEventListener('scrollend', this._cacheScrollEndHandler);
+    }
+    this.setState({ cacheHighlightIdx: null, cacheHighlightFading: false });
+
+    let scrollDone = false, minPassed = false;
+    const showHighlight = () => {
+      if (!scrollDone || !minPassed) return;
+      this.setState({ cacheHighlightIdx: idx, cacheHighlightFading: false });
+      this._cacheScrollSettleTimer = setTimeout(() => this._cacheBindScrollFade(), 200);
+      this._cacheAutoFadeTimer = setTimeout(() => {
+        if (this.state.cacheHighlightIdx === idx && !this.state.cacheHighlightFading) {
+          this.setState({ cacheHighlightFading: true });
+          this._cacheFadeClearTimer = setTimeout(() => {
+            this.setState({ cacheHighlightIdx: null, cacheHighlightFading: false });
+          }, 3000);
+          this._cacheUnbindScrollFade();
+        }
+      }, 3000);
+    };
+
+    this._cacheScrollEndHandler = () => {
+      el.removeEventListener('scrollend', this._cacheScrollEndHandler);
+      scrollDone = true;
+      showHighlight();
+    };
+    el.addEventListener('scrollend', this._cacheScrollEndHandler, { once: true });
+    this._cacheScrollSettleTimer = setTimeout(() => {
+      el.removeEventListener('scrollend', this._cacheScrollEndHandler);
+      scrollDone = true;
+      showHighlight();
+    }, 800);
+    this._cacheHighlightDelayTimer = setTimeout(() => {
+      minPassed = true;
+      showHighlight();
+    }, 500);
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   shouldComponentUpdate(nextProps, nextState) {
     if (nextProps.request !== this.props.request) {
       const isMA = isMainAgent(nextProps.request);
       this.setState({ diffExpanded: isMA && !!nextProps.expandDiff, requestHeadersExpanded: false, responseHeadersExpanded: false, reminderFilters: null });
+      // Clean up highlight timers when switching requests
+      this._cacheClearAllTimers();
     }
+    const onCacheTab = nextProps.currentTab === 'kv-cache-text';
     return (
       nextProps.request !== this.props.request ||
       nextProps.currentTab !== this.props.currentTab ||
       nextProps.onTabChange !== this.props.onTabChange ||
       nextProps.selectedIndex !== this.props.selectedIndex ||
       nextProps.expandDiff !== this.props.expandDiff ||
+      nextProps.pendingCacheHighlight !== this.props.pendingCacheHighlight ||
       nextState.bodyViewMode !== this.state.bodyViewMode ||
+      (onCacheTab && nextState.cacheHighlightIdx !== this.state.cacheHighlightIdx) ||
+      (onCacheTab && nextState.cacheHighlightFading !== this.state.cacheHighlightFading) ||
       nextState.diffExpanded !== this.state.diffExpanded ||
       nextState.requestHeadersExpanded !== this.state.requestHeadersExpanded ||
       nextState.responseHeadersExpanded !== this.state.responseHeadersExpanded ||
       nextState.reminderFilters !== this.state.reminderFilters
     );
+  }
+
+  componentDidUpdate(prevProps) {
+    const pch = this.props.pendingCacheHighlight;
+    if (pch && pch !== prevProps.pendingCacheHighlight) {
+      // Wait for KV-Cache-Text tab to render and ref to bind
+      setTimeout(() => {
+        this.scrollToCacheMsg(pch.msgIdx);
+        this.props.onCacheHighlightDone?.();
+      }, 150);
+    }
   }
 
   toggleBodyViewMode(type) {
@@ -471,7 +579,6 @@ class DetailPanel extends React.Component {
               if (!cached || (cached.system.length === 0 && cached.messages.length === 0 && cached.tools.length === 0)) {
                 return <Empty description={t('ui.noCachedContent')} image={Empty.PRESENTED_IMAGE_SIMPLE} />;
               }
-              const truncate = (text, max = 2000) => text.length > max ? text.substring(0, max) + '...' : text;
               const buildPlainText = () => {
                 const parts = [];
                 if (cached.system.length > 0) { parts.push(`=== ${t('ui.systemPrompt')} ===`); cached.system.forEach(t => parts.push(t)); }
@@ -479,45 +586,102 @@ class DetailPanel extends React.Component {
                 if (cached.tools.length > 0) { parts.push(`\n=== ${t('ui.tools')} ===`); cached.tools.forEach(t => parts.push(t)); }
                 return parts.join('\n\n');
               };
+              const userPrompts = cached.messages
+                .map((text, i) => ({ text, msgIdx: i }))
+                .filter(({ text }) => text.startsWith('[user]'))
+                .map(({ text, msgIdx }) => {
+                  const raw = text.replace(/^\[user\]\s*/, '').trim();
+                  if (!raw || isSystemText(raw)) return { cleaned: '', msgIdx };
+                  const segments = AppHeader.parseSegments(raw);
+                  const cleaned = segments
+                    .filter(s => s.type === 'text')
+                    .map(s => s.content.trim())
+                    .filter(s => s && !isSystemText(s))
+                    .join(' ')
+                    .trim();
+                  return { cleaned, msgIdx };
+                })
+                .filter(({ cleaned }) => {
+                  if (!cleaned) return false;
+                  if (/^Implement the following plan:/i.test(cleaned)) return false;
+                  return true;
+                });
+              const userPromptNavList = userPrompts.length > 0 ? (
+                <div style={{ width: 600, maxHeight: 300, overflowY: 'auto' }}>
+                  {userPrompts.map(({ cleaned, msgIdx }) => (
+                    <div key={msgIdx} style={{ padding: '4px 8px', fontSize: 12, color: '#ccc', cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', borderRadius: 3 }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(22,104,220,0.2)'; e.currentTarget.style.color = '#fff'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = ''; e.currentTarget.style.color = '#ccc'; }}
+                      onClick={() => this.scrollToCacheMsg(msgIdx)}>
+                      {cleaned}
+                    </div>
+                  ))}
+                </div>
+              ) : null;
               return (
                 <div style={{ padding: '8px 0', height: '100%', display: 'flex', flexDirection: 'column' }}>
-                  {(cached.cacheCreateTokens > 0 || cached.cacheReadTokens > 0) && (
-                    <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#aaa', marginBottom: 12, flexShrink: 0 }}>
-                      {t('ui.tokens')}: <span style={{ color: '#faad14' }}>write {formatTokenCount(cached.cacheCreateTokens)}</span>
-                      {' / '}
-                      <span style={{ color: '#52c41a' }}>read {formatTokenCount(cached.cacheReadTokens)}</span>
-                      <CopyOutlined
-                        style={{ marginLeft: 8, cursor: 'pointer', color: '#888', transition: 'color 0.2s' }}
-                        onClick={() => {
-                          navigator.clipboard.writeText(buildPlainText()).then(() => {
-                            message.success(t('ui.copied'));
-                          }).catch(() => {});
-                        }}
-                      />
+                  {(cached.cacheCreateTokens > 0 || cached.cacheReadTokens > 0 || userPromptNavList) && (
+                    <div style={{ display: 'flex', alignItems: 'center', fontSize: 12, fontFamily: 'monospace', color: '#aaa', marginBottom: 12, flexShrink: 0 }}>
+                      {(cached.cacheCreateTokens > 0 || cached.cacheReadTokens > 0) && <>
+                        {t('ui.tokens')}: <span style={{ color: '#faad14' }}>write {formatTokenCount(cached.cacheCreateTokens)}</span>
+                        {' / '}
+                        <span style={{ color: '#52c41a' }}>read {formatTokenCount(cached.cacheReadTokens)}</span>
+                        <CopyOutlined
+                          style={{ marginLeft: 8, cursor: 'pointer', color: '#888', transition: 'color 0.2s' }}
+                          onClick={() => {
+                            navigator.clipboard.writeText(buildPlainText()).then(() => {
+                              message.success(t('ui.copied'));
+                            }).catch(() => {});
+                          }}
+                        />
+                      </>}
+                      {userPromptNavList && (
+                        <Popover content={userPromptNavList} trigger="hover" placement="left">
+                          <span style={{ marginLeft: 'auto', fontSize: 11, color: '#1668dc', cursor: 'pointer', border: '1px solid #1668dc', borderRadius: 3, padding: '1px 6px', whiteSpace: 'nowrap' }}>{t('ui.userPromptNav')}</span>
+                        </Popover>
+                      )}
                     </div>
                   )}
-                  <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                  <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }} ref={el => { this._cacheScrollEl = el; }}>
                     {cached.system.length > 0 && (
                       <div style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: '#e5e5e5', marginBottom: 6 }}>{t('ui.systemPrompt')} ({cached.system.length})</div>
                         {cached.system.map((text, i) => (
-                          <pre key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5, color: '#ccc', background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, padding: 8, margin: '4px 0', fontFamily: 'Menlo, Monaco, monospace' }}>{truncate(text)}</pre>
+                          <pre key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5, color: '#ccc', background: '#0d1b2a', border: '1px solid #1b3a5c', borderRadius: 4, padding: 8, margin: '4px 0', fontFamily: 'Menlo, Monaco, monospace' }}>{text}</pre>
                         ))}
                       </div>
                     )}
                     {cached.messages.length > 0 && (
                       <div style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: '#e5e5e5', marginBottom: 6 }}>{t('ui.messages')} ({cached.messages.length})</div>
-                        {cached.messages.map((text, i) => (
-                          <pre key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5, color: '#ccc', background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, padding: 8, margin: '4px 0', fontFamily: 'Menlo, Monaco, monospace' }}>{truncate(text)}</pre>
-                        ))}
+                        {cached.messages.map((text, i) => {
+                          const isHl = i === this.state.cacheHighlightIdx;
+                          const hlStyle = isHl
+                            ? (this.state.cacheHighlightFading
+                              ? { boxShadow: '0 0 10px rgba(22,104,220,0)', transition: 'box-shadow 3s ease-out', position: 'relative' }
+                              : { boxShadow: '0 0 10px rgba(22,104,220,0.6)', transition: 'box-shadow 0.2s ease-in', position: 'relative' })
+                            : {};
+                          return (
+                            <pre key={i} data-msg-idx={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5, color: '#ccc', background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, padding: 8, margin: '4px 0', fontFamily: 'Menlo, Monaco, monospace', ...hlStyle }}>
+                              {isHl && (
+                                <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'visible', opacity: this.state.cacheHighlightFading ? 0 : 1, transition: this.state.cacheHighlightFading ? 'opacity 3s ease-out' : undefined }} preserveAspectRatio="none">
+                                  <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="4" ry="4"
+                                    fill="none" stroke="#1668dc" strokeWidth="1" strokeDasharray="6 4">
+                                    <animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4s" repeatCount="indefinite" />
+                                  </rect>
+                                </svg>
+                              )}
+                              {text}
+                            </pre>
+                          );
+                        })}
                       </div>
                     )}
                     {cached.tools.length > 0 && (
                       <div style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: '#e5e5e5', marginBottom: 6 }}>{t('ui.tools')} ({cached.tools.length})</div>
                         {cached.tools.map((text, i) => (
-                          <pre key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5, color: '#ccc', background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, padding: 8, margin: '4px 0', fontFamily: 'Menlo, Monaco, monospace' }}>{truncate(text)}</pre>
+                          <pre key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.5, color: '#ccc', background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, padding: 8, margin: '4px 0', fontFamily: 'Menlo, Monaco, monospace' }}>{text}</pre>
                         ))}
                       </div>
                     )}
