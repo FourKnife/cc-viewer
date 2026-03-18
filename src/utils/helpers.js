@@ -442,7 +442,8 @@ export function getModelShort(model) {
  * 判断请求是否为相关请求（过滤掉心跳、token计数、eval/sdk 请求、在途请求、历史遗留的状态0请求）
  */
 export function isRelevantRequest(request) {
-  const url = request?.url || '';
+  if (!request) return false;
+  const url = request.url || '';
   return !(
     request.isHeartbeat ||
     request.isCountTokens ||

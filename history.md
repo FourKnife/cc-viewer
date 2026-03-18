@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.6 (2026-03-19)
+
+- Fix: guard null/undefined entries in `isRelevantRequest` — prevents `Cannot read properties of undefined (reading 'isHeartbeat')` crash during request filtering
+
 ## 1.6.0 (2026-03-18)
 
 - Feature: Teammate display optimization — `Teammate: name(model)` format with dedicated team icon and per-name HSL color hashing
