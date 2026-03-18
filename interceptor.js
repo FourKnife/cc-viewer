@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { LOG_DIR } from './findcc.js';
 import { assembleStreamMessage, cleanupTempFiles, findRecentLog, isAnthropicApiPath, isMainAgentRequest, migrateConversationContext } from './lib/interceptor-core.js';
-import { updateContextWindowFromResponse } from './lib/context-watcher.js';
+
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -434,10 +434,8 @@ export function setupInterceptor() {
                       // 直接使用组装后的 message 对象作为 response.body
                       // 如果组装失败（例如非标准 SSE），则使用原始流内容
                       requestEntry.response.body = assembledMessage || streamedContent;
-                      // 非独占提取 context window 使用率
-                      if (assembledMessage && requestEntry.mainAgent) {
-                        updateContextWindowFromResponse(assembledMessage, requestEntry.body, requestEntry.body?.model);
-                      }
+
+
                       // 移除在途请求标记，保持原始报文
                       delete requestEntry.inProgress;
                       delete requestEntry.requestId;
@@ -497,10 +495,8 @@ export function setupInterceptor() {
             headers: Object.fromEntries(response.headers.entries()),
             body: responseData
           };
-          // 非独占提取 context window 使用率
-          if (responseData && typeof responseData === 'object' && requestEntry.mainAgent) {
-            updateContextWindowFromResponse(responseData, requestEntry.body, requestEntry.body?.model);
-          }
+
+
           delete requestEntry.inProgress;
           delete requestEntry.requestId;
 

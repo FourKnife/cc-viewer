@@ -277,6 +277,7 @@ class ChatView extends React.Component {
     this._inputWs = null;
     this._inputRef = React.createRef();
     this._ptyBuffer = '';
+    this._ptyDataSeq = 0; // increments on every PTY output event
     this._ptyDebounceTimer = null;
     this._currentPtyPrompt = null; // 同步跟踪 ptyPrompt，避免闭包捕获旧 state
     this._mobileExtraItems = 0;
@@ -910,6 +911,7 @@ class ChatView extends React.Component {
   _appendPtyData(raw) {
     const clean = this._stripAnsi(raw);
     this._ptyBuffer += clean;
+    this._ptyDataSeq++;
     // Keep buffer at max 4KB
     if (this._ptyBuffer.length > 4096) {
       this._ptyBuffer = this._ptyBuffer.slice(-4096);
@@ -1226,39 +1228,58 @@ class ChatView extends React.Component {
       if (currentIdx < 0) currentIdx = 0;
     }
 
-    // Navigate to each selected option and press Space to toggle
-    const toggleNext = (si) => {
-      if (si >= indices.length) {
-        // All selections made, press Enter to confirm
-        setTimeout(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'input', data: '\r' }));
-          }
-          this._finishCurrentAskAnswer();
-        }, 50);
-        return;
-      }
-      const targetIdx = indices[si];
+    // Build steps: arrows (fixed delay) then space (ACK wait)
+    const steps = [];
+    for (const targetIdx of indices) {
       const diff = targetIdx - currentIdx;
       const arrowKey = diff > 0 ? '\x1b[B' : '\x1b[A';
-      const steps = Math.abs(diff);
+      // Each arrow as individual step with fixed delay
+      for (let i = 0; i < Math.abs(diff); i++) {
+        steps.push({ data: arrowKey, type: 'arrow' });
+      }
+      // Space to toggle — needs ACK wait
+      steps.push({ data: ' ', type: 'toggle' });
+      currentIdx = targetIdx;
+    }
+    // Enter to confirm — needs ACK wait
+    steps.push({ data: '\r', type: 'enter' });
 
-      const moveAndToggle = (step) => {
-        if (step < steps) {
-          ws.send(JSON.stringify({ type: 'input', data: arrowKey }));
-          setTimeout(() => moveAndToggle(step + 1), 30);
-        } else {
-          // Press Space to toggle
-          setTimeout(() => {
-            ws.send(JSON.stringify({ type: 'input', data: ' ' }));
-            currentIdx = targetIdx;
-            setTimeout(() => toggleNext(si + 1), 50);
-          }, 50);
-        }
-      };
-      moveAndToggle(0);
+    // Queue: arrows use fixed delay, toggle/enter use ACK
+    const sendStep = (si) => {
+      if (si >= steps.length) {
+        this._finishCurrentAskAnswer();
+        return;
+      }
+
+      const step = steps[si];
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', data: step.data }));
+      }
+
+      if (step.type === 'arrow') {
+        // Arrows are lightweight — fixed 80ms delay
+        setTimeout(() => sendStep(si + 1), 80);
+      } else {
+        // Toggle/Enter: wait for PTY seq to increment (inquirer re-render)
+        const seqAfterSend = this._ptyDataSeq;
+        let attempts = 0;
+        const waitForAck = () => {
+          attempts++;
+          if (attempts > 40) { // 4s timeout
+            sendStep(si + 1);
+            return;
+          }
+          if (this._ptyDataSeq > seqAfterSend) {
+            // Extra settle time for inquirer to fully process
+            setTimeout(() => sendStep(si + 1), 200);
+            return;
+          }
+          setTimeout(waitForAck, 100);
+        };
+        setTimeout(waitForAck, 100);
+      }
     };
-    toggleNext(0);
+    sendStep(0);
   }
 
   _submitOtherAnswer(answer) {
@@ -1321,7 +1342,7 @@ class ChatView extends React.Component {
       }
       return { ptyPrompt: null, ptyPromptHistory: history };
     });
-    this._ptyBuffer = '';
+    // Only clear debounce timer; preserve _ptyBuffer so partial next-prompt data is not lost
     if (this._ptyDebounceTimer) clearTimeout(this._ptyDebounceTimer);
 
     // Wait for next prompt to appear (multi-question scenario)

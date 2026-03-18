@@ -2,11 +2,13 @@
 
 ## 1.6.0 (2026-03-18)
 
-- Feature: Teammate display optimization — teammate entries in ChatView now show `Teammate: name(model)` format with dedicated team icon and per-name HSL color hashing for visual distinction
-- Feature: new `formatTeammateLabel()` in requestType.js for model name simplification (`claude-sonnet-4-6-20250514` → `sonnet-4-6`)
-- Feature: `getSvgAvatar('teammate')` — new two-person collaboration SVG icon for teammate avatars
-- Fix: Opus 4.6 1M context window — `context-watcher.js` no longer overwrites Claude Code's accurate 1M `context_window_size` with inferred 200K; client-side `getModelMaxTokens` now supports `[1m]` suffix
-- Fix: `serverCachedContent` leak — `loadLocalLogFile()` now clears `serverCachedContent` to prevent stale live-session cache data from polluting local log view
+- Feature: Teammate display optimization — `Teammate: name(model)` format with dedicated team icon and per-name HSL color hashing
+- Feature: AskQuestionForm extracted as standalone component — local state isolation eliminates parent re-render bottleneck during multi-select
+- Feature: multi-select PTY submission — arrows/space/enter sent as atomic steps with seq-counter ACK queue
+- Refactor: context window blood bar — cc-viewer no longer writes to `context-window.json`; reads `model.id` once at startup to cache 1M/200K size, computes usage from interceptor log
+- Fix: Opus 4.6 1M context window detection — `readModelContextSize()` parses `[1m]` from `model.id`, `getContextSizeForModel()` maps API model names via cached base name
+- Fix: `serverCachedContent` leak — `loadLocalLogFile()` clears stale server cache on local log switch
+- Fix: removed `watchContextWindow` file polling — eliminates cross-process data pollution from teammates/other projects
 - Docs: updated KVCacheContent concept docs across all 17 language versions
 
 ## 1.5.45 (2026-03-17)

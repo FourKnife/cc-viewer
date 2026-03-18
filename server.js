@@ -40,7 +40,7 @@ import { checkAndUpdate } from './lib/updater.js';
 import { loadPlugins, runWaterfallHook, runParallelHook, getPluginsInfo, PLUGINS_DIR } from './lib/plugin-loader.js';
 import { getUserProfile } from './lib/user-profile.js';
 import { getGitDiffs } from './lib/git-diff.js';
-import { watchContextWindow, CONTEXT_WINDOW_FILE } from './lib/context-watcher.js';
+import { CONTEXT_WINDOW_FILE, readModelContextSize, buildContextWindowEvent, getContextSizeForModel } from './lib/context-watcher.js';
 import { readLogFile, watchLogFile, startWatching, getWatchedFiles } from './lib/log-watcher.js';
 import { isMainAgentEntry, extractCachedContent } from './lib/kv-cache-analyzer.js';
 
@@ -685,15 +685,44 @@ async function handleRequest(req, res) {
       res.write(`event: full_reload\ndata: ${JSON.stringify(entriesToSend)}\n\n`);
     }
 
-    // Compute KV-Cache content for latest MainAgent
+    // Compute KV-Cache content + context_window for latest MainAgent
+    let pushedContextWindow = false;
     for (let i = entries.length - 1; i >= 0; i--) {
       if (isMainAgentEntry(entries[i])) {
         const cached = extractCachedContent(entries[i]);
         if (cached) {
           res.write(`event: kv_cache_content\ndata: ${JSON.stringify(cached)}\n\n`);
         }
+        // Push initial context_window from latest MainAgent usage
+        const usage = entries[i].response?.body?.usage;
+        if (usage) {
+          const contextSize = getContextSizeForModel(entries[i].body?.model);
+          const cwData = buildContextWindowEvent(usage, contextSize);
+          if (cwData) {
+            res.write(`event: context_window\ndata: ${JSON.stringify(cwData)}\n\n`);
+            pushedContextWindow = true;
+          }
+        }
         break;
       }
+    }
+    // Fallback: no MainAgent in log (e.g. fresh session after -c), read context-window.json
+    if (!pushedContextWindow) {
+      try {
+        const cwRaw = readFileSync(CONTEXT_WINDOW_FILE, 'utf-8');
+        const cwFile = JSON.parse(cwRaw);
+        if (cwFile?.context_window) {
+          // Recalculate with correct context size from model.id
+          const { contextSize } = readModelContextSize();
+          const cw = cwFile.context_window;
+          const inputTokens = cw.total_input_tokens || 0;
+          const outputTokens = cw.total_output_tokens || 0;
+          const totalTokens = inputTokens + outputTokens;
+          const usedPct = contextSize > 0 ? Math.round((totalTokens / contextSize) * 100) : 0;
+          const data = { ...cw, context_window_size: contextSize, used_percentage: usedPct, remaining_percentage: 100 - usedPct };
+          res.write(`event: context_window\ndata: ${JSON.stringify(data)}\n\n`);
+        }
+      } catch { }
     }
 
     req.on('close', () => {
@@ -1716,7 +1745,8 @@ export async function startViewer() {
           } catch { }
           // 工作区模式下延迟到选择工作区后再启动监听
           if (!isWorkspaceMode) {
-            startWatching({ ..._logWatcherOpts(LOG_FILE), watchContextWindow });
+            readModelContextSize(); // Cache model→size mapping at startup
+            startWatching(_logWatcherOpts(LOG_FILE));
             startStatsWorker();
           }
           // CLI 模式下启动 WebSocket 服务

@@ -1,0 +1,180 @@
+import React from 'react';
+import { Checkbox, Input } from 'antd';
+import { t } from '../../i18n.js';
+import styles from './ChatMessage.module.css';
+
+/**
+ * Self-contained AskUserQuestion interactive form.
+ * All selection state is local — no parent re-renders during interaction.
+ * Only communicates with parent on submit via onSubmit callback.
+ */
+export default class AskQuestionForm extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      selections: {},       // { qi: selectedLabel }
+      multiSelections: {},  // { qi: Set<label> }
+      otherActive: {},      // { qi: boolean }
+      otherText: {},        // { qi: string }
+      submitting: false,
+    };
+  }
+
+  render() {
+    const { questions, onSubmit } = this.props;
+    const { selections, multiSelections, otherActive, otherText, submitting } = this.state;
+
+    const allValid = questions.every((q, qi) => {
+      if (otherActive[qi]) return (otherText[qi] || '').trim().length > 0;
+      if (q.multiSelect) {
+        const set = multiSelections[qi];
+        return set && set.size > 0;
+      }
+      return selections[qi] != null;
+    });
+
+    const handleSubmit = () => {
+      if (!allValid || submitting) return;
+      this.setState({ submitting: true });
+      const answers = questions.map((q, qi) => {
+        if (otherActive[qi]) {
+          const optCount = (q.options || []).length;
+          return { questionIndex: qi, type: 'other', optionIndex: optCount, text: (otherText[qi] || '').trim() };
+        }
+        if (q.multiSelect) {
+          const set = multiSelections[qi] || new Set();
+          const selectedIndices = [];
+          (q.options || []).forEach((opt, oi) => {
+            if (set.has(opt.label)) selectedIndices.push(oi);
+          });
+          return { questionIndex: qi, type: 'multi', selectedIndices };
+        }
+        const selectedLabel = selections[qi];
+        const optionIndex = (q.options || []).findIndex(o => o.label === selectedLabel);
+        return { questionIndex: qi, type: 'single', optionIndex };
+      });
+      if (onSubmit) onSubmit(answers);
+    };
+
+    return (
+      <div className={styles.askQuestionInteractive}>
+        {questions.map((q, qi) => {
+          const isMulti = q.multiSelect;
+          const hasPreview = !isMulti && q.options?.some(o => o.preview);
+          const selectedLabel = selections[qi];
+          const focusedPreview = hasPreview && selectedLabel
+            ? (q.options.find(o => o.label === selectedLabel) || {}).preview
+            : null;
+
+          const optionsContent = (
+            <div>
+              {q.header && <span className={styles.askQuestionHeader}>{q.header}</span>}
+              <div className={styles.askQuestionText}>{q.question}</div>
+
+              {!isMulti ? (
+                <div className={styles.askRadioGroup}>
+                  {(q.options || []).map((opt, oi) => {
+                    const isSelected = !otherActive[qi] && selectedLabel === opt.label;
+                    return (
+                      <div
+                        key={oi}
+                        className={`${styles.askRadioItem}${isSelected ? ' ' + styles.askRadioItemSelected : ''}`}
+                        onClick={() => {
+                          this.setState(prev => ({
+                            selections: { ...prev.selections, [qi]: opt.label },
+                            otherActive: { ...prev.otherActive, [qi]: false },
+                          }));
+                        }}
+                      >
+                        <span className={styles.askRadioDot}>{isSelected ? '◉' : '○'}</span>
+                        {opt.label}
+                        {opt.description && <span className={styles.optionDesc}>— {opt.description}</span>}
+                      </div>
+                    );
+                  })}
+                  <div
+                    className={`${styles.askRadioItem}${otherActive[qi] ? ' ' + styles.askRadioItemSelected : ''}`}
+                    onClick={() => {
+                      this.setState(prev => ({
+                        otherActive: { ...prev.otherActive, [qi]: true },
+                        selections: { ...prev.selections, [qi]: undefined },
+                      }));
+                    }}
+                  >
+                    <span className={styles.askRadioDot}>{otherActive[qi] ? '◉' : '○'}</span>
+                    {t('ui.askOther')}
+                  </div>
+                </div>
+              ) : (
+                <div className={styles.askCheckboxGroup}>
+                  {(q.options || []).map((opt, oi) => {
+                    const checked = !!(multiSelections[qi] && multiSelections[qi].has(opt.label));
+                    return (
+                      <div
+                        key={oi}
+                        className={`${styles.askRadioItem}${checked ? ' ' + styles.askRadioItemSelected : ''}`}
+                        onClick={() => {
+                          this.setState(prev => {
+                            const prevSet = prev.multiSelections[qi] || new Set();
+                            const next = new Set(prevSet);
+                            if (next.has(opt.label)) next.delete(opt.label);
+                            else next.add(opt.label);
+                            return { multiSelections: { ...prev.multiSelections, [qi]: next } };
+                          });
+                        }}
+                      >
+                        <span className={styles.askRadioDot}>{checked ? '☑' : '☐'}</span>
+                        {opt.label}
+                        {opt.description && <span className={styles.optionDesc}>— {opt.description}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!isMulti && otherActive[qi] && (
+                <div className={styles.askOtherInput}>
+                  <Input
+                    size="small"
+                    placeholder={t('ui.askOtherPlaceholder')}
+                    value={otherText[qi] || ''}
+                    onChange={e => this.setState(prev => ({
+                      otherText: { ...prev.otherText, [qi]: e.target.value },
+                    }))}
+                    onPressEnter={() => { if (allValid && !submitting) handleSubmit(); }}
+                    autoFocus
+                  />
+                </div>
+              )}
+            </div>
+          );
+
+          return (
+            <div key={qi} className={qi < questions.length - 1 ? styles.questionSpacing : undefined}>
+              {hasPreview ? (
+                <div className={styles.askMarkdownLayout}>
+                  {optionsContent}
+                  <div className={styles.askMarkdownPreview}>
+                    {focusedPreview
+                      ? <pre>{focusedPreview}</pre>
+                      : <span style={{ color: '#6b7280' }}>—</span>
+                    }
+                  </div>
+                </div>
+              ) : optionsContent}
+            </div>
+          );
+        })}
+        <div className={styles.askSubmitRow}>
+          <button
+            className={styles.askSubmitBtn}
+            disabled={!allValid || submitting}
+            onClick={handleSubmit}
+          >
+            {submitting ? t('ui.askSubmitting') : t('ui.askSubmit')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+}

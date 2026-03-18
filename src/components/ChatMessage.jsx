@@ -3,6 +3,7 @@ import { Collapse, Typography, Radio, Checkbox, Input } from 'antd';
 import { renderMarkdown } from '../utils/markdown';
 import { escapeHtml, truncateText, getSvgAvatar } from '../utils/helpers';
 import { renderAssistantText } from '../utils/systemTags';
+import AskQuestionForm from './AskQuestionForm';
 import { t } from '../i18n';
 import { isPlanApprovalPrompt } from './ChatView';
 import DiffView from './DiffView';
@@ -32,18 +33,11 @@ class ChatMessage extends React.Component {
       planFeedbackInput: false,
       planFeedbackText: '',
       planFeedbackOptNumber: null,
-      // AskUserQuestion interactive state
-      askSelections: {},       // { questionIndex: selectedLabel }
-      askMultiSelections: {},  // { questionIndex: Set<label> }
-      askOtherActive: {},      // { questionIndex: boolean }
-      askOtherText: {},        // { questionIndex: string }
-      askSubmitting: false,
     };
   }
 
   componentDidUpdate(prevProps) {
-    if (prevProps.lastPendingAskId !== this.props.lastPendingAskId
-      || prevProps.askAnswerMap !== this.props.askAnswerMap) {
+    if (prevProps.lastPendingAskId !== this.props.lastPendingAskId) {
       this.setState({
         askSelections: {},
         askMultiSelections: {},
@@ -494,158 +488,12 @@ class ChatMessage extends React.Component {
   }
 
   renderAskQuestionInteractive(toolId, questions) {
-    const { askSelections, askMultiSelections, askOtherActive, askOtherText, askSubmitting } = this.state;
-
-    // Validate: each question must have a selection (or Other with text)
-    const allValid = questions.every((q, qi) => {
-      if (askOtherActive[qi]) return (askOtherText[qi] || '').trim().length > 0;
-      if (q.multiSelect) {
-        const set = askMultiSelections[qi];
-        return set && set.size > 0;
-      }
-      return askSelections[qi] != null;
-    });
-
-    const handleSubmit = () => {
-      if (!allValid || askSubmitting) return;
-      this.setState({ askSubmitting: true });
-
-      const answers = questions.map((q, qi) => {
-        if (askOtherActive[qi]) {
-          // "Other" is always the last option in CLI list (after all options)
-          const optCount = (q.options || []).length;
-          return { questionIndex: qi, type: 'other', optionIndex: optCount, text: (askOtherText[qi] || '').trim() };
-        }
-        if (q.multiSelect) {
-          const set = askMultiSelections[qi] || new Set();
-          const selectedIndices = [];
-          (q.options || []).forEach((opt, oi) => {
-            if (set.has(opt.label)) selectedIndices.push(oi);
-          });
-          return { questionIndex: qi, type: 'multi', selectedIndices };
-        }
-        // single select
-        const selectedLabel = askSelections[qi];
-        const optionIndex = (q.options || []).findIndex(o => o.label === selectedLabel);
-        return { questionIndex: qi, type: 'single', optionIndex };
-      });
-
-      if (this.props.onAskQuestionSubmit) {
-        this.props.onAskQuestionSubmit(answers);
-      }
-    };
-
     return (
-      <div key={toolId} className={styles.askQuestionInteractive}>
-        {questions.map((q, qi) => {
-          const isMulti = q.multiSelect;
-          const hasPreview = !isMulti && q.options?.some(o => o.preview);
-          const selectedLabel = askSelections[qi];
-          const focusedPreview = hasPreview && selectedLabel
-            ? (q.options.find(o => o.label === selectedLabel) || {}).preview
-            : null;
-
-          const optionsContent = (
-            <div>
-              {q.header && <span className={styles.askQuestionHeader}>{q.header}</span>}
-              <div className={styles.askQuestionText}>{q.question}</div>
-
-              {!isMulti ? (
-                <div className={styles.askRadioGroup}>
-                  {(q.options || []).map((opt, oi) => {
-                    const isSelected = !askOtherActive[qi] && selectedLabel === opt.label;
-                    return (
-                      <div
-                        key={oi}
-                        className={`${styles.askRadioItem}${isSelected ? ' ' + styles.askRadioItemSelected : ''}`}
-                        onClick={() => {
-                          this.setState(prev => ({
-                            askSelections: { ...prev.askSelections, [qi]: opt.label },
-                            askOtherActive: { ...prev.askOtherActive, [qi]: false },
-                          }));
-                        }}
-                      >
-                        <span className={styles.askRadioDot}>{isSelected ? '◉' : '○'}</span>
-                        {opt.label}
-                        {opt.description && <span className={styles.optionDesc}>— {opt.description}</span>}
-                      </div>
-                    );
-                  })}
-                  <div
-                    className={`${styles.askRadioItem}${askOtherActive[qi] ? ' ' + styles.askRadioItemSelected : ''}`}
-                    onClick={() => {
-                      this.setState(prev => ({
-                        askOtherActive: { ...prev.askOtherActive, [qi]: true },
-                        askSelections: { ...prev.askSelections, [qi]: undefined },
-                      }));
-                    }}
-                  >
-                    <span className={styles.askRadioDot}>{askOtherActive[qi] ? '◉' : '○'}</span>
-                    {t('ui.askOther')}
-                  </div>
-                </div>
-              ) : (
-                <Checkbox.Group
-                  className={styles.askCheckboxGroup}
-                  value={Array.from(askMultiSelections[qi] || [])}
-                  onChange={checkedValues => {
-                    this.setState(prev => ({
-                      askMultiSelections: { ...prev.askMultiSelections, [qi]: new Set(checkedValues) },
-                    }));
-                  }}
-                >
-                  {(q.options || []).map((opt, oi) => (
-                    <Checkbox key={oi} value={opt.label}>
-                      {opt.label}
-                      {opt.description && <span className={styles.optionDesc}>— {opt.description}</span>}
-                    </Checkbox>
-                  ))}
-                </Checkbox.Group>
-              )}
-
-              {!isMulti && askOtherActive[qi] && (
-                <div className={styles.askOtherInput}>
-                  <Input
-                    size="small"
-                    placeholder={t('ui.askOtherPlaceholder')}
-                    value={askOtherText[qi] || ''}
-                    onChange={e => this.setState(prev => ({
-                      askOtherText: { ...prev.askOtherText, [qi]: e.target.value },
-                    }))}
-                    onPressEnter={() => { if (allValid && !askSubmitting) handleSubmit(); }}
-                    autoFocus
-                  />
-                </div>
-              )}
-            </div>
-          );
-
-          return (
-            <div key={qi} className={qi < questions.length - 1 ? styles.questionSpacing : undefined}>
-              {hasPreview ? (
-                <div className={styles.askMarkdownLayout}>
-                  {optionsContent}
-                  <div className={styles.askMarkdownPreview}>
-                    {focusedPreview
-                      ? <pre>{focusedPreview}</pre>
-                      : <span style={{ color: '#6b7280' }}>—</span>
-                    }
-                  </div>
-                </div>
-              ) : optionsContent}
-            </div>
-          );
-        })}
-        <div className={styles.askSubmitRow}>
-          <button
-            className={styles.askSubmitBtn}
-            disabled={!allValid || askSubmitting}
-            onClick={handleSubmit}
-          >
-            {askSubmitting ? t('ui.askSubmitting') : t('ui.askSubmit')}
-          </button>
-        </div>
-      </div>
+      <AskQuestionForm
+        key={toolId}
+        questions={questions}
+        onSubmit={this.props.onAskQuestionSubmit}
+      />
     );
   }
 
