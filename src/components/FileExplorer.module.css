@@ -67,8 +67,8 @@
   background: #1a1a1a;
 }
 
-.treeItemSelected {
-  background: #1a1a1a;
+.treeItem.treeItemSelected {
+  background: #532f00;
 }
 
 .arrow {

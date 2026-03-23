@@ -1221,6 +1221,7 @@ class ChatView extends React.Component {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       this._askAnswerQueue = this._planSubmissionSteps(answers);
       this._askSubmitting = true;
+      this._isMultiQuestionForm = answers.length > 1;
       this.connectInputWs();
       this._askWsRetries = 0;
       this._waitForWsAndSubmit();
@@ -1229,6 +1230,7 @@ class ChatView extends React.Component {
 
     this._askAnswerQueue = this._planSubmissionSteps(answers);
     this._askSubmitting = true;
+    this._isMultiQuestionForm = answers.length > 1;
 
     // ptyPrompt may not be available yet (streaming response renders before CLI prompt appears)
     // Retry with delay until ptyPrompt is detected
@@ -1282,6 +1284,16 @@ class ChatView extends React.Component {
       return;
     }
     const answer = this._askAnswerQueue.shift();
+
+    // Multi-select Other: handle as single PTY submission.
+    // "Type something" is a text input option — type text,
+    // ↓ exits text input, → to Submit tab, Enter submits.
+    // Uses higher settleMs to ensure text characters are fully processed.
+    if (answer.type === 'other' && answer.isMultiSelect) {
+      this._submitViaSequentialQueue(answer, { settleMs: 500 });
+      return;
+    }
+
     if (answer.type === 'other') {
       this._submitOtherAnswer(answer);
     } else if (answer.type === 'multi') {
@@ -1306,12 +1318,13 @@ class ChatView extends React.Component {
   /**
    * Unified PTY submission: build chunks via ptyChunkBuilder, send via server-side sequential queue.
    */
-  _submitViaSequentialQueue(answer) {
+  _submitViaSequentialQueue(answer, opts = {}) {
     const ws = this._inputWs;
     if (!ws || ws.readyState !== WebSocket.OPEN) { this._askSubmitting = false; return; }
 
-    const isMultiQuestion = this._askAnswerQueue && this._askAnswerQueue.length > 0;
+    const isMultiQuestion = !!this._isMultiQuestionForm;
     const chunks = buildChunksForAnswer(answer, this.state.ptyPrompt, isMultiQuestion);
+    const settleMs = opts.settleMs || 300;
 
     const onMessage = (event) => {
       try {
@@ -1324,7 +1337,7 @@ class ChatView extends React.Component {
     };
     ws.addEventListener('message', onMessage);
 
-    ws.send(JSON.stringify({ type: 'input-sequential', chunks, settleMs: 300 }));
+    ws.send(JSON.stringify({ type: 'input-sequential', chunks, settleMs }));
 
     setTimeout(() => {
       ws.removeEventListener('message', onMessage);

@@ -100,12 +100,22 @@ export function buildMultiSelectChunks(answer, prompt, isMultiQuestion = false) 
 }
 
 /**
- * Build chunks for an "Other" (free text) answer.
- * Navigate to Other option, Enter to activate, type text, Enter to confirm.
- * @param {object} answer - { optionIndex, text }
+ * Build chunks for a single-select "Other" (free text) answer.
+ *
+ * Single-question mode:
+ *   Navigate to "Type something" → Enter (activate text input) → type text → Enter (confirm)
+ *
+ * Multi-question tabbed form:
+ *   In tabbed forms, Enter on "Type something" auto-advances to the next tab
+ *   (same as regular single-select). Text input is NOT inline — Claude Code
+ *   prompts for it separately after the form is submitted.
+ *   So we treat it like a regular single-select: navigate → Enter.
+ *
+ * @param {object} answer - { optionIndex, text, isLast }
  * @param {object} prompt - ptyPrompt with options
+ * @param {boolean} isMultiQuestion - whether part of multi-question form
  */
-export function buildOtherChunks(answer, prompt) {
+export function buildOtherChunks(answer, prompt, isMultiQuestion = false) {
   const chunks = [];
   let currentIdx = getCursorIdx(prompt);
   const targetIdx = answer.optionIndex;
@@ -113,17 +123,61 @@ export function buildOtherChunks(answer, prompt) {
   chunks.push(...buildArrows(currentIdx, targetIdx));
 
   // "Type something" 选项：直接输入文字，不需要 Enter 激活
+  // inquirer 在光标停在此选项时接受直接键入文字
   const text = answer.text || '';
   for (const ch of text) {
     chunks.push(ch);
   }
-  chunks.push(ENTER); // Confirm text
+  chunks.push(ENTER); // Confirm text and submit
+
+  // Multi-question last question: Enter above auto-advances to Submit tab,
+  // need another Enter to confirm
+  if (isMultiQuestion && answer.isLast) {
+    chunks.push(ENTER);
+  }
+  return chunks;
+}
+
+/**
+ * Build chunks for a multi-select "Other" (Type something) answer.
+ * "Type something" is a text-input option in the checkbox list.
+ * Sequence: navigate → type text → Enter (confirm text) → → Enter (submit form)
+ * Enter confirms the typed text; → then exits the text field to Submit; Enter submits.
+ * @param {object} answer - { optionIndex, text, isLast }
+ * @param {object} prompt - ptyPrompt with options
+ * @param {boolean} isMultiQuestion - whether part of multi-question form
+ */
+export function buildMultiSelectOtherChunks(answer, prompt, isMultiQuestion = false) {
+  const chunks = [];
+  let currentIdx = getCursorIdx(prompt);
+  const targetIdx = answer.optionIndex;
+
+  chunks.push(...buildArrows(currentIdx, targetIdx));
+
+  // Type text directly into the "Type something" field
+  // Typing auto-checks the checkbox — no Space/Enter needed
+  const text = answer.text || '';
+  for (const ch of text) {
+    chunks.push(ch);
+  }
+
+  // → at end of text is a no-op but provides settleMs delay
+  // to ensure the last character is fully processed before exiting
+  chunks.push(ARROW_RIGHT);
+  // ↓ exits text input mode by navigating to next item
+  // (text and checkbox state are preserved)
+  chunks.push(ARROW_DOWN);
+  // → goes to Submit tab (shows Review page)
+  chunks.push(ARROW_RIGHT);
+  // Enter on Review page's "Submit answers" to confirm
+  chunks.push(ENTER);
+
   return chunks;
 }
 
 /**
  * Build chunks for a single answer (dispatches by type).
- * @param {object} answer - { type, optionIndex, selectedIndices, text, isLast }
+ * @param {object} answer - { type, optionIndex, selectedIndices, text, isLast, isMultiSelect }
  * @param {object} prompt - ptyPrompt with options
  * @param {boolean} isMultiQuestion - whether part of multi-question form
  */
@@ -131,8 +185,11 @@ export function buildChunksForAnswer(answer, prompt, isMultiQuestion = false) {
   if (answer.type === 'multi') {
     return buildMultiSelectChunks(answer, prompt, isMultiQuestion);
   }
+  if (answer.type === 'other' && answer.isMultiSelect) {
+    return buildMultiSelectOtherChunks(answer, prompt, isMultiQuestion);
+  }
   if (answer.type === 'other') {
-    return buildOtherChunks(answer, prompt);
+    return buildOtherChunks(answer, prompt, isMultiQuestion);
   }
   return buildSingleSelectChunks(answer, prompt, isMultiQuestion);
 }

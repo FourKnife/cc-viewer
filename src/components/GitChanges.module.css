@@ -68,8 +68,8 @@
   background: #1a1a1a;
 }
 
-.changeItemSelected {
-  background: #1a1a1a;
+.changeItem.changeItemSelected {
+  background: #532f00;
 }
 
 .dirItem {

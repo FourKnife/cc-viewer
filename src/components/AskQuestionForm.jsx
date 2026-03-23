@@ -40,7 +40,7 @@ export default class AskQuestionForm extends React.Component {
       const answers = questions.map((q, qi) => {
         if (otherActive[qi]) {
           const optCount = (q.options || []).length;
-          return { questionIndex: qi, type: 'other', optionIndex: optCount, text: (otherText[qi] || '').trim() };
+          return { questionIndex: qi, type: 'other', optionIndex: optCount, text: (otherText[qi] || '').trim(), isMultiSelect: !!q.multiSelect };
         }
         if (q.multiSelect) {
           const set = multiSelections[qi] || new Set();
@@ -132,7 +132,10 @@ export default class AskQuestionForm extends React.Component {
                             const next = new Set(prevSet);
                             if (next.has(opt.label)) next.delete(opt.label);
                             else next.add(opt.label);
-                            return { multiSelections: { ...prev.multiSelections, [qi]: next } };
+                            return {
+                              multiSelections: { ...prev.multiSelections, [qi]: next },
+                              otherActive: { ...prev.otherActive, [qi]: false },
+                            };
                           });
                         }}
                       >
@@ -142,10 +145,24 @@ export default class AskQuestionForm extends React.Component {
                       </div>
                     );
                   })}
+                  {!(q.options || []).some(o => /^other$/i.test(o.label)) && (
+                    <div
+                      className={`${styles.askRadioItem}${otherActive[qi] ? ' ' + styles.askRadioItemSelected : ''}`}
+                      onClick={() => {
+                        this.setState(prev => ({
+                          otherActive: { ...prev.otherActive, [qi]: true },
+                          multiSelections: { ...prev.multiSelections, [qi]: new Set() },
+                        }));
+                      }}
+                    >
+                      <span className={styles.askRadioDot}>{otherActive[qi] ? '☑' : '☐'}</span>
+                      {t('ui.askOther')}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {!isMulti && otherActive[qi] && (
+              {otherActive[qi] && (
                 <div className={styles.askOtherInput}>
                   <Input
                     size="small"

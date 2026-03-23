@@ -1336,7 +1336,7 @@ class AppHeader extends React.Component {
                   placement="bottomRight"
                   overlayInnerStyle={{ background: '#1e1e1e', border: '1px solid #3a3a3a', borderRadius: 8, padding: '8px 12px' }}
                 >
-                  <Button className={styles.compactBtnNoBorder} icon={<span style={{ verticalAlign: '-3px', fontSize: 16 }}>{this.state.countryFlag}</span>} />
+                  <Button className={styles.compactBtnNoBorder} icon={<span style={{ verticalAlign: '-3px', fontSize: 20 }}>{this.state.countryFlag}</span>} />
                 </Popover>
               )}
               <Popover

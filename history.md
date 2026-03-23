@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.20 (2026-03-23)
+
+- Fix: AskUserQuestion multi-question form `isMultiQuestion` flag — last question now correctly identified via stored flag instead of queue length
+- Fix: AskUserQuestion multi-select "Other" option missing from UI — added to checkbox branch with text input support
+- Fix: AskUserQuestion single-select Other in multi-question forms — added `isMultiQuestion` parameter for correct tab navigation
+- Fix: AskUserQuestion multi-select Other PTY protocol — type text directly, exit with ↓, then → Enter to submit
+- Fix: PTY delay strategy — ↑↓ arrows now use settleMs delay for reliable inquirer re-rendering
+- UI: file browser & git changes selected item background color changed to #532f00
+- UI: file detail / git diff / image viewer header padding adjusted to 6px
+- UI: file detail panel slide-in animation (left to right, 250ms)
+- UI: country flag emoji font size increased to 20px
+
 ## 1.6.19 (2026-03-22)
 
 - Feature: SSE heartbeat keep-alive — server sends ping every 30s, client auto-reconnects on 45s timeout (up to 10 retries)

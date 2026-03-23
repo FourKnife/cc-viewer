@@ -228,8 +228,9 @@ export function writeToPtySequential(chunks, onComplete, opts = {}) {
 
     ptyProcess.write(chunk);
 
-    // Space, Enter, and Right arrow (→ for submit) need more time for inquirer
-    const isToggleOrSubmit = chunk === ' ' || chunk === '\r' || chunk === '\x1b[C';
+    // Space, Enter, arrows need more time for inquirer to re-render
+    const isToggleOrSubmit = chunk === ' ' || chunk === '\r'
+      || chunk === '\x1b[C' || chunk === '\x1b[A' || chunk === '\x1b[B';
     const delay = isToggleOrSubmit ? settleMs : 80;
     setTimeout(sendNext, delay);
   };
