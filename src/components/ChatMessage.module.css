@@ -22,7 +22,7 @@
   border-radius: 8px;
   border: 1px solid #222;
   box-sizing: border-box;
-  padding: 6px 10px;
+  padding: 6px 6px;
   max-width: 100%;
   font-size: 14px;
   line-height: 1.6;
@@ -105,8 +105,9 @@
 
 .bubbleUser {
   composes: bubble;
-  background: #1668dc;
+  background: linear-gradient(to top, #095ad1, #196ae1);
   color: #e5e7eb;
+  padding: 8px 12px;
 }
 
 .bubbleAssistant {
@@ -115,6 +116,9 @@
   color: #F5F5F5;
   transition: box-shadow 0s;
   position: relative;
+}
+.bubbleAssistant > :last-child {
+  margin-bottom: 0;
 }
 
 .bubbleAssistant:hover {
@@ -219,7 +223,7 @@
   border: 1px solid #2a2a3e;
   border-radius: 6px;
   padding: 8px 12px;
-  margin: 6px 0;
+  margin: 0 0 6px 0;
   font-size: 12px;
 }
 

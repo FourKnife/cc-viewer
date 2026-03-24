@@ -1537,6 +1537,26 @@ const i18nData = {
     "tr": "Git Değişiklikleri",
     "uk": "Зміни Git"
   },
+  "ui.roleFilter": {
+    "zh": "角色筛选",
+    "en": "Role Filter",
+    "zh-TW": "角色篩選",
+    "ko": "역할 필터",
+    "ja": "ロールフィルター",
+    "de": "Rollenfilter",
+    "es": "Filtro de roles",
+    "fr": "Filtre de rôles",
+    "it": "Filtro ruoli",
+    "da": "Rollefilter",
+    "pl": "Filtr ról",
+    "ru": "Фильтр ролей",
+    "ar": "تصفية الأدوار",
+    "no": "Rollefilter",
+    "pt-BR": "Filtro de papéis",
+    "th": "ตัวกรองบทบาท",
+    "tr": "Rol Filtresi",
+    "uk": "Фільтр ролей"
+  },
   "ui.binaryFileNotice": {
     "zh": "二进制文件（无法显示差异）",
     "en": "Binary file (cannot show diff)",

@@ -455,3 +455,56 @@
   background: rgba(74, 158, 255, 0.25);
   color: #6ab4ff;
 }
+
+.roleFilterBar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgb(26, 26, 26);
+  border-bottom: 1px solid #333;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.roleChip, .roleChipActive {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  border: 1px solid #333;
+  background: transparent;
+  color: #888;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.roleChipActive {
+  border-color: #4a9eff;
+  color: #ccc;
+}
+.roleChip:hover, .roleChipActive:hover {
+  border-color: #555;
+}
+.roleAvatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.roleAvatar :global(svg) {
+  width: 10px;
+  height: 10px;
+}
+.roleName {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.roleCheck {
+  color: #4a9eff;
+  font-size: 10px;
+}

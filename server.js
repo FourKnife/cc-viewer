@@ -379,7 +379,7 @@ async function handleRequest(req, res) {
         });
         await streamRawEntriesAsync(LOG_FILE, (raw) => {
           clients.forEach(client => {
-            try { client.write('event: load_chunk\ndata: ['); client.write(raw); client.write(']\n\n'); } catch { }
+            try { client.write('event: load_chunk\ndata: ['); client.write(raw.replace(/\n/g, '')); client.write(']\n\n'); } catch { }
           });
         });
         clients.forEach(client => {
@@ -490,7 +490,7 @@ async function handleRequest(req, res) {
         });
         await streamRawEntriesAsync(LOG_FILE, (raw) => {
           clients.forEach(client => {
-            try { client.write('event: load_chunk\ndata: ['); client.write(raw); client.write(']\n\n'); } catch {}
+            try { client.write('event: load_chunk\ndata: ['); client.write(raw.replace(/\n/g, '')); client.write(']\n\n'); } catch {}
           });
         });
         clients.forEach(client => {
@@ -605,8 +605,9 @@ async function handleRequest(req, res) {
 
     await streamRawEntriesAsync(LOG_FILE, (raw) => {
       // 直接发送原始 JSON 字符串，不做 parse/reconstruct/stringify
+      // SSE data 字段不允许裸换行，去除 pretty-printed JSON 的换行
       res.write('event: load_chunk\ndata: [');
-      res.write(raw);
+      res.write(raw.includes('\n') ? raw.replace(/\n/g, '') : raw);
       res.write(']\n\n');
       // 轻量追踪最新 MainAgent 的 KV-Cache 和 context_window（仅 regex 检测）
       if (raw.includes('"mainAgent":true') || raw.includes('"mainAgent": true')) {
@@ -1331,7 +1332,7 @@ async function handleRequest(req, res) {
       res.write(`event: load_start\ndata: ${JSON.stringify({ total, incremental: false })}\n\n`);
       await streamRawEntriesAsync(filePath, (raw) => {
         res.write('event: load_chunk\ndata: [');
-        res.write(raw);
+        res.write(raw.includes('\n') ? raw.replace(/\n/g, '') : raw);
         res.write(']\n\n');
       });
       res.write(`event: load_end\ndata: {}\n\n`);

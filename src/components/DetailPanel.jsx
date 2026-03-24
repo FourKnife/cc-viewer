@@ -8,6 +8,7 @@ import { apiUrl } from '../utils/apiUrl';
 import { formatTokenCount, stripPrivateKeys, hasClaudeMdReminder, isClaudeMdReminder, hasSkillsReminder, isSkillsReminder, extractCachedContent } from '../utils/helpers';
 import { classifyRequest } from '../utils/requestType';
 import { isMainAgent, isSystemText } from '../utils/contentFilter';
+import { restoreSlimmedEntry } from '../utils/entry-slim.js';
 import AppHeader from './AppHeader';
 import ContextTab from './ContextTab';
 import styles from './DetailPanel.module.css';
@@ -352,7 +353,10 @@ class DetailPanel extends React.Component {
     const { requests, selectedIndex } = this.props;
     if (!requests || selectedIndex == null) return null;
     for (let i = selectedIndex - 1; i >= 0; i--) {
-      if (isMainAgent(requests[i])) return requests[i];
+      if (isMainAgent(requests[i])) {
+        const r = requests[i];
+        return r._slimmed ? restoreSlimmedEntry(r, this.props.allRequests || requests) : r;
+      }
     }
     return null;
   }
@@ -384,7 +388,7 @@ class DetailPanel extends React.Component {
   }
 
   render() {
-    const { request, currentTab, onTabChange } = this.props;
+    let { request, currentTab, onTabChange } = this.props;
 
     if (!request) {
       return (
@@ -392,6 +396,11 @@ class DetailPanel extends React.Component {
           <Empty description="选择一个请求查看详情" />
         </div>
       );
+    }
+
+    // 按需还原被剪枝的老格式 entry 的 messages（不修改 state）
+    if (request._slimmed) {
+      request = restoreSlimmedEntry(request, this.props.allRequests || this.props.requests);
     }
 
     const time = new Date(request.timestamp).toLocaleString('zh-CN');

@@ -7,7 +7,7 @@ import FileContentView from './FileContentView';
 import ImageViewer from './ImageViewer';
 import GitChanges from './GitChanges';
 import GitDiffView from './GitDiffView';
-import { extractToolResultText, getModelInfo } from '../utils/helpers';
+import { extractToolResultText, getModelInfo, getSvgAvatar } from '../utils/helpers';
 import { isSystemText, classifyUserContent, isMainAgent } from '../utils/contentFilter';
 import { classifyRequest, formatRequestTag, formatTeammateLabel } from '../utils/requestType';
 import { buildChunksForAnswer } from '../utils/ptyChunkBuilder';
@@ -265,6 +265,8 @@ class ChatView extends React.Component {
       editorFilePath: null,
       fileExplorerRefresh: 0,
       gitChangesRefresh: 0,
+      roleFilterOpen: false,
+      roleFilterHidden: new Set(),
     };
     this._processedToolIds = new Set();
     this._projectDirCache = null; // 缓存项目目录绝对路径
@@ -1615,11 +1617,64 @@ class ChatView extends React.Component {
       );
     }
 
+    // --- 角色收集 + 筛选 ---
+    const collectedRolesMap = new Map();
+    const userProfile = this.props.userProfile;
+    const modelInfo = this._reqScanCache ? getModelInfo(this._reqScanCache.modelName) : null;
+    for (const item of allItems) {
+      if (!item || !item.props) continue;
+      const role = item.props.role;
+      if (role === 'user' || role === 'plan-prompt') {
+        if (!collectedRolesMap.has('user')) {
+          collectedRolesMap.set('user', { key: 'user', name: userProfile?.name || 'User', avatarType: 'user', color: 'rgba(255,255,255,0.1)' });
+        }
+      } else if (role === 'assistant') {
+        if (!collectedRolesMap.has('assistant')) {
+          collectedRolesMap.set('assistant', { key: 'assistant', name: modelInfo?.short || modelInfo?.name || 'Claude', avatarType: 'agent', color: 'rgba(255,255,255,0.1)' });
+        }
+      } else if (role === 'sub-agent-chat') {
+        const label = item.props.label || 'SubAgent';
+        const key = `sub:${label}`;
+        if (!collectedRolesMap.has(key)) {
+          const isTeammate = item.props.isTeammate;
+          let avatarType = 'sub';
+          if (isTeammate) {
+            avatarType = 'teammate';
+          } else {
+            const match = label.match(/SubAgent:\s*(\w+)/i);
+            const st = match ? match[1].toLowerCase() : '';
+            if (st === 'explore' || st === 'search') avatarType = 'sub-search';
+            else if (st === 'plan') avatarType = 'sub-plan';
+          }
+          const _nameToColor = (n) => { let h = 0; for (let i = 0; i < n.length; i++) h = n.charCodeAt(i) + ((h << 5) - h); return `hsl(${((h % 360) + 360) % 360}, 55%, 35%)`; };
+          collectedRolesMap.set(key, { key, name: label.length > 12 ? label.slice(0, 12) + '…' : label, avatarType, color: isTeammate ? _nameToColor(label) : 'rgba(255,255,255,0.1)' });
+        }
+      }
+    }
+    const collectedRoles = Array.from(collectedRolesMap.values());
+
+    let filteredItems = allItems;
+    if (this.state.roleFilterHidden.size > 0) {
+      filteredItems = allItems.filter(item => {
+        if (!item || !item.props) return true;
+        const role = item.props.role;
+        if (role === 'user' || role === 'plan-prompt') return !this.state.roleFilterHidden.has('user');
+        if (role === 'assistant') return !this.state.roleFilterHidden.has('assistant');
+        if (role === 'sub-agent-chat') {
+          const key = `sub:${item.props.label || 'SubAgent'}`;
+          return !this.state.roleFilterHidden.has(key);
+        }
+        return true;
+      });
+    }
+
+    const filteredLastResponseItems = lastResponseItems && this.state.roleFilterHidden.has('assistant') ? null : lastResponseItems;
+
     const targetIdx = this._scrollTargetIdx;
     const { highlightTs, highlightFading } = this.state;
     const highlightIdx = highlightTs && this._tsItemMap && this._tsItemMap[highlightTs] != null
       ? this._tsItemMap[highlightTs] : null;
-    const visible = allItems.slice(0, visibleCount);
+    const visible = filteredItems.slice(0, this.state.roleFilterHidden.size > 0 ? filteredItems.length : visibleCount);
 
     const { pendingInput, stickyBottom, ptyPromptHistory } = this.state;
 
@@ -1680,6 +1735,31 @@ class ChatView extends React.Component {
       </div>
     ) : null;
 
+    const roleFilterBar = this.state.roleFilterOpen && collectedRoles.length > 0 ? (
+      <div className={styles.roleFilterBar}>
+        {collectedRoles.map(r => {
+          const hidden = this.state.roleFilterHidden.has(r.key);
+          return (
+            <button key={r.key}
+              className={hidden ? styles.roleChip : styles.roleChipActive}
+              onClick={() => this.setState(prev => {
+                const next = new Set(prev.roleFilterHidden);
+                hidden ? next.delete(r.key) : next.add(r.key);
+                return { roleFilterHidden: next };
+              })}
+            >
+              <div className={styles.roleAvatar}
+                style={{ background: r.color || 'rgba(255,255,255,0.1)' }}
+                dangerouslySetInnerHTML={{ __html: getSvgAvatar(r.avatarType) }}
+              />
+              <span className={styles.roleName}>{r.name}</span>
+              {!hidden && <span className={styles.roleCheck}>✓</span>}
+            </button>
+          );
+        })}
+      </div>
+    ) : null;
+
     const messageList = (noData || loading) ? (
       <div className={styles.messageListWrap}>
         <div ref={this.containerRef} className={styles.container}>
@@ -1695,6 +1775,7 @@ class ChatView extends React.Component {
       </div>
     ) : (
       <div className={styles.messageListWrap}>
+        {roleFilterBar}
         <div
           ref={this.containerRef}
           className={styles.container}
@@ -1711,10 +1792,10 @@ class ChatView extends React.Component {
               ? <div key={item.key + '-anchor'} ref={this._scrollTargetRef}>{el}</div>
               : el;
           })}
-          {lastResponseItems && (
+          {filteredLastResponseItems && (
             targetIdx != null && targetIdx >= visible.length
-              ? <div key="last-resp-anchor" ref={this._scrollTargetRef}>{lastResponseItems}</div>
-              : lastResponseItems
+              ? <div key="last-resp-anchor" ref={this._scrollTargetRef}>{filteredLastResponseItems}</div>
+              : filteredLastResponseItems
           )}
           {pendingBubble}
           {promptBubbles}
@@ -1724,7 +1805,24 @@ class ChatView extends React.Component {
     );
 
     if (!cliMode) {
-      return messageList;
+      return (
+        <div className={styles.splitContainer}>
+          <div className={styles.navSidebar}>
+            <button
+              className={this.state.roleFilterOpen ? styles.navBtnActive : styles.navBtn}
+              onClick={() => this.setState(prev => ({ roleFilterOpen: !prev.roleFilterOpen }))}
+              title={t('ui.roleFilter')}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+              </svg>
+            </button>
+          </div>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            {messageList}
+          </div>
+        </div>
+      );
     }
 
     return (
@@ -1749,6 +1847,15 @@ class ChatView extends React.Component {
           >
             <svg width="24" height="24" viewBox="0 0 1024 1024" fill="currentColor">
               <path d="M759.53332137 326.35000897c0-48.26899766-39.4506231-87.33284994-87.87432908-86.6366625-46.95397689 0.69618746-85.08957923 39.14120645-85.39899588 86.09518335-0.23206249 40.68828971 27.53808201 74.87882971 65.13220519 84.47074592 10.82958281 2.78474987 18.41029078 12.37666607 18.64235327 23.51566553 0.38677082 21.11768647-3.40358317 44.40128953-17.24997834 63.81718442-22.20064476 31.17372767-62.42480948 42.46743545-97.93037026 52.44612248-22.43270724 6.26568719-38.75443563 7.89012462-53.14230994 9.28249954-20.42149901 2.01120825-39.76003975 3.94506233-63.89453858 17.79145747-5.10537475 2.93945818-10.13339535 6.18833303-14.85199928 9.74662453-4.09977063 3.09416652-9.90133285 0.15470833-9.90133286-4.95066641V302.60228095c0-9.43720788 5.26008307-18.17822829 13.69168683-22.3553531 28.69839444-14.23316598 48.42370599-43.93716454 48.19164353-78.20505872-0.38677082-48.57841433-41.15241468-87.71962076-89.730829-86.01782918C338.80402918 117.57112321 301.59667683 155.70672553 301.59667683 202.58334827c0 34.03583169 19.64795738 63.50776777 48.1916435 77.66357958 8.43160375 4.17712479 13.69168685 12.76343689 13.69168684 22.12329062v419.02750058c0 9.43720788-5.26008307 18.17822829-13.69168684 22.3553531-28.69839444 14.23316598-48.42370599 43.93716454-48.1916435 78.20505872 0.30941665 48.57841433 41.07506052 87.6422666 89.65347484 86.01782918C437.74000359 906.42887679 474.87000179 868.2159203 474.87000179 821.41665173c0-34.03583169-19.64795738-63.50776777-48.1916435-77.66357958-8.43160375-4.17712479-13.69168685-12.76343689-13.69168684-22.12329062v-14.85199926c0-32.48874844 15.39347842-63.27570528 42.00331048-81.91805854 2.39797906-1.70179159 4.95066642-3.32622901 7.50335379-4.79595812 14.92935344-8.58631209 25.91364457-9.66927037 44.09187287-11.4484161 15.62554091-1.54708326 35.04143581-3.48093734 61.65126786-10.90693699 39.06385228-10.98429114 92.51557887-25.91364457 124.84961898-71.39789238 18.56499911-26.06835292 27.38337367-58.01562219 26.37776956-95.14562041-0.15470833-5.33743724-0.54147915-10.67487447-1.08295828-16.16702004-0.85089578-8.27689543 2.70739569-16.24437421 9.12779121-21.50445729 19.57060322-15.78024923 32.02462345-39.99210223 32.02462345-67.14341343zM351.1033411 202.58334827c0-20.49885317 16.63114503-37.12999821 37.1299982-37.1299982s37.12999821 16.63114503 37.12999821 37.1299982-16.63114503 37.12999821-37.12999821 37.1299982-37.12999821-16.63114503-37.1299982-37.1299982z m74.25999641 618.83330346c0 20.49885317-16.63114503 37.12999821-37.12999821 37.1299982s-37.12999821-16.63114503-37.1299982-37.1299982 16.63114503-37.12999821 37.1299982-37.1299982 37.12999821 16.63114503 37.12999821 37.1299982z m247.53332139-457.93664456c-20.49885317 0-37.12999821-16.63114503-37.1299982-37.1299982s16.63114503-37.12999821 37.1299982-37.12999821 37.12999821 16.63114503 37.1299982 37.12999821-16.63114503 37.12999821-37.1299982 37.1299982z"/>
+            </svg>
+          </button>
+          <button
+            className={this.state.roleFilterOpen ? styles.navBtnActive : styles.navBtn}
+            onClick={() => this.setState(prev => ({ roleFilterOpen: !prev.roleFilterOpen }))}
+            title={t('ui.roleFilter')}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
             </svg>
           </button>
         </div>

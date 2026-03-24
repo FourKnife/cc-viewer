@@ -604,7 +604,7 @@ class ChatMessage extends React.Component {
       if (tb.text) {
         const { segments } = renderAssistantText(tb.text);
         innerContent.push(
-          <div key={`text-${i}`}>{this.renderSegments(segments)}</div>
+          <div key={`text-${i}`} className="chat-boxer">{this.renderSegments(segments)}</div>
         );
       }
     });

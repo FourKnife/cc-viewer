@@ -22,6 +22,7 @@ import styles from './App.module.css';
 import { apiUrl } from './utils/apiUrl';
 import { saveEntries, loadEntries, clearEntries, getCacheMeta } from './utils/entryCache';
 import { reconstructEntries } from '../lib/delta-reconstructor.js';
+import { createEntrySlimmer } from './utils/entry-slim.js';
 
 class App extends React.Component {
   constructor(props) {
@@ -488,6 +489,7 @@ class App extends React.Component {
     if (this._localLogES) { this._localLogES.close(); this._localLogES = null; }
 
     const entries = [];
+    const slimmer = createEntrySlimmer(isMainAgent);
     const es = new EventSource(apiUrl(`/api/local-log?file=${encodeURIComponent(file)}`));
     this._localLogES = es;
 
@@ -502,7 +504,10 @@ class App extends React.Component {
       try {
         const chunk = JSON.parse(event.data);
         if (Array.isArray(chunk)) {
-          entries.push(...chunk);
+          for (const entry of chunk) {
+            slimmer.process(entry, entries, entries.length);
+            entries.push(entry);
+          }
           this.setState({ fileLoadingCount: entries.length });
         }
       } catch { }
@@ -510,6 +515,7 @@ class App extends React.Component {
 
     es.addEventListener('load_end', () => {
       es.close();
+      slimmer.finalize(entries);
       // Delta 重建：server 发送原始 delta 条目，客户端重建为完整 messages
       const reconstructed = reconstructEntries(entries);
       if (Array.isArray(reconstructed) && reconstructed.length > 0) {
@@ -668,7 +674,8 @@ class App extends React.Component {
     for (const entry of entries) {
       if (!isMainAgent(entry) || !entry.body || !Array.isArray(entry.body.messages)) continue;
       const messages = entry.body.messages;
-      const count = messages.length;
+      // 被剪枝的 entry：用 _messageCount 维持 timestamps 数组增长，但不注入
+      const count = entry._messageCount || messages.length;
       const userId = entry.body.metadata?.user_id || null;
       const timestamp = entry.timestamp || new Date().toISOString();
 
@@ -687,9 +694,11 @@ class App extends React.Component {
         timestamps.push(timestamp);
       }
 
-      // 把累积的时间戳写入当前 entry 的所有消息（每个 entry 的 messages 是独立对象）
-      for (let i = 0; i < count; i++) {
-        messages[i]._timestamp = timestamps[i];
+      // 只对有实际 messages 的 entry 注入 _timestamp（跳过被剪枝的空 entry）
+      if (messages.length > 0) {
+        for (let i = 0; i < messages.length; i++) {
+          messages[i]._timestamp = timestamps[i];
+        }
       }
       prevUserId = userId;
     }
@@ -2014,6 +2023,7 @@ class App extends React.Component {
                   <DetailPanel
                     request={selectedRequest}
                     requests={filteredRequests}
+                    allRequests={this.state.requests}
                     selectedIndex={selectedIndex}
                     currentTab={currentTab}
                     onTabChange={this.handleTabChange}
