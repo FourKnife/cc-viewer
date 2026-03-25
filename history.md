@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.38 (2026-03-25)
+
+- Feature: markdown preview toggle for file browser — `.md` files default to rendered markdown view with text/editor switch button
+- Feature: role filter chips now display the same avatars as conversation messages (user profile photo, model-specific SVG)
+- Security: add DOMPurify sanitization to all markdown rendering (renderMarkdown)
+- Style: add margin-bottom to tool result plainResult cards
+- i18n: add ui.viewMarkdown / ui.viewText entries for all 18 languages
+
 ## 1.6.35 (2026-03-24)
 
 - Feature: keyboard arrow up/down navigation in request list (network view)

@@ -499,6 +499,13 @@
   width: 10px;
   height: 10px;
 }
+.roleAvatarImg {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+}
 .roleName {
   max-width: 80px;
   overflow: hidden;

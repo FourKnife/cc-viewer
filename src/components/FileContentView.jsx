@@ -19,6 +19,7 @@ import { sql } from '@codemirror/lang-sql';
 import { go } from '@codemirror/lang-go';
 import { keymap } from '@codemirror/view';
 import { t as i18n } from '../i18n';
+import { renderMarkdown } from '../utils/markdown';
 import styles from './FileContentView.module.css';
 
 const LANG_MAP = {
@@ -277,6 +278,8 @@ export default function FileContentView({ filePath, onClose, editorSession, scro
   const [saveStatus, setSaveStatus] = useState(null);
   const [lineCount, setLineCount] = useState(0);
   const [closing, setClosing] = useState(false);
+  const isMdFile = /\.md$/i.test(filePath);
+  const [viewMode, setViewMode] = useState(isMdFile ? 'markdown' : 'text');
   const containerRef = useRef(null);
   const mounted = useRef(true);
   const saveTimeoutRef = useRef(null);
@@ -496,6 +499,24 @@ export default function FileContentView({ filePath, onClose, editorSession, scro
               {saveStatusText}
             </span>
           )}
+          {isMdFile && (
+            <button
+              className={`${styles.viewToggleBtn}${viewMode === 'markdown' ? ` ${styles.viewToggleActive}` : ''}`}
+              onClick={() => setViewMode(v => v === 'markdown' ? 'text' : 'markdown')}
+              title={viewMode === 'markdown' ? i18n('ui.viewText') : i18n('ui.viewMarkdown')}
+            >
+              {viewMode === 'markdown' ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 3h20v18H2z"/><path d="M7 15V9l2 3 2-3v6"/><path d="M17 9l-2 3h4l-2 3"/>
+                </svg>
+              )}
+              {viewMode === 'markdown' ? i18n('ui.viewText') : i18n('ui.viewMarkdown')}
+            </button>
+          )}
           <button
             className={styles.saveBtn}
             onClick={doSave}
@@ -519,7 +540,10 @@ export default function FileContentView({ filePath, onClose, editorSession, scro
       <div className={styles.contentContainer}>
         {error && <div className={styles.error}>{error}</div>}
         {loading && !error && <div className={styles.loading}>{i18n('ui.loading')}</div>}
-        {!loading && content !== null && (
+        {!loading && content !== null && viewMode === 'markdown' && isMdFile && (
+          <div className={styles.markdownPreview} dangerouslySetInnerHTML={{ __html: renderMarkdown(isDirty ? currentContent : content) }} />
+        )}
+        {!loading && content !== null && !(viewMode === 'markdown' && isMdFile) && (
           <div className={styles.editorWrapper} ref={editorWrapperRef}>
             <div className={styles.lineNumCol} ref={lineNumRef}>
               {lineNumbers}

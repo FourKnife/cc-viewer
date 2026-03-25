@@ -1626,11 +1626,11 @@ class ChatView extends React.Component {
       const role = item.props.role;
       if (role === 'user' || role === 'plan-prompt') {
         if (!collectedRolesMap.has('user')) {
-          collectedRolesMap.set('user', { key: 'user', name: userProfile?.name || 'User', avatarType: 'user', color: 'rgba(255,255,255,0.1)' });
+          collectedRolesMap.set('user', { key: 'user', name: userProfile?.name || 'User', avatarType: 'user', color: 'rgba(255,255,255,0.1)', avatarImg: userProfile?.avatar || null });
         }
       } else if (role === 'assistant') {
         if (!collectedRolesMap.has('assistant')) {
-          collectedRolesMap.set('assistant', { key: 'assistant', name: modelInfo?.short || modelInfo?.name || 'Claude', avatarType: 'agent', color: 'rgba(255,255,255,0.1)' });
+          collectedRolesMap.set('assistant', { key: 'assistant', name: modelInfo?.short || modelInfo?.name || 'Claude', avatarType: 'agent', color: modelInfo?.color || 'rgba(255,255,255,0.1)', avatarSvg: modelInfo?.svg || null });
         }
       } else if (role === 'sub-agent-chat') {
         const label = item.props.label || 'SubAgent';
@@ -1748,9 +1748,14 @@ class ChatView extends React.Component {
                 return { roleFilterHidden: next };
               })}
             >
+              {r.avatarImg ? (
+                <img src={r.avatarImg} className={styles.roleAvatarImg} alt={r.name}
+                  onError={(e) => { e.target.onerror = null; e.target.style.display = 'none'; const d = e.target.parentNode.querySelector('[data-role-avatar-fallback]'); if (d) d.style.display = ''; }} />
+              ) : null}
               <div className={styles.roleAvatar}
-                style={{ background: r.color || 'rgba(255,255,255,0.1)' }}
-                dangerouslySetInnerHTML={{ __html: getSvgAvatar(r.avatarType) }}
+                style={{ background: r.color || 'rgba(255,255,255,0.1)', display: r.avatarImg ? 'none' : '' }}
+                data-role-avatar-fallback=""
+                dangerouslySetInnerHTML={{ __html: r.avatarSvg || getSvgAvatar(r.avatarType) }}
               />
               <span className={styles.roleName}>{r.name}</span>
               {!hidden && <span className={styles.roleCheck}>✓</span>}
