@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.48 (2026-03-28)
+
+- Fix(mobile): hide left navSidebar in chat view on mobile for more screen space
+
 ## 1.6.47 (2026-03-28)
 
 - Feature(mobile): add Agent Team presets to mobile virtual keyboard bar — flattened inline buttons instead of popover

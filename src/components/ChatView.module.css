@@ -440,6 +440,12 @@
   gap: 4px;
 }
 
+@media (max-width: 768px) {
+  .navSidebar {
+    display: none;
+  }
+}
+
 .navBtn {
   width: 32px;
   height: 32px;
