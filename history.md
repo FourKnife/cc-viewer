@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.63 (2026-03-29)
+
+- Fix: permission check prompts ("Do you want to make this edit?") now reliably detected and rendered as approval cards in chat
+- Fix: `isDangerousOperationPrompt()` classifier missed the most common edit/write/create/delete permission patterns
+- Fix: `isDangerousOperationPrompt()` options check failed to match standalone "No" (regex boundary bug)
+- Fix: `_detectPrompt()` Pattern 2 required cursor marker `❯` on first option line — now supports cursor on any line
+- Fix: trailing newlines in PTY buffer broke prompt detection `$` anchor — now trimmed before matching
+- Cleanup: remove PtyPromptBubbles component (unused after permission checks handled by ChatMessage)
+- Test: add 25 permission prompt detection test cases covering real-world CLI variations
+
 ## 1.6.62 (2026-03-29)
 
 - Feature: add `--ad` shortcut for `--allow-dangerously-skip-permissions` (adds bypass mode to Shift+Tab cycle without activating)
@@ -44,10 +54,9 @@
 
 ## 1.6.57 (2026-03-29)
 
-- Refactor: split ChatView.jsx (2562 lines) into 5 isolated components — TeamSessionPanel, SnapLineOverlay, PtyPromptBubbles, RoleFilterBar, ChatInputBar — each with its own CSS module
+- Refactor: split ChatView.jsx (2562 lines) into 4 isolated components — TeamSessionPanel, SnapLineOverlay, RoleFilterBar, ChatInputBar — each with its own CSS module
 - Feature: plan approval buttons show "Submitting..." state after click, with proper reset on plan change
 - Fix: PTY prompt false positive filters — skip file paths and Claude Code status-bar output in `_detectPrompt()`
-- Fix: temporarily disable PtyPromptBubbles rendering due to high false-positive rate (TODO: re-enable after improving detection accuracy)
 - Style: inline code color changed to #9597eb for better visibility; table border lightened to #777; table body background darkened to #000
 - Cleanup: remove 3 unused imports from ChatView.jsx (extractToolResultText, parseAskAnswerText, parsePlanApproval)
 

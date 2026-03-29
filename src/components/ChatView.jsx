@@ -18,7 +18,6 @@ import { isImageFile, isMutatingCommand } from '../utils/commandValidator';
 import { createEmptyToolState, appendToolResultMap, cachedBuildToolResultMap, getToolResultCache, setToolResultCache } from '../utils/toolResultBuilder';
 import { TeamButton, TeamModal } from './TeamSessionPanel';
 import SnapLineOverlay from './SnapLineOverlay';
-import PtyPromptBubbles from './PtyPromptBubbles';
 import RoleFilterBar from './RoleFilterBar';
 import ChatInputBar from './ChatInputBar';
 import { Virtuoso } from 'react-virtuoso';
@@ -970,7 +969,7 @@ class ChatView extends React.Component {
   }
 
   _detectPrompt() {
-    const buf = this._ptyBuffer;
+    const buf = this._ptyBuffer.trimEnd();
 
     let question = null;
     let options = null;
@@ -996,7 +995,7 @@ class ChatView extends React.Component {
     // "Some prompt text\n  ❯ Allow once\n    Deny"
     // Question line may or may not end with "?"
     if (!options) {
-      const match2 = buf.match(/([^\n]+)\n((?:\s+[❯>]\s+[^\n]+\n)(?:\s+[^\n]+\n?){1,})$/);
+      const match2 = buf.match(/([^\n]+)\n((?:\s+[❯>]?\s+[^\n]+\n?){2,})$/);
       if (match2) {
         const candidateQ = match2[1].trim();
         const block = match2[2];
@@ -1794,10 +1793,6 @@ class ChatView extends React.Component {
       </button>
     ) : null;
 
-    // TODO: PtyPromptBubbles 误检率较高（会将 Claude Code 状态栏、diff 输出等识别为交互提示），
-    // 暂时屏蔽，下一个迭代优化 _detectPrompt() 的检测精度后再启用。
-    const promptBubbles = null;
-
     const loadMoreBtn = isMobile && this._mobileSliceOffset > 0 ? (
       <div className={styles.loadMoreWrap}>
         <button className={styles.loadMoreBtn} onClick={this.handleLoadMore}>
@@ -1823,7 +1818,6 @@ class ChatView extends React.Component {
             </div>
           ) : null}
           {pendingBubble}
-          {promptBubbles}
         </div>
         {stickyBtn}
       </div>
@@ -1835,7 +1829,7 @@ class ChatView extends React.Component {
         )}
         {isMobile ? (
           this._virtuosoHeader = loadMoreBtn,
-          this._virtuosoFooter = <>{filteredLastResponseItems}{pendingBubble}{promptBubbles}</>,
+          this._virtuosoFooter = <>{filteredLastResponseItems}{pendingBubble}</>,
           <Virtuoso
             ref={this.virtuosoRef}
             className={styles.mobileVirtuoso}
@@ -1885,7 +1879,6 @@ class ChatView extends React.Component {
                 : filteredLastResponseItems
             )}
             {pendingBubble}
-            {promptBubbles}
           </div>
         )}
         {stickyBtn}
