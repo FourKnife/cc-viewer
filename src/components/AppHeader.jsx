@@ -1187,12 +1187,12 @@ class AppHeader extends React.Component {
         label: t('ui.pluginManagement'),
         onClick: this.handleShowPlugins,
       },
-      ...(cliMode && onReturnToWorkspaces ? [{
+      {
         key: 'switch-workspace',
         icon: <ImportOutlined className={styles.iconMirror} />,
-        label: t('ui.switchWorkspace'),
-        onClick: onReturnToWorkspaces,
-      }] : []),
+        label: <span style={{ color: '#555', cursor: 'not-allowed' }}>{t('ui.switchWorkspace')}</span>,
+        disabled: true,
+      },
       {
         key: 'process-management',
         icon: <DashboardOutlined />,
@@ -1704,7 +1704,7 @@ class AppHeader extends React.Component {
                 title: t('ui.processManagement.action'),
                 width: 100,
                 render: (_, record) => record.isCurrent
-                  ? <Tag color="green">{t('ui.processManagement.current')}</Tag>
+                  ? <Button size="small" style={{ color: '#52c41a', borderColor: '#52c41a' }}>{t('ui.processManagement.current')}</Button>
                   : <Button size="small" danger onClick={() => this.handleKillProcess(record.pid)}>{t('ui.processManagement.kill')}</Button>,
               },
             ]}

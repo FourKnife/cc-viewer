@@ -332,8 +332,9 @@ class ChatMessage extends React.Component {
       const questions = Array.isArray(inp.questions) ? inp.questions : [];
       const { askAnswerMap } = this.props;
       const selectedAnswers = askAnswerMap?.[tu.id] || {};
-      const hasAnswers = Object.keys(selectedAnswers).length > 0;
-      const isPending = !hasAnswers;
+      const isRejected = selectedAnswers.__rejected__ === true;
+      const hasAnswers = !isRejected && Object.keys(selectedAnswers).length > 0;
+      const isPending = !hasAnswers && !isRejected;
       const isInteractive = isPending && this.props.onAskQuestionSubmit && tu.id === this.props.lastPendingAskId;
 
       if (isInteractive) {
@@ -604,7 +605,11 @@ class ChatMessage extends React.Component {
       <AskQuestionForm
         key={toolId}
         questions={questions}
-        onSubmit={this.props.onAskQuestionSubmit}
+        onSubmit={(answers) => {
+          if (this.props.onAskQuestionSubmit) {
+            this.props.onAskQuestionSubmit(answers, toolId, questions);
+          }
+        }}
       />
     );
   }

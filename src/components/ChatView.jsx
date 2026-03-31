@@ -105,6 +105,7 @@ class ChatView extends React.Component {
       mdLightboxSrc: null,
       streamingFading: false,
       presetItems: [],
+      localAskAnswers: {}, // 提交后的本地答案映射，用于 Last Response 立即切换到非交互式
     };
     this._processedToolIds = new Set();
     this._projectDirCache = null; // 缓存项目目录绝对路径
@@ -866,9 +867,14 @@ class ChatView extends React.Component {
             if (session.entryTimestamp) tsItemMap[session.entryTimestamp] = allItems.length;
             let respLastPendingAskId = null;
             let respLastPendingPlanId = null;
+            const _localAsk = this.state.localAskAnswers || {};
             for (const block of respContent) {
               if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
-                respLastPendingAskId = block.id;
+                // 已在本地提交过的问题不再视为 pending
+                const la = _localAsk[block.id];
+                if (!la || Object.keys(la).length === 0) {
+                  respLastPendingAskId = block.id;
+                }
               }
               if (block.type === 'tool_use' && block.name === 'ExitPlanMode') {
                 respLastPendingPlanId = block.id;
@@ -904,7 +910,7 @@ class ChatView extends React.Component {
                 <Divider style={{ borderColor: '#2a2a2a', margin: '8px 0' }}>
                   <Text type="secondary" className={styles.lastResponseLabel}>{t('ui.lastResponse')}</Text>
                 </Divider>
-                <ChatMessage key="resp-asst" role="assistant" content={lrContent} timestamp={session.entryTimestamp} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} toolResultMap={EMPTY_MAP} askAnswerMap={EMPTY_MAP} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} lastPendingAskId={respLastPendingAskId} lastPendingPlanId={respLastPendingPlanId} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} ptyPrompt={this.state.ptyPrompt} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} cliMode={this.props.cliMode} onAskQuestionSubmit={this.handleAskQuestionSubmit} onOpenFile={this.handleOpenToolFilePath} />
+                <ChatMessage key="resp-asst" role="assistant" content={lrContent} timestamp={session.entryTimestamp} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} toolResultMap={EMPTY_MAP} askAnswerMap={Object.keys(_localAsk).length > 0 ? _localAsk : EMPTY_MAP} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} lastPendingAskId={respLastPendingAskId} lastPendingPlanId={respLastPendingPlanId} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} ptyPrompt={this.state.ptyPrompt} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} cliMode={this.props.cliMode} onAskQuestionSubmit={this.handleAskQuestionSubmit} onOpenFile={this.handleOpenToolFilePath} />
               </React.Fragment>
             );
           }
@@ -1321,7 +1327,27 @@ class ChatView extends React.Component {
    * AskUserQuestion 交互提交
    * answers: [{ questionIndex, type: 'single'|'multi'|'other', optionIndex, selectedIndices, text }]
    */
-  handleAskQuestionSubmit = (answers) => {
+  handleAskQuestionSubmit = (answers, askId, questions) => {
+    // 立即更新本地答案映射，解除 Last Response 中"提交中..."卡住状态
+    if (askId && questions) {
+      const localAnswers = {};
+      for (const answer of answers) {
+        const q = questions[answer.questionIndex];
+        if (!q) continue;
+        if (answer.type === 'other') {
+          localAnswers[q.question] = answer.text;
+        } else if (answer.type === 'multi') {
+          const labels = answer.selectedIndices.map(i => (q.options || [])[i]?.label).filter(Boolean);
+          localAnswers[q.question] = labels.join(', ');
+        } else {
+          localAnswers[q.question] = (q.options || [])[answer.optionIndex]?.label || '';
+        }
+      }
+      this.setState(prev => ({
+        localAskAnswers: { ...(prev.localAskAnswers || {}), [askId]: localAnswers },
+      }));
+    }
+
     // Hook bridge path: submit structured JSON instead of PTY simulation
     // Guard: don't switch to hook path if PTY submission is already in progress
     if (this._askHookActive && !this._askSubmitting) {

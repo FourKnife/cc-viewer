@@ -754,11 +754,11 @@
 
 /* Cache token colors */
 .cacheWriteToken {
-  color: #faad14;
+  color: #d97757;
 }
 
 .cacheReadToken {
-  color: #52c41a;
+  color: #49aa19;
 }
 
 .cacheCtxPercent {

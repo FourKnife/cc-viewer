@@ -143,7 +143,13 @@ export function appendToolResultMap(state, messages, startIndex) {
             }
           }
           if (matchedTool && matchedTool.name === 'AskUserQuestion') {
-            askAnswerMap[block.tool_use_id] = parseAskAnswerText(resultText);
+            const parsed = parseAskAnswerText(resultText);
+            // 被拒绝的 AskUserQuestion：标记为 rejected，避免渲染成交互式表单
+            if (Object.keys(parsed).length === 0 && isPermissionDenied) {
+              askAnswerMap[block.tool_use_id] = { __rejected__: true };
+            } else {
+              askAnswerMap[block.tool_use_id] = parsed;
+            }
           }
           if (matchedTool && matchedTool.name === 'ExitPlanMode') {
             planApprovalMap[block.tool_use_id] = parsePlanApproval(resultText);

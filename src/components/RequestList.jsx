@@ -102,14 +102,14 @@ class RequestList extends React.Component {
                 <div className={styles.itemContent}>
                   <div className={styles.itemHeader}>
                     {reqType === 'MainAgent'
-                      ? <Tag color="orange" className={styles.tagNoMargin}>MainAgent</Tag>
+                      ? <Tag className={styles.tagNoMargin} style={{ color: '#cb4b16', borderColor: '#cb4b1644', background: '#cb4b1612' }}>MainAgent</Tag>
                       : reqType === 'Plan'
                         ? <Tag className={`${styles.tagNoMargin} ${styles.tagPlan}`}>{formatRequestTag(reqType, subType)}</Tag>
                         : reqType === 'Count' || reqType === 'Preflight'
                           ? <Tag className={`${styles.tagNoMargin} ${styles.tagMuted}`}>{reqType}</Tag>
                           : <Tag className={styles.tagNoMargin}>{formatRequestTag(reqType, subType)}</Tag>
                     }
-                    {model && <span className={styles.modelName} style={{ color: reqType === 'MainAgent' ? '#d4822d' : '#8c8c8c' }}>{model}</span>}
+                    {model && <span className={styles.modelName} style={{ color: reqType === 'MainAgent' ? '#cb4b16' : '#8c8c8c' }}>{model}</span>}
                     <span className={styles.time}>{time}</span>
                   </div>
                   <div className={styles.detailRow}>

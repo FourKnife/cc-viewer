@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.74 (2026-03-31)
+
+- Fix: rejected AskUserQuestion rendered as interactive form — mark `__rejected__` in askAnswerMap to prevent pending state
+- Fix: AskUserQuestion submit stuck on "提交中..." — local answer map for Last Response immediate UI transition
+- UI: favicon, AppHeader, CSS, i18n polish
+
 ## 1.6.73 (2026-03-31)
 
 - Feature: role filter interaction redesign — default unselected (show all), click to select (show selected only), close funnel resets
