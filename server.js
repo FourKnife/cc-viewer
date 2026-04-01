@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { createConnection } from 'node:net';
 import { randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, statSync, readdirSync, renameSync, unlinkSync, openSync, readSync, closeSync, realpathSync, mkdirSync, createReadStream } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, statSync, readdirSync, renameSync, unlinkSync, rmSync, openSync, readSync, closeSync, realpathSync, mkdirSync, createReadStream } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, resolve } from 'node:path';
 import { homedir, platform, networkInterfaces } from 'node:os';
@@ -1119,12 +1119,22 @@ async function handleRequest(req, res) {
           res.end(JSON.stringify({ error: 'Path traversal not allowed' }));
           return;
         }
-        if (!statSync(fullPath).isFile()) {
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          const protectedDirs = new Set(['node_modules', '.git', '.svn', '.hg']);
+          if (filePath.split('/').some(part => protectedDirs.has(part))) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Cannot delete protected directory' }));
+            return;
+          }
+          rmSync(fullPath, { recursive: true, force: true });
+        } else if (stat.isFile()) {
+          unlinkSync(fullPath);
+        } else {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Not a file' }));
+          res.end(JSON.stringify({ error: 'Unsupported path type' }));
           return;
         }
-        unlinkSync(fullPath);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       } catch (err) {
@@ -1217,6 +1227,67 @@ async function handleRequest(req, res) {
         const fullPath = join(cwd, filePath);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, fullPath }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 在指定目录下新建空文件
+  if (url === '/api/create-file' && method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > MAX_POST_BODY) req.destroy(); });
+    req.on('end', () => {
+      let parsed;
+      try { parsed = JSON.parse(body); } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request body' }));
+        return;
+      }
+      try {
+        const { dirPath, name } = parsed;
+        if (!name) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing name' }));
+          return;
+        }
+        if (name.includes('/') || name.includes('\\') || name.includes('..') || /[\x00-\x1f]/.test(name)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid file name' }));
+          return;
+        }
+        const relDir = dirPath || '';
+        if (relDir.startsWith('/') || relDir.includes('..')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid path' }));
+          return;
+        }
+        const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
+        const fullDirPath = relDir ? join(cwd, relDir) : cwd;
+        if (!existsSync(fullDirPath) || !statSync(fullDirPath).isDirectory()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Directory not found' }));
+          return;
+        }
+        const realDir = realpathSync(fullDirPath);
+        const realCwd = realpathSync(cwd);
+        if (realDir !== realCwd && !realDir.startsWith(realCwd + '/')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Path traversal not allowed' }));
+          return;
+        }
+        const fullPath = join(fullDirPath, name);
+        if (existsSync(fullPath)) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'File already exists' }));
+          return;
+        }
+        writeFileSync(fullPath, '');
+        const relPath = relDir ? `${relDir}/${name}` : name;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, path: relPath }));
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));

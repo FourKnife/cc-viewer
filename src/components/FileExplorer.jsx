@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Dropdown, Modal, message } from 'antd';
+import { Dropdown, Modal, Input, message } from 'antd';
 import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
 import OpenFolderIcon from './OpenFolderIcon';
@@ -34,7 +34,7 @@ function getFileIcon(name, type) {
   );
 }
 
-function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile, onFileRenamed }) {
+function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile, onFileRenamed, refreshTrigger }) {
   const [children, setChildren] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -69,6 +69,13 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
       fetchChildren();
     }
   }, [expanded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // refreshTrigger 变化时，已展开的目录重新加载子节点
+  useEffect(() => {
+    if (refreshTrigger > 0 && item.type === 'directory' && expanded && children !== null) {
+      fetchChildren();
+    }
+  }, [refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = useCallback(async () => {
     if (item.type !== 'directory') {
@@ -190,9 +197,18 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
     toggle();
   }, [editing, toggle]);
 
-  // 右键菜单项（仅文件，非目录）
+  // 右键菜单项
   const contextMenuItems = useMemo(() => {
-    if (isDir) return [];
+    if (isDir) return [
+      { key: 'reveal', label: t('ui.contextMenu.revealInExplorer') },
+      { key: 'newFile', label: t('ui.contextMenu.newFile') },
+      { type: 'divider' },
+      { key: 'copyPath', label: t('ui.contextMenu.copyPath') },
+      { key: 'copyRelPath', label: t('ui.contextMenu.copyRelativePath') },
+      { type: 'divider' },
+      { key: 'rename', label: t('ui.contextMenu.rename') },
+      { key: 'delete', label: t('ui.contextMenu.delete'), danger: true },
+    ];
     return [
       { key: 'reveal', label: t('ui.contextMenu.revealInExplorer') },
       { key: 'copyPath', label: t('ui.contextMenu.copyPath') },
@@ -232,9 +248,30 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
       case 'rename':
         startEditing();
         break;
+      case 'newFile': {
+        const inputId = `ccv-newfile-${Date.now()}`;
+        Modal.confirm({
+          title: t('ui.contextMenu.newFile'),
+          content: <Input id={inputId} autoFocus placeholder="filename.ext" style={{ background: '#141414', borderColor: '#2a2a2a', color: '#ccc', caretColor: '#ccc' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
+          okText: t('ui.contextMenu.newFile'),
+          onOk: () => {
+            const input = document.getElementById(inputId);
+            const name = (input?.value || '').trim();
+            if (!name) return Promise.reject();
+            return fetch(apiUrl('/api/create-file'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dirPath: childPath, name }),
+            }).then(r => {
+              if (r.ok && onFileRenamed) onFileRenamed(null, `${childPath}/${name}`);
+            });
+          },
+        });
+        break;
+      }
       case 'delete':
         Modal.confirm({
-          title: t('ui.contextMenu.deleteConfirm', { name: item.name }),
+          title: isDir ? t('ui.contextMenu.deleteDirConfirm', { name: item.name }) : t('ui.contextMenu.deleteConfirm', { name: item.name }),
           okType: 'danger',
           okText: t('ui.contextMenu.delete'),
           onOk: () => fetch(apiUrl('/api/delete-file'), {
@@ -247,7 +284,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         });
         break;
     }
-  }, [childPath, item.name, startEditing, onFileRenamed]);
+  }, [childPath, item.name, isDir, startEditing, onFileRenamed]);
 
   const treeItemDiv = (
     <div
@@ -285,11 +322,9 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
 
   return (
     <>
-      {!isDir ? (
-        <Dropdown menu={{ items: contextMenuItems, onClick: handleMenuClick }} trigger={['contextMenu']}>
-          {treeItemDiv}
-        </Dropdown>
-      ) : treeItemDiv}
+      <Dropdown menu={{ items: contextMenuItems, onClick: handleMenuClick }} trigger={['contextMenu']}>
+        {treeItemDiv}
+      </Dropdown>
       {expanded && loading && (
         <div className={styles.loading} style={{ paddingLeft: 24 + depth * 16 }}>...</div>
       )}
@@ -297,7 +332,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         <div className={styles.error} style={{ paddingLeft: 24 + depth * 16 }}>{error}</div>
       )}
       {expanded && children && children.map(child => (
-        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} />
+        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} />
       ))}
     </>
   );
@@ -354,7 +389,7 @@ export default function FileExplorer({ onClose, onFileClick, expandedPaths, onTo
         {error && <div className={styles.error}>{error}</div>}
         {!items && !error && <div className={styles.loading}>Loading...</div>}
         {items && items.map(item => (
-          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} />
+          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} />
         ))}
       </div>
     </div>

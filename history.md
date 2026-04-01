@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.81 (2026-04-02)
+
+- Feature: folder context menu — right-click directories for quick actions
+  - "Reveal in Explorer", "New File", "Copy Path", "Copy Relative Path", "Rename", "Delete"
+  - New API: `/api/create-file` with path validation and realpathSync protection
+  - `/api/delete-file` now supports recursive directory deletion with `rmSync`
+  - Protected directories: node_modules, .git, .svn, .hg (checked at any path depth)
+  - Control character validation for new file names (NUL bytes, etc.)
+  - Delete confirmation uses stronger warning for directories ("and all its contents")
+  - i18n: 2 new keys × 18 languages (newFile, deleteDirConfirm)
+- Fix: refreshTrigger now cascades to expanded TreeNodes for proper child refresh
+- Docs: CONTRIBUTING.md adds distillation permission statement
+
 ## 1.6.80 (2026-04-02)
 
 - Feature: file context menu — right-click files in File Explorer for quick actions
