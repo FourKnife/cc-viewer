@@ -5,6 +5,7 @@ import { QRCodeCanvas } from 'qrcode.react';
 import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeToolUsageStats, computeSkillUsageStats, getModelMaxTokens, extractCachedContent } from '../utils/helpers';
 import { isSystemText, classifyUserContent, isMainAgent } from '../utils/contentFilter';
 import { classifyRequest } from '../utils/requestType';
+import { resolveTeammateNames } from '../utils/contentFilter';
 import { t, getLang, setLang } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
 import ConceptHelp from './ConceptHelp';
@@ -674,6 +675,7 @@ class AppHeader extends React.Component {
     const totalCache = activeReasons.reduce((sum, k) => sum + stats[k].cacheCreate, 0);
 
     // SubAgent 统计
+    resolveTeammateNames(requests);
     const subAgentCounts = {};
     const teammateCounts = {};
     for (let i = 0; i < requests.length; i++) {

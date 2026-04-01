@@ -791,7 +791,7 @@ class TerminalPanel extends React.Component {
     if (this.state.agentTeamEnabling) return;
     this.setState({ agentTeamEnabling: true });
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const prompt = 'Add "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" to the env object in ~/.claude/settings.json. If the env key does not exist, create it. Preserve all existing content. Only modify this one field.';
+      const prompt = 'Add "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" to the env object in ~/.claude/settings.json. If the env key does not exist, create it. Preserve all existing content. Only modify this one field. If ~/.claude/settings.json does not exist, instead add the line: export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 to the user\'s shell profile (~/.zshrc or ~/.bashrc).';
       this.ws.send(JSON.stringify({ type: 'input', data: prompt + '\r' }));
       message.success('需要重启 Claude Code 才能生效');
     }

@@ -219,3 +219,94 @@ export function extractTeammateName(body) {
   }
   return null;
 }
+
+// ============== Teammate 名称解析（prompt 内容匹配）==============
+
+// 持久化注册表：Agent tool_use prompt 前缀 → teammate name
+const _promptRegistry = new Map();
+// 已扫描的 MainAgent 请求索引上限，避免重复扫描
+let _registryScanIdx = 0;
+// 用首条请求的 timestamp 标识会话，切换时自动 reset
+let _registrySessionKey = null;
+
+const PROMPT_PREFIX_LEN = 60;
+const TM_TAG_RE = /<teammate-message[^>]*>/;
+
+/**
+ * 从 teammate 首条 user message 中提取 <teammate-message> 后的 prompt 内容。
+ */
+function _extractSpawnPrompt(req) {
+  const msgs = req.body?.messages;
+  if (!Array.isArray(msgs) || msgs.length === 0) return '';
+  const first = msgs[0];
+  const content = first.content;
+  if (typeof content === 'string') {
+    const m = TM_TAG_RE.exec(content);
+    if (!m) return '';
+    return content.slice(m.index + m[0].length).trimStart();
+  }
+  if (Array.isArray(content)) {
+    for (const b of content) {
+      if (b.type !== 'text' || !b.text) continue;
+      const m = TM_TAG_RE.exec(b.text);
+      if (!m) continue;
+      return b.text.slice(m.index + m[0].length).trimStart();
+    }
+  }
+  return '';
+}
+
+/**
+ * 预扫描 requests，通过匹配 MainAgent 的 Agent tool_use prompt
+ * 与 native teammate 的首条消息内容，注入 req.teammate 名字。
+ *
+ * 必须在 classifyRequest 之前调用（classifyRequest 结果有 WeakMap 缓存）。
+ * 版本兼容：已有 req.teammate（interceptor 模式）的请求不受影响。
+ */
+export function resolveTeammateNames(requests) {
+  if (!Array.isArray(requests) || requests.length === 0) return;
+
+  // 通过首条请求的 timestamp 检测会话切换，自动 reset
+  const sessionKey = requests[0]?.timestamp || null;
+  if (sessionKey !== _registrySessionKey) {
+    _promptRegistry.clear();
+    _registryScanIdx = 0;
+    _registrySessionKey = sessionKey;
+  }
+
+  // Step 1: 增量扫描 MainAgent response 中的 Agent tool_use，建立 prompt → name 映射
+  for (let i = _registryScanIdx; i < requests.length; i++) {
+    const req = requests[i];
+    if (!req.mainAgent) continue;
+    const content = req.response?.body?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (block.type !== 'tool_use' || block.name !== 'Agent') continue;
+      const inp = block.input;
+      if (!inp || !inp.name || !inp.prompt) continue;
+      const prefix = inp.prompt.trimStart().slice(0, PROMPT_PREFIX_LEN);
+      if (prefix) _promptRegistry.set(prefix, inp.name);
+    }
+  }
+  _registryScanIdx = requests.length;
+
+  if (_promptRegistry.size === 0) return;
+
+  // Step 2: 为缺少名字的 native/proxy teammate 注入 req.teammate
+  for (const req of requests) {
+    if (req.teammate) continue;
+    if (!isNativeTeammate(req) && !TEAMMATE_SYSTEM_RE.test(getSystemText(req.body || {}))) continue;
+
+    const prompt = _extractSpawnPrompt(req);
+    if (!prompt) continue;
+    const prefix = prompt.slice(0, PROMPT_PREFIX_LEN);
+
+    // 精确前缀匹配
+    const name = _promptRegistry.get(prefix);
+    if (name) {
+      req.teammate = name;
+      // 清除可能已缓存的 classifyRequest 结果（subType 为 null 的旧缓存）
+      if (req._cachedTeammateName === null) req._cachedTeammateName = name;
+    }
+  }
+}

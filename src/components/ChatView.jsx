@@ -10,7 +10,7 @@ import GitChanges from './GitChanges';
 import GitDiffView from './GitDiffView';
 import { getModelInfo } from '../utils/helpers';
 import { getTeammateAvatar } from '../utils/teammateAvatars';
-import { isSystemText, classifyUserContent, isMainAgent, isTeammate } from '../utils/contentFilter';
+import { isSystemText, classifyUserContent, isMainAgent, isTeammate, resolveTeammateNames } from '../utils/contentFilter';
 import { classifyRequest, formatRequestTag, formatTeammateLabel } from '../utils/requestType';
 import { buildChunksForAnswer } from '../utils/ptyChunkBuilder';
 import { isPlanApprovalPrompt, isDangerousOperationPrompt } from '../utils/promptClassifier';
@@ -234,6 +234,9 @@ class ChatView extends React.Component {
       nextProps.hasMoreHistory !== this.props.hasMoreHistory ||
       nextProps.loadingMore !== this.props.loadingMore ||
       nextProps.loadingSessionId !== this.props.loadingSessionId ||
+      nextProps.lang !== this.props.lang ||
+      nextProps.showThinkingSummaries !== this.props.showThinkingSummaries ||
+      nextProps.fileLoading !== this.props.fileLoading ||
       nextState !== this.state
     );
   }
@@ -648,6 +651,8 @@ class ChatView extends React.Component {
     const { requests, collapseToolResults, expandThinking, onViewRequest } = this.props;
     if (!requests || requests.length === 0) return [];
 
+    // Teammate 名称解析
+    resolveTeammateNames(requests);
     // 按 teammate 名称分组，保持时间顺序，取最后一条（最完整）的 messages
     const teammateMap = new Map(); // name → { messages, response, timestamp }
     for (const req of requests) {
@@ -728,6 +733,9 @@ class ChatView extends React.Component {
         }
       }
       cache.processedCount = requests.length;
+
+      // Teammate 名称解析：在 classifyRequest 之前注入 req.teammate（prompt 内容匹配）
+      resolveTeammateNames(requests);
 
       // subAgentEntries: response 可能被原地更新，从 subAgentProcessedCount 开始扫描
       // 回退一位重扫尾项：上一轮尾项的 classifyRequest(req, undefined) 可能因缺少 nextReq 而误判

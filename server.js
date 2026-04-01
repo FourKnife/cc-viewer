@@ -872,7 +872,13 @@ async function handleRequest(req, res) {
   // Claude settings.json（启动时读取，不 watch）
   if (url === '/api/claude-settings' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ env: claudeSettings.env || {}, model: claudeSettings.model || null, showThinkingSummaries: claudeSettings.showThinkingSummaries || false }));
+    const fileEnv = claudeSettings.env || {};
+    // 与 Claude Code 保持一致：settings.json env 优先，fallback 到 process.env
+    const env = { ...fileEnv };
+    if (!env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS && process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) {
+      env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+    }
+    res.end(JSON.stringify({ env, model: claudeSettings.model || null, showThinkingSummaries: claudeSettings.showThinkingSummaries || false }));
     return;
   }
 
