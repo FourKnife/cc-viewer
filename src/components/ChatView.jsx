@@ -273,6 +273,11 @@ class ChatView extends React.Component {
         this.setState({ streamingFading: false });
       }, 500);
     }
+    // 如果 streaming 在 fade-out 期间恢复，立即取消 fade 避免 spinner 以 opacity:0 显示
+    if (!prevProps.isStreaming && this.props.isStreaming && this.state.streamingFading) {
+      clearTimeout(this._streamingFadeTimer);
+      this.setState({ streamingFading: false });
+    }
     // Handle files dropped onto the app
     if (this.props.pendingUploadPaths && this.props.pendingUploadPaths.length > 0
       && this.props.pendingUploadPaths !== prevProps.pendingUploadPaths) {
@@ -945,6 +950,14 @@ class ChatView extends React.Component {
             const lrContent = respContent.filter(b =>
               b.type !== 'tool_use' || b.name === 'AskUserQuestion' || b.name === 'ExitPlanMode'
             );
+            // 如果过滤后没有可见内容，不显示 Last Response 区域
+            const hasVisibleContent = lrContent.some(b => {
+              if (b.type === 'text') return typeof b.text === 'string' && b.text.trim().length > 0;
+              if (b.type === 'tool_use') return true; // AskUserQuestion / ExitPlanMode
+              if (b.type === 'thinking') return typeof b.thinking === 'string' && b.thinking.trim().length > 0;
+              return false;
+            });
+            if (!hasVisibleContent) return;
             this._lastResponseItems = (
               <React.Fragment key="last-response-group">
                 <Divider className={styles.lastResponseDivider}>

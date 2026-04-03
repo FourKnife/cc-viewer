@@ -341,6 +341,7 @@ class AppBase extends React.Component {
     if (this._evictionTimer) clearTimeout(this._evictionTimer);
     if (this._sseTimeoutTimer) clearTimeout(this._sseTimeoutTimer);
     if (this._sseReconnectTimer) clearTimeout(this._sseReconnectTimer);
+    if (this._streamingOffTimer) clearTimeout(this._streamingOffTimer);
   }
 
   // ─── SSE 通信 ───────────────────────────────────────────
@@ -362,6 +363,7 @@ class AppBase extends React.Component {
     }
     this._sseReconnectCount = (this._sseReconnectCount || 0) + 1;
     if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
+    if (this._streamingOffTimer) { clearTimeout(this._streamingOffTimer); this._streamingOffTimer = null; }
     if (this._flushRafId) { cancelAnimationFrame(this._flushRafId); this._flushRafId = null; }
 
     // 增量恢复：如果加载中断，保存已收到的 chunked entries 以便重连后增量续传
@@ -757,7 +759,17 @@ class AppBase extends React.Component {
         this._resetSSETimeout();
         try {
           const data = JSON.parse(e.data);
-          this.setState({ isStreaming: !!data.active });
+          if (data.active) {
+            // 立即显示 loading
+            clearTimeout(this._streamingOffTimer);
+            this.setState({ isStreaming: true });
+          } else {
+            // 延迟隐藏，避免工具调用间隙导致 spinner 频繁闪烁
+            clearTimeout(this._streamingOffTimer);
+            this._streamingOffTimer = setTimeout(() => {
+              this.setState({ isStreaming: false });
+            }, 2000);
+          }
         } catch (err) { console.error('Failed to parse streaming_status:', err); }
       });
       this.eventSource.onerror = () => console.error('SSE连接错误');
@@ -1537,6 +1549,7 @@ class AppBase extends React.Component {
       this._isLocalLog = true;
       this._localLogFile = fileNames.length === 1 ? fileNames[0] : `${fileNames.length} files`;
       if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
+      if (this._streamingOffTimer) { clearTimeout(this._streamingOffTimer); this._streamingOffTimer = null; }
       this.setState({
         requests: entries,
         selectedIndex: filtered.length > 0 ? filtered.length - 1 : null,

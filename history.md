@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.92 (2026-04-03)
+
+- Fix: hide empty "Last Response" section when filtered content has no visible blocks
+- Fix: debounce streaming spinner hide by 2s to prevent flickering during tool call gaps
+- Fix: cancel spinner fade-out when streaming resumes mid-fade
+- Fix: clear streaming debounce timer on SSE reconnect and local log switch to prevent race condition
+
 ## 1.6.91 (2026-04-03)
 
 - Feat: add simplified tool display mode — tool calls collapse to compact tags by default, Edit/Write/Agent/TaskCreate/EnterPlanMode/ExitPlanMode/AskUserQuestion keep full display
