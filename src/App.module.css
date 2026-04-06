@@ -202,9 +202,9 @@
 }
 
 .footer {
-  border-top: 1px solid #1e1e1e;
+  border-top: 1px solid #2a2a2a;
   height: 18px;
-  background: #000;
+  background: #1e1e1e;
   display: flex;
   align-items: center;
   justify-content: flex-start;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.110 (2026-04-06)
+
+- Feat: git diff image preview — image files show inline preview with click-to-zoom lightbox
+- UI: dropdown menu and submenu border (1px solid #3a3a3a) with 4px border-radius
+- UI: footer background #000 → #1e1e1e, border-top color adjusted
+- UI: sticky bottom button moved to right side on desktop, stays left on mobile
+
 ## 1.6.109 (2026-04-06)
 
 - Fix: AskUserQuestion "Other" submit stuck — localAskAnswers state change now triggers Last Response rebuild

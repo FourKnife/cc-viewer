@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiUrl } from '../utils/apiUrl';
 import { t } from '../i18n';
+import { isImageFile } from '../utils/commandValidator';
 import FullFileDiffView from './FullFileDiffView';
+import ImageLightbox from './ImageLightbox';
 import styles from './GitDiffView.module.css';
 
 function getFirstChangedLine(oldStr, newStr) {
@@ -18,6 +20,7 @@ export default function GitDiffView({ filePath, onClose, onOpenFile }) {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [closing, setClosing] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const mounted = useRef(true);
   const containerRef = useRef(null);
 
@@ -37,6 +40,7 @@ export default function GitDiffView({ filePath, onClose, onOpenFile }) {
     setLoading(true);
     setDiffData(null);
     setError(null);
+    setLightboxOpen(false);
 
     fetch(apiUrl(`/api/git-diff?files=${encodeURIComponent(filePath)}`))
       .then(r => {
@@ -116,6 +120,22 @@ export default function GitDiffView({ filePath, onClose, onOpenFile }) {
                 <p className={styles.fileSize}>
                   {t('ui.fileSize')}: {(diffData.size / (1024 * 1024)).toFixed(2)} MB
                 </p>
+              </div>
+            ) : isImageFile(filePath) && !diffData.is_deleted ? (
+              <div className={styles.imagePreviewWrap}>
+                <img
+                  className={styles.imagePreview}
+                  src={apiUrl(`/api/file-raw?path=${encodeURIComponent(filePath)}`)}
+                  alt={filePath}
+                  onClick={() => setLightboxOpen(true)}
+                />
+                {lightboxOpen && (
+                  <ImageLightbox
+                    src={apiUrl(`/api/file-raw?path=${encodeURIComponent(filePath)}`)}
+                    alt={filePath}
+                    onClose={() => setLightboxOpen(false)}
+                  />
+                )}
               </div>
             ) : diffData.is_binary ? (
               <div className={styles.binaryNotice}>{t('ui.binaryFileNotice')}</div>
