@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.107 (2026-04-06)
+
+- Feat: ToolApprovalPanel exit animation (slideDown on dismiss)
+
 ## 1.6.106 (2026-04-05)
 
 - Feat: unified mobile layout — Android now matches iOS with chat as main panel, terminal as overlay

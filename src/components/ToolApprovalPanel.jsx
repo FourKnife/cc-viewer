@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect, useCallback } from 'react';
+import React, { useMemo, useRef, useEffect, useCallback, useState } from 'react';
 import { t } from '../i18n';
 import styles from './ToolApprovalPanel.module.css';
 
@@ -6,18 +6,20 @@ function ToolApprovalPanel({ toolName, toolInput, requestId, onAllow, onAllowSes
   const panelRef = useRef(null);
   const allowRef = useRef(null);
   const prevFocusRef = useRef(null);
+  const [show, setShow] = useState(false);
+  const [exiting, setExiting] = useState(false);
 
   useEffect(() => {
     if (visible) {
+      setShow(true);
+      setExiting(false);
       prevFocusRef.current = document.activeElement;
       requestAnimationFrame(() => allowRef.current?.focus());
+    } else if (show) {
+      setExiting(true);
+      const timer = setTimeout(() => { setShow(false); setExiting(false); }, 200);
+      return () => clearTimeout(timer);
     }
-    return () => {
-      if (prevFocusRef.current && typeof prevFocusRef.current.focus === 'function') {
-        prevFocusRef.current.focus();
-        prevFocusRef.current = null;
-      }
-    };
   }, [visible]);
 
   const handleKeyDown = useCallback((e) => {
@@ -64,10 +66,10 @@ function ToolApprovalPanel({ toolName, toolInput, requestId, onAllow, onAllowSes
     return null;
   }, [toolName, toolInput]);
 
-  if (!visible) return null;
+  if (!show) return null;
 
   return (
-    <div ref={panelRef} className={isGlobal ? styles.panelGlobal : styles.panel} onKeyDown={handleKeyDown}>
+    <div ref={panelRef} className={`${isGlobal ? styles.panelGlobal : styles.panel}${exiting ? ` ${styles.exiting}` : ''}`} onKeyDown={handleKeyDown}>
       <svg className={`${styles.borderSvg} ${styles.borderSvgInset}`} preserveAspectRatio="none">
         <rect x="0" y="0" width="100%" height="100%" rx="12" ry="12"
           fill="none" stroke="#f59e0b" strokeWidth="1" strokeDasharray="6 4"
