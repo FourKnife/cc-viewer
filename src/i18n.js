@@ -4173,6 +4173,26 @@ const i18nData = {
     "tr": "Plan onaya hazır",
     "uk": "План готовий до затвердження"
   },
+  "ui.exitPlanModeResolved": {
+    "zh": "计划审批",
+    "en": "Plan Approval",
+    "zh-TW": "計劃審批",
+    "ko": "계획 승인",
+    "ja": "プラン承認",
+    "de": "Plangenehmigung",
+    "es": "Aprobación del plan",
+    "fr": "Approbation du plan",
+    "it": "Approvazione piano",
+    "da": "Plangodkendelse",
+    "pl": "Zatwierdzenie planu",
+    "ru": "Утверждение плана",
+    "ar": "الموافقة على الخطة",
+    "no": "Plangodkjenning",
+    "pt-BR": "Aprovação do plano",
+    "th": "การอนุมัติแผน",
+    "tr": "Plan onayı",
+    "uk": "Затвердження плану"
+  },
   "ui.allowedPrompts": {
     "zh": "请求的权限",
     "en": "Requested Permissions",
@@ -4216,6 +4236,14 @@ const i18nData = {
     "da": "Afventer", "pl": "Oczekuje", "ru": "Ожидает",
     "ar": "قيد الانتظار", "no": "Venter", "pt-BR": "Pendente",
     "th": "รอดำเนินการ", "tr": "Beklemede", "uk": "Очікує"
+  },
+  "ui.planUltraplan": {
+    "zh": "Ultraplan 执行中", "en": "Ultraplan Executing", "zh-TW": "Ultraplan 執行中",
+    "ko": "Ultraplan 실행 중", "ja": "Ultraplan 実行中", "de": "Ultraplan wird ausgeführt",
+    "es": "Ultraplan en ejecución", "fr": "Ultraplan en cours", "it": "Ultraplan in esecuzione",
+    "da": "Ultraplan kører", "pl": "Ultraplan w trakcie", "ru": "Ultraplan выполняется",
+    "ar": "Ultraplan قيد التنفيذ", "no": "Ultraplan kjører", "pt-BR": "Ultraplan em execução",
+    "th": "Ultraplan กำลังดำเนินการ", "tr": "Ultraplan çalışıyor", "uk": "Ultraplan виконується"
   },
   "ui.planApprove": {
     "zh": "批准", "en": "Approve", "zh-TW": "批准",

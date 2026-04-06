@@ -450,11 +450,14 @@ class ChatMessage extends React.Component {
       const planOptions = (detectedPrompt?.options?.length) ? detectedPrompt.options : defaultPlanOptions;
       const statusClass = approval.status === 'approved' ? styles.planStatusApproved
         : approval.status === 'rejected' ? styles.planStatusRejected
+        : approval.status === 'ultraplan' ? styles.planStatusApproved
         : styles.planStatusPending;
       const statusIcon = approval.status === 'approved' ? '✓'
-        : approval.status === 'rejected' ? '✗' : '●';
+        : approval.status === 'rejected' ? '✗'
+        : approval.status === 'ultraplan' ? '⚡' : '●';
       const statusKey = approval.status === 'approved' ? 'ui.planApproved'
-        : approval.status === 'rejected' ? 'ui.planRejected' : 'ui.planPending';
+        : approval.status === 'rejected' ? 'ui.planRejected'
+        : approval.status === 'ultraplan' ? 'ui.planUltraplan' : 'ui.planPending';
       return (
         <div key={tu.id} className={`${styles.planModeBox} ${statusClass}`}>
           {isInteractive && (
@@ -465,7 +468,7 @@ class ChatMessage extends React.Component {
             </svg>
           )}
           <div className={styles.planModeHeader}>
-            <span className={styles.planModeLabel}>{t('ui.exitPlanMode')}</span>
+            <span className={styles.planModeLabel}>{isPending ? t('ui.exitPlanMode') : t('ui.exitPlanModeResolved')}</span>
             {!isInteractive && (
               <span className={`${styles.planStatusBadge} ${statusClass}`}>{statusIcon} {t(statusKey)}</span>
             )}
