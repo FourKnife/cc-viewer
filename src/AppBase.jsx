@@ -99,9 +99,14 @@ class AppBase extends React.Component {
     this._cacheLossShowAll = undefined;
     // 增量维护的 KV-Cache 缓存内容（稳定引用，不受 inProgress 闪烁影响）
     this._lastKvCacheContent = null;
-    // P0 perf: 实时 SSE 增量剪枝（全平台默认开启，localStorage ccv_sseSlim=false 可关闭）
-    this._sseSlimEnabled = localStorage.getItem('ccv_sseSlim') !== 'false';
     this._sseSlimmer = null;
+  }
+
+  /** 批量剪枝 entries：清空旧 MainAgent 的 body.messages，保留最后一条完整 */
+  _batchSlim(entries) {
+    const slimmer = createEntrySlimmer(isMainAgent);
+    for (let i = 0; i < entries.length; i++) slimmer.process(entries[i], entries, i);
+    slimmer.finalize(entries);
   }
 
   /** Rebuild the O(1) request dedup index from a full entries array. */
@@ -285,6 +290,7 @@ class AppBase extends React.Component {
         if (isMobile && projectName && !logfile && this.state.requests.length === 0) {
           loadEntries(projectName).then(cached => {
             if (cached && this.state.requests.length === 0) {
+              this._batchSlim(cached);
               const { mainAgentSessions, filtered } = this._processEntries(cached);
               // P1: 缓存恢复也做 hot/cold 分层，避免全量数据驻留内存
               if (mainAgentSessions.length > HOT_SESSION_COUNT) {
@@ -388,6 +394,7 @@ class AppBase extends React.Component {
       try {
         const partial = reconstructEntries([...this._chunkedEntries]);
         if (Array.isArray(partial) && partial.length > 0) {
+          this._batchSlim(partial);
           const { mainAgentSessions } = this._processEntries(partial);
           // 保持 fileLoading: true，重连后继续加载
           this.setState({ requests: partial, mainAgentSessions });
@@ -446,6 +453,7 @@ class AppBase extends React.Component {
       if (Array.isArray(data.entries) && data.entries.length > 0) {
         const reconstructed = reconstructEntries(data.entries);
         const merged = [...reconstructed, ...this.state.requests];
+        this._batchSlim(merged);
         const { mainAgentSessions } = this._processEntries(merged);
         this._oldestTs = data.oldestTimestamp;
 
@@ -616,6 +624,7 @@ class AppBase extends React.Component {
         const entries = Array.isArray(rawEntries) ? reconstructEntries(rawEntries) : rawEntries;
 
         if (Array.isArray(entries) && entries.length > 0) {
+          this._batchSlim(entries);
           const { mainAgentSessions, filtered } = this._processEntries(entries);
 
           // P1: 移动端 hot/cold 分层
@@ -675,6 +684,7 @@ class AppBase extends React.Component {
         try {
           const entries = JSON.parse(event.data);
           if (Array.isArray(entries)) {
+            if (entries.length > 0) this._batchSlim(entries);
             const { mainAgentSessions, filtered } = entries.length > 0 ? this._processEntries(entries) : { mainAgentSessions: [], filtered: [] };
             if (entries.length > 0) {
               this.animateLoadingCount(entries.length, () => {
@@ -838,11 +848,7 @@ class AppBase extends React.Component {
       // Delta 重建必须在 entry-slim 之前：delta 条目的 body.messages 只有增量部分，
       // 如果先 slim 会永久丢失增量数据，导致重建后 messages 为空
       const reconstructed = reconstructEntries(entries);
-      const slimmer = createEntrySlimmer(isMainAgent);
-      for (let i = 0; i < reconstructed.length; i++) {
-        slimmer.process(reconstructed[i], reconstructed, i);
-      }
-      slimmer.finalize(reconstructed);
+      this._batchSlim(reconstructed);
       if (Array.isArray(reconstructed) && reconstructed.length > 0) {
         const { mainAgentSessions, filtered } = this._processEntries(reconstructed);
         this.setState({
@@ -891,7 +897,7 @@ class AppBase extends React.Component {
       let mainAgentSessions = prev.mainAgentSessions;
 
       // P0 perf: lazy init 增量剪枝器
-      if (this._sseSlimEnabled && !this._sseSlimmer) {
+      if (!this._sseSlimmer) {
         this._sseSlimmer = createIncrementalSlimmer(isMainAgent);
       }
 
@@ -1045,6 +1051,7 @@ class AppBase extends React.Component {
       if (entries && entries.length > 0) {
         const reconstructed = reconstructEntries(entries);
         const merged = [...reconstructed, ...this.state.requests];
+        this._batchSlim(merged);
         const { mainAgentSessions } = this._processEntries(merged);
 
         const sessionIndex = buildSessionIndex(merged, mainAgentSessions);
@@ -1569,6 +1576,7 @@ class AppBase extends React.Component {
       return;
     }
     this.animateLoadingCount(entries.length, () => {
+      this._batchSlim(entries);
       const { mainAgentSessions, filtered } = this._processEntries(entries);
       this._isLocalLog = true;
       this._localLogFile = fileNames.length === 1 ? fileNames[0] : `${fileNames.length} files`;

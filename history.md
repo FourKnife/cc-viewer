@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.122 (2026-04-08)
+
+- Perf: batch slimmer covers all 9 data loading paths — SSE load, cache restore, partial restore, loadMoreHistory, full\_reload, loadSession, file import
+- Refactor: extract \_batchSlim() helper, remove \_sseSlimEnabled opt-out flag (slimmer always on)
+
 ## 1.6.121 (2026-04-08)
 
 - Feat: upload file size limit raised from 50MB to 100MB (server + client)
