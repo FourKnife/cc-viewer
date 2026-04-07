@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { t } from './i18n.js';
 import { INJECT_IMPORT, resolveCliPath, resolveNativePath, resolveNpmClaudePath, buildShellCandidates } from './findcc.js';
+import { ensureHooks } from './lib/ensure-hooks.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -256,81 +257,7 @@ async function runProxyCommand(args) {
   }
 }
 
-function ensureHooks() {
-  try {
-    const claudeDir = resolve(homedir(), '.claude');
-    const settingsPath = resolve(claudeDir, 'settings.json');
-    let settings = {};
-    try { if (existsSync(settingsPath)) settings = JSON.parse(readFileSync(settingsPath, 'utf-8')); } catch {
-      console.warn('[CC Viewer] ~/.claude/settings.json is malformed, skipping hook injection');
-      return;
-    }
-
-    if (!settings.hooks) settings.hooks = {};
-    if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = [];
-
-    let changed = false;
-
-    // AskUserQuestion hook → ask-bridge.js
-    const askBridgePath = resolve(__dirname, 'lib', 'ask-bridge.js');
-    const askCmd = `node "${askBridgePath}"`;
-    const askExisting = settings.hooks.PreToolUse.find(h => h.matcher === 'AskUserQuestion');
-    if (askExisting) {
-      if ((askExisting.hooks?.[0]?.command || '') !== askCmd) {
-        askExisting.hooks = [{ type: 'command', command: askCmd }];
-        changed = true;
-      }
-    } else {
-      settings.hooks.PreToolUse.push({
-        matcher: 'AskUserQuestion',
-        hooks: [{ type: 'command', command: askCmd }]
-      });
-      changed = true;
-    }
-
-    // Permission approval hook → perm-bridge.js (matcher: "" = match all tools)
-    const permBridgePath = resolve(__dirname, 'lib', 'perm-bridge.js');
-    const permCmd = `node "${permBridgePath}"`;
-    const permMatcher = '';
-    // Clean up legacy entries: old narrow matchers, null matchers (invalid JSON),
-    // and conflicting Bash-specific hooks (git guard now merged into perm-bridge.js)
-    for (let i = settings.hooks.PreToolUse.length - 1; i >= 0; i--) {
-      const h = settings.hooks.PreToolUse[i];
-      const cmd = h.hooks?.[0]?.command || '';
-      if (cmd.includes('perm-bridge.js') && h.matcher !== permMatcher) {
-        settings.hooks.PreToolUse.splice(i, 1);
-        changed = true;
-      } else if ((h.matcher === null || h.matcher === undefined) && cmd.includes('perm-bridge.js')) {
-        settings.hooks.PreToolUse.splice(i, 1);
-        changed = true;
-      } else if (h.matcher === 'Bash' && cmd.includes('grep') && /git|npm/.test(cmd)) {
-        // Remove legacy standalone Bash git/npm guard — now handled inside perm-bridge.js
-        settings.hooks.PreToolUse.splice(i, 1);
-        changed = true;
-      }
-    }
-    const permExisting = settings.hooks.PreToolUse.find(h => h.matcher === permMatcher);
-    if (permExisting) {
-      if ((permExisting.hooks?.[0]?.command || '') !== permCmd) {
-        permExisting.hooks = [{ type: 'command', command: permCmd }];
-        changed = true;
-      }
-    } else {
-      settings.hooks.PreToolUse.push({
-        matcher: permMatcher,
-        hooks: [{ type: 'command', command: permCmd }]
-      });
-      changed = true;
-    }
-
-    if (changed) {
-      mkdirSync(claudeDir, { recursive: true });
-      writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    }
-  } catch (err) {
-    console.warn('[CC Viewer] Failed to ensure hooks:', err.message);
-  }
-}
+// ensureHooks() extracted to lib/ensure-hooks.js (shared with electron/tab-worker.js)
 
 async function runCliMode(extraClaudeArgs = [], cwd) {
   // 首先尝试 npm 版本（包括 nvm 安装），找不到再尝试 native 版本

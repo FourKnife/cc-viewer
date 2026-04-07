@@ -4475,6 +4475,22 @@ const i18nData = {
     "tr": "Claude oturumu başlatmak için bir proje dizini seçin",
     "uk": "Виберіть каталог проєкту для запуску сеансу Claude"
   },
+  "ui.workspaces.normalLaunch": {
+    "zh": "常规启动", "en": "Launch", "zh-TW": "常規啟動",
+    "ko": "일반 시작", "ja": "通常起動", "de": "Starten",
+    "es": "Iniciar", "fr": "Lancer", "it": "Avvia",
+    "da": "Start", "pl": "Uruchom", "ru": "Запуск",
+    "ar": "تشغيل", "no": "Start", "pt-BR": "Iniciar",
+    "th": "เริ่มต้น", "tr": "Başlat", "uk": "Запуск"
+  },
+  "ui.workspaces.skipPermLaunch": {
+    "zh": "免审启动", "en": "Skip Approval", "zh-TW": "免審啟動",
+    "ko": "승인 건너뛰기", "ja": "承認スキップ", "de": "Ohne Genehmigung",
+    "es": "Sin aprobación", "fr": "Sans approbation", "it": "Senza approvazione",
+    "da": "Spring godkendelse over", "pl": "Pomiń zatwierdzenie", "ru": "Без одобрения",
+    "ar": "تخطي الموافقة", "no": "Hopp over godkjenning", "pt-BR": "Sem aprovação",
+    "th": "ข้ามการอนุมัติ", "tr": "Onay atla", "uk": "Без схвалення"
+  },
   "ui.workspaces.empty": {
     "zh": "暂无工作区，添加一个项目目录开始使用", "en": "No workspaces yet. Add a project directory to get started.",
     "zh-TW": "暫無工作區，新增一個專案目錄開始使用",

@@ -49,5 +49,7 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 
+asar: false
+
 npmRebuild: true
 buildDependenciesFromSource: false

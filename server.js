@@ -4,7 +4,7 @@ import { createConnection } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, statSync, readdirSync, renameSync, unlinkSync, rmSync, openSync, readSync, closeSync, realpathSync, mkdirSync, createReadStream } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, extname, resolve } from 'node:path';
+import { dirname, join, extname, resolve, basename } from 'node:path';
 import { homedir, platform, networkInterfaces } from 'node:os';
 import { execFile, exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -124,6 +124,14 @@ export function setWorkspaceClaudePath(path, isNpm) {
   _workspaceClaudePath = path;
   _workspaceIsNpmVersion = isNpm;
 }
+let _launchCallback = null;
+export function setLaunchCallback(fn) { _launchCallback = fn; }
+export function setWorkspaceLaunched(v) { _workspaceLaunched = v; }
+export function initPostLaunch() {
+  watchLogFile(_logWatcherOpts(LOG_FILE));
+  if (!statsWorker) startStatsWorker();
+  startStreamingStatusTimer();
+}
 
 // Global POST body size limit (10MB) to prevent OOM from malicious/buggy clients
 const MAX_POST_BODY = 10 * 1024 * 1024;
@@ -132,8 +140,8 @@ const MAX_POST_BODY = 10 * 1024 * 1024;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const START_PORT = 7008;
-const MAX_PORT = 7099;
+const START_PORT = parseInt(process.env.CCV_START_PORT) || 7008;
+const MAX_PORT = parseInt(process.env.CCV_MAX_PORT) || 7099;
 const HOST = '0.0.0.0';
 
 // 局域网访问 token（本地 127.0.0.1 免验证）
@@ -503,7 +511,19 @@ async function handleRequest(req, res) {
         const { registerWorkspace } = await import('./workspace-registry.js');
         registerWorkspace(wsPath);
 
-        // 初始化 interceptor 的日志文件
+        // Electron multi-tab 模式：管理 server 只触发 callback，不做日志初始化
+        // 所有日志相关操作（initForWorkspace、watchLogFile、spawnClaude）由 tab-worker 子进程负责
+        if (process.env.CCV_ELECTRON_MULTITAB === '1') {
+          if (_launchCallback) {
+            _launchCallback(wsPath, Array.isArray(launchExtraArgs) ? launchExtraArgs : []);
+          }
+          _workspaceLaunched = true;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, projectName: basename(wsPath) }));
+          return;
+        }
+
+        // 非 Electron 模式（web / CLI）：完整逻辑
         const result = initForWorkspace(wsPath);
         process.env.CCV_PROJECT_DIR = wsPath;
 

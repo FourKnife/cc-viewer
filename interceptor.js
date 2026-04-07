@@ -189,7 +189,7 @@ export { LOG_FILE, _initPromise, _resumeState, _choicePromise, resolveResumeChoi
 
 // 工作区模式：动态初始化指定路径的日志文件
 // 如果有 1 小时内的最近日志，自动复用（与单目录模式行为一致）
-export function initForWorkspace(projectPath) {
+export function initForWorkspace(projectPath, { forceNew = false } = {}) {
   const projectName = basename(projectPath).replace(/[^a-zA-Z0-9_\-\.]/g, '_');
   const dir = join(LOG_DIR, projectName);
   try { mkdirSync(dir, { recursive: true }); } catch {}
@@ -197,7 +197,8 @@ export function initForWorkspace(projectPath) {
   cleanupTempFiles(dir, projectName);
 
   // 检查是否有最近的日志文件可以复用（始终复用最新日志）
-  const recentLog = findRecentLog(dir, projectName);
+  // forceNew: Electron multi-tab 模式下强制创建新文件，避免与已有 ccv 实例共享日志
+  const recentLog = !forceNew && findRecentLog(dir, projectName);
   if (recentLog) {
     _projectName = projectName;
     _logDir = dir;

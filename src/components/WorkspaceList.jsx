@@ -210,6 +210,12 @@ export default function WorkspaceList({ onLaunch }) {
     const extraArgs = [];
     if (dangerousMode) extraArgs.push('--dangerously-skip-permissions');
     if (workspace.logCount > 0) extraArgs.push('-c');
+    // Electron multi-tab mode: launch via IPC instead of server API
+    if (window.electronAPI?.launchWorkspace) {
+      window.electronAPI.launchWorkspace(workspace.path, extraArgs);
+      setLaunching(null);
+      return;
+    }
     fetch(apiUrl('/api/workspaces/launch'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -292,14 +298,15 @@ export default function WorkspaceList({ onLaunch }) {
                       loading={launching === item.id}
                       onClick={(e) => { e.stopPropagation(); handleLaunch(item, false); }}
                     >
-                      ccv{item.logCount > 0 ? ' -c' : ''}
+                      {t('ui.workspaces.normalLaunch')}
                     </Button>
                     <Button
                       icon={<RocketOutlined />}
                       loading={launching === item.id}
                       onClick={(e) => { e.stopPropagation(); handleLaunch(item, true); }}
+                      style={{ background: '#d97706', borderColor: '#d97706', color: '#fff' }}
                     >
-                      ccv --d{item.logCount > 0 ? ' -c' : ''}
+                      {t('ui.workspaces.skipPermLaunch')}
                     </Button>
                     <Popconfirm
                       title={t('ui.workspaces.confirmRemove')}

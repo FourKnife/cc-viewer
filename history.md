@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.118 (2026-04-08)
+
+- Feat: Electron multi-tab architecture — each tab is an isolated fork() child process with its own proxy/server/PTY
+- Feat: BaseWindow + WebContentsView tab bar with project tabs, "+" button, close with confirmation
+- Feat: workspace selector as landing page, tab-worker.js for per-project process isolation
+- Feat: keyboard shortcuts — Cmd+T (new tab), Cmd+W (close tab), Cmd+1-9 (switch), Cmd+Shift+[/] (cycle)
+- Feat: macOS hiddenInset title bar with traffic light padding
+- Feat: launch buttons renamed to "常规启动" / "免审启动" with blue/yellow colors
+- Feat: server.js supports CCV_ELECTRON_MULTITAB mode — management server delegates launch to tab-worker
+- Feat: server.js port range configurable via CCV_START_PORT/CCV_MAX_PORT env vars
+- Fix: Electron process isolation — child env cleaned of ANTHROPIC_BASE_URL/CCV_PROXY_PORT to prevent proxy crosstalk
+- Fix: pty-manager.js resolves real node path in Electron (process.versions.electron detection)
+- Fix: interceptor.js initForWorkspace supports forceNew option for Electron log isolation
+- Refactor: ensureHooks() extracted from cli.js to lib/ensure-hooks.js (shared with Electron)
+- i18n: added ui.workspaces.normalLaunch / ui.workspaces.skipPermLaunch keys (18 languages)
+
 ## 1.6.117 (2026-04-07)
 
 - Feat: Electron desktop app support — workspace mode with dual launch buttons (ccv / ccv --d)
