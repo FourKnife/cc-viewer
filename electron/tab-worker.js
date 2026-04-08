@@ -72,9 +72,9 @@ async function launch({ path: projectPath, extraArgs = [], claudePath, isNpmVers
   }
 
   // 7. Initialize workspace log directory (sets LOG_FILE, _projectName, _logDir)
-  //    forceNew: true — Electron tab always creates a fresh log file to avoid sharing with existing ccv instances
+  //    forceNew: false — 复用最近的日志文件以保留历史数据
   const { initForWorkspace } = await import(join(rootDir, 'interceptor.js'));
-  const result = initForWorkspace(projectPath, { forceNew: true });
+  const result = initForWorkspace(projectPath, { forceNew: false });
 
   // 7b. Mark workspace as launched so React app shows chat view instead of workspace selector
   serverMod.setWorkspaceLaunched(true);

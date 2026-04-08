@@ -2,7 +2,7 @@
  * File and command validation utilities.
  */
 
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp']);
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'bmp', 'ico', 'icns', 'webp', 'avif']);
 
 export function isImageFile(path) {
   const ext = (path || '').split('.').pop().toLowerCase();

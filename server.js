@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { createConnection } from 'node:net';
 import { randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, statSync, readdirSync, renameSync, unlinkSync, rmSync, openSync, readSync, closeSync, realpathSync, mkdirSync, createReadStream } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, statSync, readdirSync, renameSync, unlinkSync, rmSync, openSync, readSync, closeSync, realpathSync, mkdirSync, createReadStream, cpSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, resolve, basename } from 'node:path';
 import { homedir, platform, networkInterfaces } from 'node:os';
@@ -1113,6 +1113,95 @@ async function handleRequest(req, res) {
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 文件移动 API
+  if (url === '/api/move-file' && method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > MAX_POST_BODY) req.destroy(); });
+    req.on('end', () => {
+      let parsed;
+      try { parsed = JSON.parse(body); } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request body' }));
+        return;
+      }
+      try {
+        const { fromPath, toDir } = parsed;
+        if (!fromPath || !toDir) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing fromPath or toDir' }));
+          return;
+        }
+        // 安全校验
+        if (fromPath.startsWith('/') || fromPath.includes('..') || toDir.startsWith('/') || toDir.includes('..')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid path' }));
+          return;
+        }
+        const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
+        const oldFullPath = join(cwd, fromPath);
+        const toDirFull = join(cwd, toDir);
+        // 检查源文件/目录存在
+        if (!existsSync(oldFullPath)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Source not found' }));
+          return;
+        }
+        // 检查目标目录存在且是目录
+        if (!existsSync(toDirFull) || !statSync(toDirFull).isDirectory()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Target directory not found' }));
+          return;
+        }
+        // 不能把目录移到自身或其子目录下
+        if (statSync(oldFullPath).isDirectory()) {
+          const srcResolved = resolve(oldFullPath);
+          const destResolved = resolve(toDirFull);
+          if (destResolved === srcResolved || destResolved.startsWith(srcResolved + '/')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Cannot move directory into itself' }));
+            return;
+          }
+        }
+        const name = basename(fromPath);
+        const newFullPath = join(toDirFull, name);
+        // 检查目标位置不存在同名文件
+        if (existsSync(newFullPath)) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Target already exists' }));
+          return;
+        }
+        try {
+          renameSync(oldFullPath, newFullPath);
+        } catch (mvErr) {
+          if (mvErr.code === 'EXDEV') {
+            // 跨文件系统：fallback to copy + delete
+            if (statSync(oldFullPath).isDirectory()) {
+              cpSync(oldFullPath, newFullPath, { recursive: true });
+              rmSync(oldFullPath, { recursive: true, force: true });
+            } else {
+              copyFileSync(oldFullPath, newFullPath);
+              unlinkSync(oldFullPath);
+            }
+          } else if (mvErr.code === 'EEXIST') {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Target already exists' }));
+            return;
+          } else {
+            throw mvErr;
+          }
+        }
+        const newRelPath = toDir.endsWith('/') ? toDir + name : toDir + '/' + name;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, newPath: newRelPath }));
+      } catch (err) {
+        console.error('move-file error:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
       }
     });
     return;

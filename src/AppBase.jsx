@@ -13,6 +13,7 @@ import { buildSessionIndex, splitHotCold, mergeSessionIndices, HOT_SESSION_COUNT
 import { mergeMainAgentSessions as _mergeMainAgentSessions } from './utils/sessionMerge';
 import { reconstructEntries } from '../lib/delta-reconstructor.js';
 import { createEntrySlimmer, createIncrementalSlimmer, restoreSlimmedEntry } from './utils/entry-slim.js';
+import { reinitializeMermaid } from './hooks/useMermaidRender';
 import styles from './App.module.css';
 
 export { styles };
@@ -1214,6 +1215,7 @@ class AppBase extends React.Component {
   handleThemeColorChange = (value) => {
     this.setState({ themeColor: value });
     document.documentElement.setAttribute('data-theme', value === 'light' ? 'light' : 'dark');
+    reinitializeMermaid();
     fetch(apiUrl('/api/preferences'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.126 (2026-04-09)
+
+- Feat: file explorer drag-and-drop to move files/folders between directories
+- Feat: Electron quit confirmation dialog when projects are open (i18n 17 languages)
+- Feat: image format support for bmp, icns, avif across all viewers
+- Feat: Mermaid chart theme-aware re-rendering on theme switch
+- Feat: extract file icons and system-open logic into shared modules (fileIcons.jsx, fileOpen.js)
+- Fix: terminal file upload uses two-step Enter (inject path first, confirm send second)
+- Fix: path injection uses single-quote escaping to prevent shell expansion
+- Fix: move-file API EXDEV cross-filesystem fallback (copy + delete)
+- Fix: move-file API returns generic error messages (no path leakage)
+- Fix: Electron quit dialog checks mainWindow.isDestroyed() before showing
+- Fix: SubAgent avatar background color contrast improved (new --bg-sub-avatar variable)
+- Chore: app icon updated
+
 ## 1.6.122 (2026-04-08)
 
 - Perf: batch slimmer covers all 9 data loading paths — SSE load, cache restore, partial restore, loadMoreHistory, full\_reload, loadSession, file import

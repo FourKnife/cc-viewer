@@ -17,6 +17,7 @@ import { realpathSync, existsSync, readFileSync, watchFile, unwatchFile } from '
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = join(__dirname, '..');
+const { t } = await import(join(rootDir, 'i18n.js'));
 
 // --- Resolve shell environment (Finder-launched Electron has minimal env) ---
 // When launched from Finder/dock, process.env lacks shell profile vars (HTTP_PROXY, PATH, LANG, etc.)
@@ -519,6 +520,20 @@ if (!gotLock) {
   app.on('before-quit', async (e) => {
     if (!isQuitting) {
       e.preventDefault();
+      // 有打开的 tab 时，弹确认框
+      if (tabs.size > 0 && mainWindow && !mainWindow.isDestroyed()) {
+        const names = [...tabs.values()].map(tb => tb.projectName).join(', ');
+        const { response } = await dialog.showMessageBox(mainWindow, {
+          type: 'question',
+          buttons: [t('electron.quit.buttonQuit'), t('electron.quit.buttonCancel')],
+          defaultId: 1,
+          cancelId: 1,
+          title: t('electron.quit.title'),
+          message: t('electron.quit.message', { count: tabs.size }),
+          detail: `${names}\n\n${t('electron.quit.detail')}`,
+        });
+        if (response !== 0) return; // 用户取消
+      }
       await cleanupAll();
       app.exit(0);
     }

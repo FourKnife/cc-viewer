@@ -695,7 +695,7 @@ class ChatMessage extends React.Component {
     // 匹配图片路径格式：
     // 1. [Image: source: /path/to/file.ext] 或 [Image #N]
     // 2. "引号包裹的 /tmp/cc-viewer-uploads/ 图片路径"（仅限上传目录，避免误伤正常文本）
-    const IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+    const IMAGE_EXTS = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|icns)$/i;
     const combinedPattern = /\[Image(?:\s*#\d+)?(?::?\s*source)?:\s*([^\]]+)\]|"(\/tmp\/cc-viewer-uploads\/[^"]+?)"/g;
     const parts = [];
     let lastIndex = 0;
@@ -936,7 +936,7 @@ class ChatMessage extends React.Component {
           {this.renderHighlightBubble(styles.bubbleAssistant, innerContent)}
         </div>
         {(() => { const ta = this.props.isTeammate ? getTeammateAvatar(label) : null; return (
-          <div className={styles.avatar} style={{ background: ta ? ta.color : 'var(--bg-surface)' }}
+          <div className={styles.avatar} style={{ background: ta ? ta.color : 'var(--bg-sub-avatar)' }}
             dangerouslySetInnerHTML={{ __html: ta ? ta.svg : getSvgAvatar(this._getSubAvatarType()) }}
           />
         ); })()}
@@ -949,7 +949,7 @@ class ChatMessage extends React.Component {
     const tmAvatar = this.props.isTeammate ? getTeammateAvatar(label) : null;
     return (
       <div className={styles.messageRow}>
-        <div className={styles.avatar} style={{ background: tmAvatar ? tmAvatar.color : 'var(--bg-surface)' }}
+        <div className={styles.avatar} style={{ background: tmAvatar ? tmAvatar.color : 'var(--bg-sub-avatar)' }}
           dangerouslySetInnerHTML={{ __html: tmAvatar ? tmAvatar.svg : getSvgAvatar(this._getSubAvatarType()) }}
         />
         <div className={styles.contentCol}>

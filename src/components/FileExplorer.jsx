@@ -2,37 +2,9 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { Dropdown, Modal, Input, message } from 'antd';
 import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { getFileIcon } from '../utils/fileIcons';
 import OpenFolderIcon from './OpenFolderIcon';
 import styles from './FileExplorer.module.css';
-
-const EXT_COLORS = {
-  js: '#e8d44d', jsx: '#61dafb', ts: '#3178c6', tsx: '#3178c6',
-  json: '#999', md: '#519aba', css: '#a86fd9', scss: '#cd6799', less: '#a86fd9',
-  html: '#e34c26', htm: '#e34c26', xml: '#e34c26',
-  py: '#3572a5', go: '#00add8', rs: '#dea584', rb: '#cc342d',
-  java: '#b07219', c: '#555', cpp: '#f34b7d', h: '#555',
-  sh: '#4eaa25', bash: '#4eaa25', zsh: '#4eaa25',
-  yml: '#cb171e', yaml: '#cb171e', toml: '#999',
-  svg: '#e34c26', png: '#a86fd9', jpg: '#a86fd9', jpeg: '#a86fd9', gif: '#a86fd9', ico: '#a86fd9', webp: '#a86fd9',
-};
-
-function getFileIcon(name, type) {
-  if (type === 'directory') {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--color-accent-yellow)" stroke="none">
-        <path d="M2 6c0-1.1.9-2 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z"/>
-      </svg>
-    );
-  }
-  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-  const color = EXT_COLORS[ext] || '#888';
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-    </svg>
-  );
-}
 
 function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile, onFileRenamed, refreshTrigger, onHtmlPreview, onAttachToChat }) {
   const [children, setChildren] = useState(null);
@@ -40,6 +12,8 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
   const submittingRef = useRef(false);
   const itemRef = useRef(null);
@@ -85,14 +59,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         if (onHtmlPreview) onHtmlPreview(childPath);
         return;
       }
-      // Office 文件用系统默认应用打开
-      const officeExts = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'pdf']);
-      if (officeExts.has(ext)) {
-        fetch(apiUrl('/api/open-file'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: childPath }) })
-          .catch(() => {});
-        return;
-      }
-      // 点击文件，触发回调
+      // 点击文件，触发回调（Office 文件由上层 onFileClick 回调统一拦截）
       if (onFileClick) onFileClick(childPath);
       return;
     }
@@ -209,6 +176,61 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
     }
     toggle();
   }, [editing, toggle]);
+
+  // 拖拽事件处理
+  const handleDragStart = useCallback((e) => {
+    if (editing) { e.preventDefault(); return; }
+    e.dataTransfer.setData('text/plain', childPath);
+    e.dataTransfer.effectAllowed = 'move';
+    setDragging(true);
+  }, [childPath, editing]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragging(false);
+  }, []);
+
+  const handleDragOver = useCallback((e) => {
+    if (!isDir) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOver(true);
+  }, [isDir]);
+
+  const handleDragLeave = useCallback((e) => {
+    // 只在真正离开此节点时才移除高亮（忽略子元素事件冒泡）
+    if (itemRef.current && !itemRef.current.contains(e.relatedTarget)) {
+      setDragOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(async (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const fromPath = e.dataTransfer.getData('text/plain');
+    if (!fromPath || !isDir) return;
+    // 不能拖到自身
+    if (fromPath === childPath) return;
+    // 不能拖到自身子目录
+    if (childPath.startsWith(fromPath + '/')) return;
+    // 不能拖到当前所在的同目录（无意义移动）
+    const fromDir = fromPath.includes('/') ? fromPath.substring(0, fromPath.lastIndexOf('/')) : '';
+    if (fromDir === childPath) return;
+    try {
+      const res = await fetch(apiUrl('/api/move-file'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromPath, toDir: childPath }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        message.error(data.error || 'Move failed');
+        return;
+      }
+      if (onFileRenamed) onFileRenamed(fromPath, data.newPath);
+    } catch (err) {
+      message.error(err.message || 'Move failed');
+    }
+  }, [childPath, isDir, onFileRenamed]);
 
   // 右键菜单项
   const contextMenuItems = useMemo(() => {
@@ -336,12 +358,18 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
   const treeItemDiv = (
     <div
       ref={itemRef}
-      className={`${styles.treeItem}${isSelected ? ' ' + styles.treeItemSelected : ''}${isGitIgnored ? ' ' + styles.treeItemGitIgnored : ''}`}
+      className={`${styles.treeItem}${isSelected ? ' ' + styles.treeItemSelected : ''}${isGitIgnored ? ' ' + styles.treeItemGitIgnored : ''}${dragging ? ' ' + styles.treeItemDragging : ''}${dragOver ? ' ' + styles.treeItemDragOver : ''}`}
       style={{ paddingLeft: 8 + depth * 16 }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
       tabIndex={0}
+      draggable={!editing}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <span className={styles.arrow}>
         {isDir ? (

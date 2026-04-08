@@ -75,7 +75,7 @@ function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, 
             <div className={styles.imagePreviewStrip}>
               {pendingImages.map((img, i) => {
                 const fileName = img.path.split('/').pop() || img.path;
-                const isImage = /\.(png|jpg|jpeg|gif|svg|webp|ico)$/i.test(fileName);
+                const isImage = /\.(png|jpe?g|gif|svg|bmp|webp|avif|ico|icns)$/i.test(fileName);
                 return isImage ? (
                   <div key={img.path} className={styles.imagePreviewItem}>
                     <img

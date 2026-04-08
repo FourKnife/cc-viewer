@@ -107,6 +107,7 @@
   --bg-container-alt: #161616;
   /* Model avatar */
   --bg-model-avatar: #000;
+  --bg-sub-avatar: #3a3a3a;
   /* Input bar / sticky */
   --bg-input-bar: rgba(0, 0, 0, 0.5);
   --bg-sticky-btn: rgba(0, 0, 0, 0.5);
@@ -242,6 +243,7 @@
   --bg-container-alt: #F5F5F5;
   /* Model avatar */
   --bg-model-avatar: #e8e8e8;
+  --bg-sub-avatar: #C8C8C8;
   /* Input bar / sticky */
   --bg-input-bar: #ffffff;
   --bg-sticky-btn: rgba(255, 255, 255, 0.85);

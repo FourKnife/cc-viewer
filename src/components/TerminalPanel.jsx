@@ -229,14 +229,15 @@ class TerminalPanel extends React.Component {
         }
         return true; // WS 未连接，不吞按键
       }
-      // Enter: 如果有 pending 文件，先注入路径再发送 Enter
+      // Enter: 如果有 pending 文件，先注入路径到终端输入行（不带回车），
+      // 用户可以看到路径后再按 Enter 确认发送
       // 跳过 alternate screen（vim/less 等交互程序），避免误注入
       if (e.type === 'keydown' && e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         const pending = this.props.pendingImages;
         const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
         if (pending?.length > 0 && !inAlternateScreen && this.ws?.readyState === WebSocket.OPEN) {
-          const paths = pending.map(img => `"${img.path.replace(/"/g, '')}"`).join(' ');
-          this.ws.send(JSON.stringify({ type: 'input', data: paths + ' \r' }));
+          const paths = pending.map(img => `'${img.path.replace(/'/g, "'\\''")}'`).join(' ');
+          this.ws.send(JSON.stringify({ type: 'input', data: paths + ' ' }));
           this.props.onClearPendingImages?.();
           return false;
         }
@@ -885,7 +886,7 @@ class TerminalPanel extends React.Component {
           <div className={styles.pendingFileStrip}>
             {pendingImages.map((img, i) => {
               const fileName = img.path.split('/').pop() || img.path;
-              const isImage = /\.(png|jpe?g|gif|svg|webp|ico)$/i.test(fileName);
+              const isImage = /\.(png|jpe?g|gif|svg|bmp|webp|avif|ico|icns)$/i.test(fileName);
               return isImage ? (
                 <div key={img.path} className={styles.pendingImageItem}>
                   <img

@@ -26,6 +26,7 @@ import { Virtuoso } from 'react-virtuoso';
 import { isMobile } from '../env';
 import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { tryOpenWithSystem } from '../utils/fileOpen';
 import { BUILTIN_PRESETS } from '../utils/builtinPresets';
 import defaultAvatarUrl from '../img/default-avatar.svg';
 import loadingPetUrl from '../img/loading-pet.gif';
@@ -2284,6 +2285,7 @@ class ChatView extends React.Component {
 
   handleOpenToolFilePath = async (filePath) => {
     if (!filePath) return;
+    if (tryOpenWithSystem(filePath, 'chat-message')) return;
     let resolved = filePath;
     if (filePath.startsWith('/')) {
       // 懒加载项目目录（只请求一次，后续用缓存）
@@ -2741,7 +2743,10 @@ class ChatView extends React.Component {
               style={{ width: this.state.sidebarWidth }}
               refreshTrigger={this.state.fileExplorerRefresh}
               onClose={() => this._setFileExplorerOpen(false)}
-              onFileClick={(path) => this.setState({ currentFile: path, currentGitDiff: null, scrollToLine: null })}
+              onFileClick={(path) => {
+                if (tryOpenWithSystem(path, 'file-explorer')) return;
+                this.setState({ currentFile: path, currentGitDiff: null, scrollToLine: null });
+              }}
               expandedPaths={this.state.fileExplorerExpandedPaths}
               onToggleExpand={this.handleToggleExpandPath}
               currentFile={this.state.currentFile}
@@ -2759,8 +2764,12 @@ class ChatView extends React.Component {
               style={{ width: this.state.sidebarWidth }}
               refreshTrigger={this.state.gitChangesRefresh}
               onClose={() => this.setState({ gitChangesOpen: false })}
-              onFileClick={(path) => this.setState({ currentGitDiff: path, currentFile: null })}
+              onFileClick={(path) => {
+                if (tryOpenWithSystem(path, 'git-changes')) return;
+                this.setState({ currentGitDiff: path, currentFile: null });
+              }}
               onOpenFile={(path) => {
+                if (tryOpenWithSystem(path, 'git-changes')) return;
                 const parts = path.split('/');
                 const ancestors = [];
                 for (let i = 1; i < parts.length; i++) ancestors.push(parts.slice(0, i).join('/'));
@@ -2784,6 +2793,7 @@ class ChatView extends React.Component {
                   filePath={this.state.currentGitDiff}
                   onClose={() => this.setState({ currentGitDiff: null })}
                   onOpenFile={(path, line) => {
+                    if (tryOpenWithSystem(path, 'git-diff')) return;
                     // 计算祖先目录路径并展开，确保文件在文件浏览器中可见并滚动定位
                     const parts = path.split('/');
                     const ancestors = [];

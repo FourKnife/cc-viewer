@@ -129,6 +129,15 @@
   opacity: 0.4;
 }
 
+.treeItemDragging {
+  opacity: 0.5;
+}
+
+.treeItemDragOver {
+  background: var(--color-primary-bg-light);
+  outline: 2px dashed var(--color-primary);
+}
+
 .arrowIcon {
   transition: transform 0.15s;
 }
