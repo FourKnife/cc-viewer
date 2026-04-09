@@ -579,6 +579,26 @@ if (!gotLock) {
       resizeTimer = setTimeout(updateLayout, 16);
     });
 
+    mainWindow.on('close', async (e) => {
+      if (isQuitting) return; // before-quit 已处理
+      if (tabs.size > 0 && mainWindow && !mainWindow.isDestroyed()) {
+        e.preventDefault();
+        const names = [...tabs.values()].map(tb => tb.projectName).join(', ');
+        const { response } = await dialog.showMessageBox(mainWindow, {
+          type: 'question',
+          buttons: [t('electron.quit.buttonQuit'), t('electron.quit.buttonCancel')],
+          defaultId: 1,
+          cancelId: 1,
+          title: t('electron.quit.title'),
+          message: t('electron.quit.message', { count: tabs.size }),
+          detail: `${names}\n\n${t('electron.quit.detail')}`,
+        });
+        if (response !== 0) return;
+        await cleanupAll();
+        app.exit(0);
+      }
+    });
+
     mainWindow.on('closed', () => {
       mainWindow = null;
     });

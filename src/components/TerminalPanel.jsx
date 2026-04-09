@@ -107,6 +107,8 @@ class TerminalPanel extends React.Component {
     this._loadPresetShortcuts();
     this._onPresetsChanged = () => this._loadPresetShortcuts();
     window.addEventListener('ccv-presets-changed', this._onPresetsChanged);
+    this._onFocusTerminal = () => { if (this.terminal && this.containerRef?.current?.offsetWidth > 0) this.terminal.focus(); };
+    window.addEventListener('ccv-focus-terminal', this._onFocusTerminal);
     this._themeObserver = new MutationObserver(() => {
       if (this.terminal) {
         const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
@@ -147,6 +149,7 @@ class TerminalPanel extends React.Component {
   componentWillUnmount() {
     if (this._themeObserver) { this._themeObserver.disconnect(); this._themeObserver = null; }
     window.removeEventListener('ccv-presets-changed', this._onPresetsChanged);
+    window.removeEventListener('ccv-focus-terminal', this._onFocusTerminal);
     if (this._stopMobileMomentum) this._stopMobileMomentum();
     if (this._writeTimer) cancelAnimationFrame(this._writeTimer);
     if (this._wsReconnectTimer) clearTimeout(this._wsReconnectTimer);

@@ -1420,6 +1420,12 @@ class AppHeader extends React.Component {
                   <Button className={styles.compactBtnNoBorder} icon={<span className={styles.countryFlagIcon}>{this.state.countryFlag}</span>} />
                 </Popover>
               )}
+              <Switch
+                checked={themeColor === 'light'}
+                onChange={(checked) => onThemeColorChange && onThemeColorChange(checked ? 'light' : 'dark')}
+                checkedChildren="雪山白"
+                unCheckedChildren="曜石黑"
+              />
               <Popover
               content={
                 <div className={styles.qrcodePopover}>

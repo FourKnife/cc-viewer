@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.129 (2026-04-09)
+
+- Feat: theme switch (雪山白/曜石黑) in AppHeader toolbar for quick theme toggle
+- Feat: theme sync to Claude Code CLI via /theme command with output verification and retry
+- Feat: terminal auto-focus on theme switch for visual feedback
+- Fix: Electron window close (× button) now shows quit confirmation when projects are open
+- Fix: theme sync PTY output buffer capped at 4KB to prevent memory accumulation
+- Fix: terminal focus only triggers when terminal panel is visible
+
 ## 1.6.128 (2026-04-09)
 
 - UI: request list active/hover border styling with blue border and faint background

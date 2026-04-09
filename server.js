@@ -117,6 +117,8 @@ const _editorCleanupTimer = setInterval(() => {
 }, 60000);
 _editorCleanupTimer.unref(); // Don't keep process alive for cleanup
 let terminalWss = null; // WebSocketServer reference for broadcasting
+let _writeToPty = null; // PTY write function reference (set by setupTerminalWebSocket)
+let _onPtyData = null;  // PTY data listener registration (set by setupTerminalWebSocket)
 export function setWorkspaceClaudeArgs(args) {
   _workspaceClaudeArgs = args;
 }
@@ -454,6 +456,30 @@ async function handleRequest(req, res) {
         const prefsDir = dirname(prefsFile);
         if (!existsSync(prefsDir)) mkdirSync(prefsDir, { recursive: true });
         writeFileSync(prefsFile, JSON.stringify(prefs, null, 2));
+        // 主题切换时同步到 Claude Code CLI：发 /theme，监听输出验证结果，不对就再发一次
+        if (incoming.themeColor && _writeToPty && _onPtyData) {
+          const target = incoming.themeColor === 'light' ? 'light' : 'dark';
+          let buf = '';
+          let retried = false;
+          const removeListener = _onPtyData((data) => {
+            buf += data;
+            if (buf.length > 4096) buf = buf.slice(-2048); // 限制 buf 大小
+            // 解析 PTY 输出中的 "Theme set to light" 或 "Theme set to dark"
+            const match = buf.match(/Theme set to (light|dark)/);
+            if (match) {
+              removeListener();
+              clearTimeout(timeout);
+              if (match[1] !== target && !retried) {
+                // 结果与目标不一致，再 toggle 一次
+                retried = true;
+                try { _writeToPty('/theme\r'); } catch {}
+              }
+            }
+          });
+          // 5 秒超时，避免监听器泄漏
+          const timeout = setTimeout(() => { removeListener(); }, 5000);
+          try { _writeToPty('/theme\r'); } catch {}
+        }
         prefs.logDir = LOG_DIR;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(prefs));
@@ -2739,6 +2765,8 @@ async function setupTerminalWebSocket(httpServer) {
   try {
     const { WebSocketServer } = await import('ws');
     const { writeToPty, writeToPtySequential, resizePty, onPtyData, onPtyExit, getPtyState, getOutputBuffer, getCurrentWorkspace, spawnShell } = await import('./pty-manager.js');
+    _writeToPty = writeToPty;
+    _onPtyData = onPtyData;
     const wss = new WebSocketServer({ noServer: true });
     terminalWss = wss;
 

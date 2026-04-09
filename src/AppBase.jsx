@@ -1234,6 +1234,8 @@ class AppBase extends React.Component {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ themeColor: value }),
     }).catch(() => { });
+    // 切换主题后让终端获得焦点，便于用户看到 /theme 切换效果
+    window.dispatchEvent(new CustomEvent('ccv-focus-terminal'));
   };
 
   handleLogDirChange = (value) => {
