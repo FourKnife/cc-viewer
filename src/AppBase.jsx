@@ -11,7 +11,7 @@ import { apiUrl } from './utils/apiUrl';
 import { saveEntries, loadEntries, clearEntries, getCacheMeta, saveSessionEntries, loadSessionEntries, saveSessionIndex } from './utils/entryCache';
 import { buildSessionIndex, splitHotCold, mergeSessionIndices, HOT_SESSION_COUNT } from './utils/sessionManager';
 import { mergeMainAgentSessions as _mergeMainAgentSessions } from './utils/sessionMerge';
-import { reconstructEntries } from '../lib/delta-reconstructor.js';
+import { reconstructEntries, createIncrementalReconstructor } from '../lib/delta-reconstructor.js';
 import { createEntrySlimmer, createIncrementalSlimmer, restoreSlimmedEntry } from './utils/entry-slim.js';
 import { reinitializeMermaid } from './hooks/useMermaidRender';
 import styles from './App.module.css';
@@ -103,7 +103,7 @@ class AppBase extends React.Component {
     this._cacheLossShowAll = undefined;
     // 增量维护的 KV-Cache 缓存内容（稳定引用，不受 inProgress 闪烁影响）
     this._lastKvCacheContent = null;
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
   }
 
   /** 批量剪枝 entries：清空旧 MainAgent 的 body.messages，保留最后一条完整 */
@@ -125,7 +125,7 @@ class AppBase extends React.Component {
     this._cacheLossLastMainAgent = null;
     this._cacheLossMap = new Map();
     this._lastKvCacheContent = null;
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
   }
 
   /**
@@ -145,7 +145,7 @@ class AppBase extends React.Component {
     this._cacheLossLastMainAgent = null;
     this._cacheLossMap = new Map();
     this._lastKvCacheContent = null;
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
 
     let currentSessionId = null;
 
@@ -315,7 +315,7 @@ class AppBase extends React.Component {
                 const { hotEntries, allSessions } = splitHotCold(
                   unslimmed, mainAgentSessions, sessionIndex, HOT_SESSION_COUNT
                 );
-                this._sseSlimmer = null; // 重置，下帧 SSE 重建
+                this._sseSlimmer = null; this._sseReconstructor = null; // 重置，下帧 SSE 重建
                 const hotFiltered = hotEntries.filter(e => isRelevantRequest(e));
                 // 计算 _oldestTs 供"加载更多"使用
                 this._oldestTs = hotEntries.length > 0 ? hotEntries[0].timestamp : null;
@@ -432,7 +432,7 @@ class AppBase extends React.Component {
 
     this._pendingEntries = [];
     this.setState({ isStreaming: false });
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
     if (this._sseReconnectTimer) clearTimeout(this._sseReconnectTimer);
     this._sseReconnectTimer = setTimeout(() => { this.initSSE(); }, 2000);
   }
@@ -480,7 +480,7 @@ class AppBase extends React.Component {
           const { hotEntries, allSessions, coldGroups } = splitHotCold(
             unslimmed, mainAgentSessions, fullIndex, HOT_SESSION_COUNT
           );
-          this._sseSlimmer = null;
+          this._sseSlimmer = null; this._sseReconstructor = null;
           const pn = this.state.projectName;
           if (pn) {
             for (const [sid, coldEntries] of coldGroups) {
@@ -652,7 +652,7 @@ class AppBase extends React.Component {
             const { hotEntries, allSessions, coldGroups } = splitHotCold(
               unslimmed, mainAgentSessions, fullIndex, HOT_SESSION_COUNT
             );
-            this._sseSlimmer = null;
+            this._sseSlimmer = null; this._sseReconstructor = null;
             // 冷 session entries 异步写入 IndexedDB
             const pn = this.state.projectName;
             if (pn) {
@@ -915,8 +915,14 @@ class AppBase extends React.Component {
       if (!this._sseSlimmer) {
         this._sseSlimmer = createIncrementalSlimmer(isMainAgent);
       }
+      // Delta 增量重建器：SSE 逐条到达的 delta entry 只有增量 messages，
+      // 需要拼接为完整 messages（与批量加载时 reconstructEntries 对应）
+      if (!this._sseReconstructor) {
+        this._sseReconstructor = createIncrementalReconstructor();
+      }
 
-      for (const entry of batch) {
+      for (const rawEntry of batch) {
+        const entry = this._sseReconstructor.reconstruct(rawEntry);
         const key = `${entry.timestamp}|${entry.url}`;
         const existingIndex = this._requestIndexMap.get(key);
 
@@ -1077,7 +1083,7 @@ class AppBase extends React.Component {
           unslimmed, mainAgentSessions, fullIndex, HOT_SESSION_COUNT,
           new Set([sessionId])
         );
-        this._sseSlimmer = null;
+        this._sseSlimmer = null; this._sseReconstructor = null;
         const pn = this.state.projectName;
         if (pn) {
           for (const [sid, coldEntries] of coldGroups) {
@@ -1111,7 +1117,7 @@ class AppBase extends React.Component {
     const { hotEntries, allSessions, coldGroups } = splitHotCold(
       unslimmed, mainAgentSessions, this.state.sessionIndex, HOT_SESSION_COUNT
     );
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
     const fullIndex = this.state.sessionIndex;
     if (projectName) {
       for (const [sid, coldEntries] of coldGroups) {

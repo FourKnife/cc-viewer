@@ -523,7 +523,7 @@ class AppHeader extends React.Component {
       if (items.length === 0) return null;
       const isMessages = title === t('ui.messages');
       const sectionState = (this.state._cacheSectionCollapsed || {})[sectionKey];
-      const collapsed = sectionState !== undefined ? !!sectionState : sectionKey === 'tools';
+      const collapsed = sectionState !== undefined ? !!sectionState : true;
       const toggleCollapse = () => this.setState(prev => ({
         _cacheSectionCollapsed: { ...(prev._cacheSectionCollapsed || {}), [sectionKey]: !collapsed },
       }));
