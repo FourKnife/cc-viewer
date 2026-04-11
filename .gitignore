@@ -8,3 +8,14 @@ package-lock.json
 .DS_Store
 .omc/
 tmp/
+
+# 签名相关敏感文件
+*.p12
+*.cer
+*.certSigningRequest
+*.pem
+*.key
+*.pfx
+.env
+.env.*
+!.env.example

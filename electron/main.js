@@ -324,11 +324,20 @@ async function closeTab(tabId) {
 
   // Kill child process
   if (tab.child) {
-    try { tab.child.send({ type: 'shutdown' }); } catch {}
-    const forceTimer = setTimeout(() => {
-      try { tab.child.kill('SIGKILL'); } catch {}
-    }, 5000);
-    tab.child.on('exit', () => clearTimeout(forceTimer));
+    if (tab.child.connected) {
+      try { tab.child.send({ type: 'shutdown' }); } catch {}
+      const forceTimer = setTimeout(() => {
+        try { tab.child.kill('SIGKILL'); } catch {}
+      }, 5000);
+      tab.child.on('exit', () => clearTimeout(forceTimer));
+    } else {
+      // IPC channel closed, kill with SIGKILL escalation
+      try { tab.child.kill('SIGTERM'); } catch {}
+      const forceTimer = setTimeout(() => {
+        try { tab.child.kill('SIGKILL'); } catch {}
+      }, 3000);
+      tab.child.on('exit', () => clearTimeout(forceTimer));
+    }
   }
 
   // Remove view
@@ -401,10 +410,17 @@ async function cleanupAll() {
 
   const promises = [];
   for (const [id, tab] of tabs) {
-    if (tab.child) {
+    if (tab.child && tab.child.connected) {
       try { tab.child.send({ type: 'shutdown' }); } catch {}
       promises.push(new Promise(resolve => {
         const timer = setTimeout(() => { try { tab.child.kill('SIGKILL'); } catch {} resolve(); }, 5000);
+        tab.child.on('exit', () => { clearTimeout(timer); resolve(); });
+      }));
+    } else if (tab.child) {
+      // Child process exists but IPC channel is closed, kill with SIGKILL escalation
+      try { tab.child.kill('SIGTERM'); } catch {}
+      promises.push(new Promise(resolve => {
+        const timer = setTimeout(() => { try { tab.child.kill('SIGKILL'); } catch {} resolve(); }, 3000);
         tab.child.on('exit', () => { clearTimeout(timer); resolve(); });
       }));
     }
