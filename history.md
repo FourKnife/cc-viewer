@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.146 (2026-04-13)
+## 1.6.147 (2026-04-13)
 
 - Chore: remove signing guide docs
 - Fix: notarization timeout protection (6h) — skip notarization on timeout instead of blocking CI
