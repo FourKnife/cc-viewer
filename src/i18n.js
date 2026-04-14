@@ -1477,6 +1477,14 @@ const i18nData = {
     "tr": "Farklı Kaydet",
     "uk": "Зберегти як"
   },
+  "ui.saveAsImage": {
+    "zh": "保存为图片", "en": "Save as Image", "zh-TW": "儲存為圖片",
+    "ko": "이미지로 저장", "ja": "画像として保存", "de": "Als Bild speichern",
+    "es": "Guardar como imagen", "fr": "Enregistrer comme image", "it": "Salva come immagine",
+    "da": "Gem som billede", "pl": "Zapisz jako obraz", "ru": "Сохранить как изображение",
+    "ar": "حفظ كصورة", "no": "Lagre som bilde", "pt-BR": "Salvar como imagem",
+    "th": "บันทึกเป็นรูปภาพ", "tr": "Resim olarak kaydet", "uk": "Зберегти як зображення"
+  },
   "ui.contextMenu.revealInExplorer": {
     "zh": "在系统中展示",
     "en": "Reveal in Explorer",

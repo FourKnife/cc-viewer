@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.153 (2026-04-14)
+
+- Feat: markdown save-as-image — capture rendered bubble as PNG via html2canvas
+- Feat: action bar now has 3 buttons: copy, download .md, save as image
+- Fix: action bar excluded from screenshot via `data-html2canvas-ignore`
+- Fix: concurrent click guard prevents multiple canvas allocations
+- Style: use Ant Design `CameraOutlined` icon for consistent styling
+
 ## 1.6.152 (2026-04-14)
 
 - Feat: `--log-dir <path>` CLI option — specify custom JSONL log storage directory at startup (alternative to CCV_LOG_DIR env)
