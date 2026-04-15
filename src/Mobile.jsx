@@ -1,9 +1,10 @@
 import React from 'react';
-import { ConfigProvider, Spin, Button, Badge, Switch, Select, message } from 'antd';
+import { ConfigProvider, Spin, Button, Badge, Switch, Select, Modal, message } from 'antd';
 import { BranchesOutlined, DownloadOutlined, DeleteOutlined, RollbackOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import AppBase, { styles } from './AppBase';
-import { isIOS, isPad } from './env';
+import { isIOS, isPad, setViewMode } from './env';
 import { isMainAgent, isSystemText, classifyUserContent } from './utils/contentFilter';
+import { getModelMaxTokens } from './utils/helpers';
 import ChatView from './components/ChatView';
 import TerminalPanel, { uploadFileAndGetPath } from './components/TerminalPanel';
 import ToolApprovalPanel from './components/ToolApprovalPanel';
@@ -34,6 +35,7 @@ class Mobile extends AppBase {
       hasGit: true,
       terminalPendingImages: [],  // 终端面板独立的 pending 图片/文件
     });
+    this._lastContextPercent = 0;
   }
 
   componentDidMount() {
@@ -64,12 +66,39 @@ class Mobile extends AppBase {
       window.visualViewport.addEventListener('scroll', this._onVisualViewportChange);
       this._onVisualViewportChange();
     }
+    // iPad/侧边栏模式：窗口宽度 > 1400px 时提示切换到全览模式
+    if (isPad) {
+      this._mqlWide = window.matchMedia('(min-width: 1400px)');
+      this._modeSwitchDialog = null;
+      this._onWideChange = (e) => {
+        if (e.matches) {
+          this._modeSwitchDialog = Modal.confirm({
+            title: t('ui.modeSwitchTitle'),
+            content: t('ui.modeSwitchToFullView'),
+            okText: t('ui.ok'),
+            onOk: () => { this._modeSwitchDialog = null; setViewMode('pc'); },
+            onCancel: () => { this._modeSwitchDialog = null; },
+          });
+        } else if (this._modeSwitchDialog) {
+          this._modeSwitchDialog.destroy();
+          this._modeSwitchDialog = null;
+        }
+      };
+      this._mqlWide.addEventListener('change', this._onWideChange);
+    }
   }
 
   componentWillUnmount() {
     if (this._onVisualViewportChange && window.visualViewport) {
       window.visualViewport.removeEventListener('resize', this._onVisualViewportChange);
       window.visualViewport.removeEventListener('scroll', this._onVisualViewportChange);
+    }
+    if (this._mqlWide) {
+      this._mqlWide.removeEventListener('change', this._onWideChange);
+    }
+    if (this._modeSwitchDialog) {
+      this._modeSwitchDialog.destroy();
+      this._modeSwitchDialog = null;
     }
     super.componentWillUnmount();
   }
@@ -337,8 +366,41 @@ class Mobile extends AppBase {
                 <line x1="3" y1="18" x2="21" y2="18" />
               </svg>
             </button>
-            <Badge status="processing" color="green" />
-            <span className={styles.mobileCLIStatusLabel}>{mobileIsLocalLog ? t('ui.historyLog', { file: this._localLogFile }) : (t('ui.liveMonitoring') + (this.state.projectName ? `: ${this.state.projectName}` : ''))}</span>
+            {isPad && !mobileIsLocalLog ? (() => {
+              // iPad 模式：渲染与 PC 一致的上下文血条
+              const contextWindow = this.state.contextWindow;
+              let contextPercent = 0;
+              if (contextWindow?.used_percentage != null) {
+                contextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / 83.5 * 100)));
+              } else if (filteredRequests.length > 0) {
+                for (let i = filteredRequests.length - 1; i >= 0; i--) {
+                  if (isMainAgent(filteredRequests[i]) && filteredRequests[i].response?.body?.usage) {
+                    const u = filteredRequests[i].response.body.usage;
+                    const total = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+                    const maxTokens = contextWindow?.context_window_size || getModelMaxTokens(filteredRequests[i].body?.model || this.state.settingsModel);
+                    const usable = maxTokens * 0.835;
+                    if (usable > 0 && total > 0) contextPercent = Math.min(100, Math.max(0, Math.round(total / usable * 100)));
+                    break;
+                  }
+                }
+              }
+              if (contextPercent === 0 && this._lastContextPercent > 0) contextPercent = this._lastContextPercent;
+              else this._lastContextPercent = contextPercent;
+              const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
+              return (
+                <span className={styles.mobileCtxTag} style={{ borderColor: ctxColor, color: ctxColor }}>
+                  <span className={styles.mobileCtxTagFill} style={{ width: `${contextPercent}%`, backgroundColor: ctxColor }} />
+                  <span className={styles.mobileCtxTagContent}>
+                    {t('ui.liveMonitoring')}{this.state.projectName ? `: ${this.state.projectName}` : ''}
+                  </span>
+                </span>
+              );
+            })() : (
+              <>
+                <Badge status="processing" color="green" />
+                <span className={styles.mobileCLIStatusLabel}>{mobileIsLocalLog ? t('ui.historyLog', { file: this._localLogFile }) : (t('ui.liveMonitoring') + (this.state.projectName ? `: ${this.state.projectName}` : ''))}</span>
+              </>
+            )}
           </div>
           <div className={styles.mobileCLIHeaderRight}>
             {mobileIsLocalLog ? (
@@ -464,7 +526,7 @@ class Mobile extends AppBase {
                     onScrollTsDone={() => {}}
                     cliMode={this.state.cliMode}
                     sdkMode={this.state.sdkMode}
-                    terminalVisible={false}
+                    terminalVisible={this.state.mobileTerminalVisible}
                     mobileChatVisible={true}
                     fileLoading={this.state.fileLoading}
                     isStreaming={this.state.isStreaming}
@@ -496,7 +558,7 @@ class Mobile extends AppBase {
           )}
           <div className={`${styles.mobileGitDiffOverlay} ${this.state.mobileGitDiffVisible ? styles.mobileGitDiffOverlayVisible : ''}`}>
             <div className={styles.mobileGitDiffInner}>
-              <MobileGitDiff visible={this.state.mobileGitDiffVisible} />
+              <MobileGitDiff visible={this.state.mobileGitDiffVisible} onClose={() => this.setState({ mobileGitDiffVisible: false })} />
             </div>
           </div>
           <div className={`${styles.mobileFileExplorerOverlay} ${this.state.mobileFileExplorerVisible ? styles.mobileFileExplorerOverlayVisible : ''}`}>

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.158 (2026-04-15)
+
+- Feat: responsive mode switching — PC width <600px prompts sidebar mode, iPad width >1400px prompts full view mode (matchMedia, zero perf cost)
+- Feat: auto narrow detection — PC browser width <750px at startup auto-switches to iPad mode
+- Feat: env.js localStorage view mode preference with URL param override priority
+- Feat: iPad header blood bar — context window usage progress bar matching PC AppHeader
+- Feat: FileExplorer right-click "Insert path to chat" — writes quoted relative path to terminal or chat input
+- Feat: MobileGitDiff close button (X) in header
+- Fix: UltraPlan send — retry 3x on WebSocket failure, keep modal open on error, unmounted guard
+- Fix: scroll stick-to-bottom — direct scrollTop=scrollHeight for all platforms, scrollToTimestamp guard
+- Fix: useVirtuoso excludes pad mode — prevents PC users in sidebar mode from incorrect Virtuoso path
+- Fix: UltraPlan iPad modal zoom — pad-mode backdrop zoom:1 override
+- Style: loading spinner — pure CSS spinner replaces antd Spin for load-more buttons
+
 ## 1.6.157 (2026-04-15)
 
 - Feat: mobile hamburger menu — "Project Folder" entry opens file explorer overlay

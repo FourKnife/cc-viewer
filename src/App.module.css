@@ -752,6 +752,42 @@
   color: var(--text-light);
 }
 
+/* ─── iPad 模式血条（上下文使用率） ─── */
+.mobileCtxTag {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 12px;
+  border: 1px solid;
+  padding: 0 10px;
+  height: 22px;
+  font-size: 12px;
+  line-height: 22px;
+  overflow: hidden;
+  transition: border-color 0.3s, color 0.3s;
+  white-space: nowrap;
+  background: var(--bg-base-pure);
+  max-width: 200px;
+}
+
+.mobileCtxTagFill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  opacity: 0.35;
+  transition: width 0.5s ease, background-color 0.3s;
+  pointer-events: none;
+}
+
+.mobileCtxTagContent {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mobileCLIHeaderRight {
   display: flex;
   align-items: center;

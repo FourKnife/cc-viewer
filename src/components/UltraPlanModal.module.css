@@ -268,3 +268,8 @@
 @media (max-width: 768px) {
   .backdrop { zoom: 1.4; }
 }
+
+/* iPad pad-mode 不需要缩放补偿 */
+:global(html.pad-mode) .backdrop {
+  zoom: 1;
+}

@@ -10,7 +10,7 @@ function isExternalFileDrag(e) {
   return e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes('text/x-internal-move');
 }
 
-function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile, onFileRenamed, refreshTrigger, onHtmlPreview, onAttachToChat, onImportFiles }) {
+function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile, onFileRenamed, refreshTrigger, onHtmlPreview, onAttachToChat, onInsertPathToChat, onImportFiles }) {
   const [children, setChildren] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -278,6 +278,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
       { key: 'copyPath', label: t('ui.contextMenu.copyPath') },
       { key: 'copyRelPath', label: t('ui.contextMenu.copyRelativePath') },
       { key: 'attachToChat', label: t('ui.contextMenu.attachToChat') },
+      { key: 'insertPathToChat', label: t('ui.contextMenu.insertPathToChat') },
       { type: 'divider' },
       { key: 'rename', label: t('ui.contextMenu.rename') },
       { key: 'delete', label: t('ui.contextMenu.delete'), danger: true },
@@ -319,6 +320,9 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         break;
       case 'attachToChat':
         onAttachToChat?.(childPath);
+        break;
+      case 'insertPathToChat':
+        onInsertPathToChat?.(childPath);
         break;
       case 'rename':
         startEditing();
@@ -380,7 +384,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         });
         break;
     }
-  }, [childPath, item.name, isDir, startEditing, onFileRenamed, onAttachToChat]);
+  }, [childPath, item.name, isDir, startEditing, onFileRenamed, onAttachToChat, onInsertPathToChat]);
 
   const treeItemDiv = (
     <div
@@ -434,13 +438,13 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         <div className={styles.error} style={{ paddingLeft: 24 + depth * 16 }}>{error}</div>
       )}
       {expanded && children && children.map(child => (
-        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} onHtmlPreview={onHtmlPreview} onAttachToChat={onAttachToChat} onImportFiles={onImportFiles} />
+        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} onHtmlPreview={onHtmlPreview} onAttachToChat={onAttachToChat} onInsertPathToChat={onInsertPathToChat} onImportFiles={onImportFiles} />
       ))}
     </>
   );
 }
 
-export default function FileExplorer({ style, onClose, onFileClick, expandedPaths, onToggleExpand, currentFile, refreshTrigger, onFileRenamed, onAttachToChat }) {
+export default function FileExplorer({ style, onClose, onFileClick, expandedPaths, onToggleExpand, currentFile, refreshTrigger, onFileRenamed, onAttachToChat, onInsertPathToChat }) {
   const [items, setItems] = useState(null);
   const [error, setError] = useState(null);
   const [htmlPreviewPath, setHtmlPreviewPath] = useState(null);
@@ -642,7 +646,7 @@ export default function FileExplorer({ style, onClose, onFileClick, expandedPath
         {error && <div className={styles.error}>{error}</div>}
         {!items && !error && <div className={styles.loading}>Loading...</div>}
         {items && items.map(item => (
-          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} onHtmlPreview={setHtmlPreviewPath} onAttachToChat={onAttachToChat} onImportFiles={importFiles} />
+          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} onHtmlPreview={setHtmlPreviewPath} onAttachToChat={onAttachToChat} onInsertPathToChat={onInsertPathToChat} onImportFiles={importFiles} />
         ))}
       </div>
       {htmlPreviewPath && (

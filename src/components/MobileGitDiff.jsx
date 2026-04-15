@@ -98,7 +98,7 @@ function TreeDir({ name, node, depth, selectedFile, selectedRepo, repoPath, onFi
   );
 }
 
-export default function MobileGitDiff({ visible }) {
+export default function MobileGitDiff({ visible, onClose }) {
   const [repos, setRepos] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -186,8 +186,18 @@ export default function MobileGitDiff({ visible }) {
       {/* 上半部分：文件列表，固定 300px */}
       <div className={styles.fileListSection}>
         <div className={styles.header}>
-          <span className={styles.headerTitle}>{t('ui.gitChanges')}</span>
-          <span className={styles.fileCount}>{totalChanges}</span>
+          <div className={styles.headerLeft}>
+            <span className={styles.headerTitle}>{t('ui.gitChanges')}</span>
+            <span className={styles.fileCount}>{totalChanges}</span>
+          </div>
+          {onClose && (
+            <button className={styles.closeBtn} onClick={onClose}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
         </div>
         <div className={styles.changesContainer}>
           {loading && <div className={styles.statusText}>Loading...</div>}

@@ -42,7 +42,7 @@ const QUEUE_THRESHOLD = 20;
 const MOBILE_ITEM_LIMIT = 240;
 const IOS_ITEM_LIMIT = 150;
 const MOBILE_LOAD_MORE_STEP = 100;
-const useVirtuoso = isMobile && !isIOS;
+const useVirtuoso = isMobile && !isIOS && !isPad;
 
 // 稳定空对象引用，避免每次 render 创建新 {} 导致子组件重渲染
 const EMPTY_OBJ = {};
@@ -531,20 +531,18 @@ class ChatView extends React.Component {
         return;
       }
       if (shouldStick) {
-        this.virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'auto' });
-        // Footer 包含 lastResponseItems，scrollToIndex LAST 只到最后一个 data item，
-        // 需要额外滚动到容器真正底部以显示 Footer 内容
-        if (this.state.lastResponseItems) {
-          requestAnimationFrame(() => {
-            const scroller = this._virtuosoScrollerEl;
-            if (scroller) scroller.scrollTop = scroller.scrollHeight;
-          });
+        // 直接滚到容器最底部，避免 scrollToIndex('LAST') 对高消息的 atBottom 误判
+        const scroller = this._virtuosoScrollerEl;
+        if (scroller) {
+          scroller.scrollTop = scroller.scrollHeight;
+        } else {
+          this.virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'auto' });
         }
       }
       return;
     }
-    // 桌面端：原有逻辑
-    if (this._scrollTargetRef.current) {
+    // 桌面端/iPad/iPhone：用户主动跳转到指定消息（scrollToTimestamp 场景）
+    if (this._scrollTargetRef.current && this.props.scrollToTimestamp) {
       const targetEl = this._scrollTargetRef.current;
       const container = this.containerRef.current;
       if (container && targetEl.offsetHeight > container.clientHeight) {
@@ -561,6 +559,7 @@ class ChatView extends React.Component {
       if (this.props.onScrollTsDone) this.props.onScrollTsDone();
       return;
     }
+    // 常规吸底：直接滚到容器最底部
     if (shouldStick) {
       const el = this.containerRef.current;
       if (el) el.scrollTop = el.scrollHeight;
@@ -1064,7 +1063,7 @@ class ChatView extends React.Component {
         <div key="load-more-history" className={styles.loadMoreWrap}>
           {this.props.loadingMore ? (
             <div className={`${styles.loadMoreBtn} ${styles.loadMoreBtnLoading}`}>
-              <Spin size="small" style={{ marginRight: 8 }} />
+              <span className={styles.loadMoreSpinner} />
               {t('ui.loadingMoreHistory')}
             </div>
           ) : (
@@ -1094,7 +1093,7 @@ class ChatView extends React.Component {
           <div key={`cold-session-${si}`} className={styles.loadMoreWrap}>
             {isLoading ? (
               <div className={`${styles.loadMoreBtn} ${styles.loadMoreBtnLoading}`}>
-                <Spin size="small" style={{ marginRight: 8 }} />
+                <span className={styles.loadMoreSpinner} />
                 {t('ui.loadingMoreHistory')}
               </div>
             ) : (
@@ -1391,10 +1390,34 @@ class ChatView extends React.Component {
     const filePaths = this.state.ultraplanFiles.map(f => `"${f.path}"`).join(' ');
     const userInput = filePaths ? (trimmed ? `${filePaths} ${trimmed}` : filePaths) : trimmed;
     const assembled = buildLocalUltraplan(userInput, this.state.ultraplanVariant);
-    this.setState({ ultraplanModalOpen: false, ultraplanPrompt: '', ultraplanVariant: 'codeExpert', ultraplanFiles: [] });
-    if (assembled && this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
-      this._inputWs.send(JSON.stringify({ type: 'input', data: `\x1b[200~${assembled}\x1b[201~\r` }));
+    if (!assembled) return;
+
+    const doSend = () => {
+      if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+        this._inputWs.send(JSON.stringify({ type: 'input', data: `\x1b[200~${assembled}\x1b[201~\r` }));
+        this.setState({ ultraplanModalOpen: false, ultraplanPrompt: '', ultraplanVariant: 'codeExpert', ultraplanFiles: [] });
+        return true;
+      }
+      return false;
+    };
+
+    // 立即尝试发送
+    if (doSend()) return;
+    // WebSocket 未就绪：尝试重连后重试（最多 3 次，每次 500ms）
+    let retries = 0;
+    const retry = () => {
+      if (this._unmounted) return;
+      if (doSend()) return;
+      if (++retries < 3) {
+        setTimeout(retry, 500);
+      } else {
+        message.error(t('ui.sendFailed') || 'Send failed, please try again');
+      }
+    };
+    if (!this._inputWs || this._inputWs.readyState === WebSocket.CLOSED) {
+      this.connectInputWs();
     }
+    setTimeout(retry, 500);
   };
 
   _handleUltraplanUpload = () => {
@@ -2530,6 +2553,23 @@ class ChatView extends React.Component {
     });
   };
 
+  _handleInsertPathToChat = (filePath) => {
+    const quoted = `"${filePath}"`;
+    // 终端开启时写入终端，否则写入对话输入框
+    if (this.props.terminalVisible && this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+      this._inputWs.send(JSON.stringify({ type: 'input', data: quoted }));
+      return;
+    }
+    const textarea = this._inputRef.current;
+    if (!textarea) return;
+    const cur = textarea.value;
+    textarea.value = cur ? `${cur} ${quoted}` : quoted;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    this.setState({ inputEmpty: false });
+    textarea.focus();
+  };
+
   _snapToInitialPosition() {
     // 初始化时吸附到 60cols
     const charWidth = 7.8;
@@ -2975,6 +3015,7 @@ class ChatView extends React.Component {
               onToggleExpand={this.handleToggleExpandPath}
               currentFile={this.state.currentFile}
               onAttachToChat={(filePath) => this._addPendingImage(filePath, 'explorer')}
+              onInsertPathToChat={this._handleInsertPathToChat}
               onFileRenamed={(oldPath, newPath) => {
                 this.setState(prev => ({
                   currentFile: prev.currentFile === oldPath ? newPath : prev.currentFile,

@@ -2,7 +2,7 @@ import React from 'react';
 import { ConfigProvider, Layout, theme, Modal, Button, Checkbox, Spin, Alert, message } from 'antd';
 import { UploadOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import AppBase, { styles } from './AppBase';
-import { isMobile } from './env';
+import { isMobile, setViewMode } from './env';
 import { uploadFileAndGetPath } from './components/TerminalPanel';
 import AppHeader from './components/AppHeader';
 import RequestList from './components/RequestList';
@@ -26,6 +26,39 @@ class App extends AppBase {
       currentTab: 'context',
       pendingCacheHighlight: null,
     });
+  }
+
+  componentDidMount() {
+    super.componentDidMount();
+    // 窗口宽度 < 600px 时提示切换到侧边栏模式
+    this._mqlNarrow = window.matchMedia('(max-width: 600px)');
+    this._modeSwitchDialog = null;
+    this._onNarrowChange = (e) => {
+      if (e.matches) {
+        this._modeSwitchDialog = Modal.confirm({
+          title: t('ui.modeSwitchTitle'),
+          content: t('ui.modeSwitchToSidebar'),
+          okText: t('ui.ok'),
+          onOk: () => { this._modeSwitchDialog = null; setViewMode('pad'); },
+          onCancel: () => { this._modeSwitchDialog = null; },
+        });
+      } else if (this._modeSwitchDialog) {
+        this._modeSwitchDialog.destroy();
+        this._modeSwitchDialog = null;
+      }
+    };
+    this._mqlNarrow.addEventListener('change', this._onNarrowChange);
+  }
+
+  componentWillUnmount() {
+    if (this._mqlNarrow) {
+      this._mqlNarrow.removeEventListener('change', this._onNarrowChange);
+    }
+    if (this._modeSwitchDialog) {
+      this._modeSwitchDialog.destroy();
+      this._modeSwitchDialog = null;
+    }
+    super.componentWillUnmount();
   }
 
   // ─── PC 专属方法 ───────────────────────────────────────

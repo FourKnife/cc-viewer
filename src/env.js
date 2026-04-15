@@ -5,13 +5,27 @@ const _params = new URLSearchParams(window.location.search);
 const _forceMobile = _params.get('mobile') === '1';
 // URL 参数 ?ipad=1 iPad/平板模式（Mobile 布局 + PC 缩放）
 const _forcePad = _params.get('ipad') === '1';
-export const isPad = _forcePad;
-export const isMobile = _forcePad || _forceMobile || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || _isIPadOS;
+// localStorage 保存的视图模式偏好（URL 参数优先级更高）
+const _savedMode = (!_forceMobile && !_forcePad) ? localStorage.getItem('ccv_viewMode') : null;
+// 窄屏自动切 iPad 模式：PC UA + 无偏好 + 宽度 < 750px → 自动 pad
+const _autoNarrow = !_forceMobile && !_forcePad && !_savedMode
+  && !(/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) && !_isIPadOS
+  && window.innerWidth < 750;
+
+export const isPad = _forcePad || _savedMode === 'pad' || _autoNarrow;
+export const isMobile = _forcePad || _forceMobile || _savedMode === 'pad' || _autoNarrow
+  || (_savedMode !== 'pc' && (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || _isIPadOS));
 export const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || _isIPadOS;
 
-if (_forcePad) {
+if (isPad) {
   document.documentElement.classList.add('pad-mode');
 }
-if (isMobile && isIOS && !_forcePad) {
+if (isMobile && isIOS && !isPad) {
   document.documentElement.classList.add('mobile-ios');
+}
+
+/** 切换视图模式并重载页面 */
+export function setViewMode(mode) {
+  localStorage.setItem('ccv_viewMode', mode);
+  location.reload();
 }
