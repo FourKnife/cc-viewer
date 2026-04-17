@@ -7,16 +7,23 @@ const _ccvSkip = _ccvSkipArgs.includes(process.argv[2]);
 
 import './lib/proxy-env.js';
 import { appendFileSync, mkdirSync, readFileSync, statSync, renameSync, unlinkSync, existsSync, watchFile } from 'node:fs';
+import http from 'node:http';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { LOG_DIR } from './findcc.js';
-import { assembleStreamMessage, cleanupTempFiles, findRecentLog, isAnthropicApiPath, isMainAgentRequest, rotateLogFile } from './lib/interceptor-core.js';
+import { assembleStreamMessage, createStreamAssembler, cleanupTempFiles, findRecentLog, isAnthropicApiPath, isMainAgentRequest, rotateLogFile } from './lib/interceptor-core.js';
 
 
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Live-streaming 用的端口：由 server.js 在 listen 成功后通过 setLivePort 注入。
+// 不用 process.env.CCVIEWER_PORT 是为了避免主进程 env 污染被 child_process.spawn
+// 继承到 Bash 工具子进程 / MCP server / Electron tab-worker 等无关进程。
+let _livePort = null;
+export function setLivePort(port) { _livePort = port ? String(port) : null; }
 
 // 流式请求的实时状态（供 server.js SSE 推送）
 export const streamingState = { active: false, requestId: null, startTime: null, model: null, bytesReceived: 0, chunksReceived: 0 };
@@ -267,6 +274,40 @@ const CUSTOM_API_HOST = getBaseUrlHost();
 // 保存 viewer 模块引用
 let viewerModule = null;
 
+/**
+ * Fire-and-forget POST a streaming chunk to cc-viewer server.
+ * Non-blocking: returns immediately, errors silently ignored.
+ * Only active when _livePort has been set (via setLivePort, by server.js).
+ * @param {function(boolean)} [onDone] - optional callback: true=success, false=413 (payload too large)
+ */
+export function sendStreamChunk(entry, chunkSeq, onDone) {
+  const port = _livePort;
+  if (!port) return;
+  try {
+    const payload = JSON.stringify({ ...entry, _chunkSeq: chunkSeq });
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: Number(port),
+      path: '/api/stream-chunk',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        'x-cc-viewer-internal': '1',
+      },
+      timeout: 500,
+    }, (res) => {
+      // 413 = payload too large → notify caller to stop sending further chunks
+      if (onDone) onDone(res.statusCode !== 413);
+      res.resume(); // drain
+    });
+    req.on('error', () => { if (onDone) onDone(true); });  // network error: keep trying
+    req.on('timeout', () => { try { req.destroy(); } catch {} if (onDone) onDone(true); });
+    req.write(payload);
+    req.end();
+  } catch { if (onDone) onDone(true); }
+}
+
 export function setupInterceptor() {
   // 避免重复拦截
   if (globalThis._ccViewerInterceptorInstalled) {
@@ -471,10 +512,15 @@ export function setupInterceptor() {
     }
 
     // 在发起请求前先写入一条未完成的条目，让前端可以检测在途请求
+    // 例外：live-streaming 场景下，placeholder 由 sendStreamChunk 通过 HTTP 即时投递，
+    // 跳过磁盘预写可避免 log-watcher 500ms 后用空 placeholder 覆盖已显示的流式内容
     if (requestEntry) {
-      try {
-        appendFileSync(LOG_FILE, JSON.stringify(requestEntry) + '\n---\n');
-      } catch { }
+      const willLiveStream = !!_livePort && requestEntry.mainAgent && !_isTeammate;
+      if (!willLiveStream) {
+        try {
+          appendFileSync(LOG_FILE, JSON.stringify(requestEntry) + '\n---\n');
+        } catch { }
+      }
     }
 
     // 流式请求状态追踪（仅对 Claude API 流式请求）
@@ -557,6 +603,60 @@ export function setupInterceptor() {
           const decoder = new TextDecoder();
           let streamedContent = '';
 
+          // 实时流式：仅对 mainAgent 且 server live-port 已注入时启用
+          let liveStreamEnabled = !!_livePort && requestEntry.mainAgent && !_isTeammate;
+          const liveAssembler = liveStreamEnabled ? createStreamAssembler() : null;
+          let livePendingBuffer = '';
+          let liveChunkSeq = 0;
+          let liveLastFlushMs = 0;
+          let liveLastFlushBytes = 0;
+          let liveFlushInFlight = false;
+          let liveHasPendingSnapshot = false;
+          let liveFlushTimer = null;
+
+          // 非阻塞 flush：合并待发快照（latest-wins），单 in-flight。
+          // payload 只包含 server 实际消费的 4 字段（timestamp/url/content/model）+ _chunkSeq，
+          // 避免克隆完整 requestEntry（含 headers/messages/tools，每次 O(N) 序列化导致 O(N²) 累计）。
+          const liveFlush = () => {
+            if (!liveStreamEnabled || !liveAssembler || !liveAssembler.hasMessage()) return;
+            if (liveFlushInFlight) {
+              liveHasPendingSnapshot = true;
+              return;
+            }
+            liveFlushInFlight = true;
+            liveHasPendingSnapshot = false;
+            const snap = liveAssembler.snapshot();
+            const chunkEntry = {
+              timestamp: requestEntry.timestamp,
+              url: requestEntry.url,
+              response: { body: snap },
+              body: { model: requestEntry.body?.model },
+            };
+            sendStreamChunk(chunkEntry, ++liveChunkSeq, (ok) => {
+              // 413 → 禁用当次流式，后续全由最终 appendFileSync 交付
+              if (!ok) liveStreamEnabled = false;
+            });
+            // 短延迟后清标志，允许下一次发送；若中途有新快照等待，立即再发
+            if (liveFlushTimer) clearTimeout(liveFlushTimer);
+            liveFlushTimer = setTimeout(() => {
+              liveFlushTimer = null;
+              liveFlushInFlight = false;
+              if (liveHasPendingSnapshot && liveStreamEnabled) liveFlush();
+            }, 50);
+          };
+
+          // 首次：立即 POST 当前 inProgress 骨架（无 body），保证前端先看到占位条目。
+          // 传 onDone 回调熔断：若 skeleton 就触发 413（极少见但可能，例如 requestEntry 本身异常大），
+          // 立即禁用当次 live-stream，后续仅走最终 entry 落盘路径。
+          if (liveStreamEnabled) {
+            sendStreamChunk({
+              timestamp: requestEntry.timestamp,
+              url: requestEntry.url,
+              response: { body: null },
+              body: { model: requestEntry.body?.model },
+            }, 0, (ok) => { if (!ok) liveStreamEnabled = false; });
+          }
+
           const stream = new ReadableStream({
             async start(controller) {
               try {
@@ -623,6 +723,37 @@ export function setupInterceptor() {
                   const chunk = decoder.decode(value, { stream: true });
                   streamedContent += chunk;
                   controller.enqueue(value);
+
+                  // 实时流式：增量解析完整的 SSE events 并触发节流 flush
+                  if (liveAssembler && liveStreamEnabled) {
+                    livePendingBuffer += chunk;
+                    let sawBlockStop = false;
+                    let idx;
+                    while ((idx = livePendingBuffer.indexOf('\n\n')) !== -1) {
+                      const eventBlock = livePendingBuffer.slice(0, idx);
+                      livePendingBuffer = livePendingBuffer.slice(idx + 2);
+                      if (!eventBlock.trim()) continue;
+                      const lines = eventBlock.split('\n');
+                      const dataLine = lines.find(l => l.startsWith('data:'));
+                      if (!dataLine) continue;
+                      const jsonStr = dataLine.startsWith('data: ')
+                        ? dataLine.substring(6)
+                        : dataLine.substring(5);
+                      try {
+                        const ev = JSON.parse(jsonStr);
+                        liveAssembler.feed(ev);
+                        if (ev.type === 'content_block_stop') sawBlockStop = true;
+                      } catch {}
+                    }
+                    const now = Date.now();
+                    const overdue = (now - liveLastFlushMs) >= 100;
+                    const bigChunk = (streamedContent.length - liveLastFlushBytes) > 16384;
+                    if (sawBlockStop || overdue || bigChunk) {
+                      liveLastFlushMs = now;
+                      liveLastFlushBytes = streamedContent.length;
+                      liveFlush();
+                    }
+                  }
                 }
               } catch (err) {
                 resetStreamingState();

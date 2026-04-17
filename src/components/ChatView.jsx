@@ -290,6 +290,7 @@ class ChatView extends React.Component {
     return (
       nextProps.requests !== this.props.requests ||
       nextProps.mainAgentSessions !== this.props.mainAgentSessions ||
+      nextProps.streamingLatest !== this.props.streamingLatest ||
       nextProps.collapseToolResults !== this.props.collapseToolResults ||
       nextProps.expandThinking !== this.props.expandThinking ||
       nextProps.showFullToolContent !== this.props.showFullToolContent ||
@@ -343,6 +344,20 @@ class ChatView extends React.Component {
         const scroller = this._virtuosoScrollerEl;
         if (scroller) scroller.scrollTop = scroller.scrollHeight;
         requestAnimationFrame(() => { this._stickyScrollLock = false; });
+      });
+    }
+    // 同样：Live streaming overlay 变化时也要重新吸底。
+    // Footer / container 高度由 streamingLiveItem 递增驱动，Virtuoso ResizeObserver
+    // 与普通浏览器 layout 都是异步的，单 rAF 可能拿到旧 scrollHeight，用双 rAF 兜底。
+    // 桌面端 (useVirtuoso=false) 走 containerRef，移动端 (useVirtuoso=true) 走 Virtuoso scroller。
+    if (prevProps.streamingLatest !== this.props.streamingLatest && this.state.stickyBottom) {
+      this._stickyScrollLock = true;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const scroller = useVirtuoso ? this._virtuosoScrollerEl : this.containerRef.current;
+          if (scroller) scroller.scrollTop = scroller.scrollHeight;
+          this._stickyScrollLock = false;
+        });
       });
     }
     // Streaming border fade-out: when isStreaming goes from true to false, trigger fade
@@ -2765,7 +2780,43 @@ class ChatView extends React.Component {
     }
 
     const _isFiltering = _selSize > 0 && _selSize < collectedRoles.length;
-    const filteredLastResponseItems = lastResponseItems && _isFiltering && !this.state.roleFilterSelected.has('assistant') ? null : lastResponseItems;
+    let filteredLastResponseItems = lastResponseItems && _isFiltering && !this.state.roleFilterSelected.has('assistant') ? null : lastResponseItems;
+
+    // Live streaming overlay: 实时打字机效果，独立于 mainAgentSessions / dedup 路径
+    // 仅显示 text + thinking blocks（tool_use 由最终 entry 通过 Last Response 渲染）。
+    // roleFilter 反选 assistant 时跳过 overlay 以遵从过滤语义（否则一边过滤一边仍实时输出自相矛盾）。
+    let streamingLiveItem = null;
+    const _assistantFilteredOut = _isFiltering && !this.state.roleFilterSelected.has('assistant');
+    if (this.props.streamingLatest && !_assistantFilteredOut) {
+      const sl = this.props.streamingLatest;
+      const liveBlocks = (sl.content || []).filter(b =>
+        b.type === 'text' || b.type === 'thinking'
+      );
+      const hasVisibleContent = liveBlocks.some(b => {
+        if (b.type === 'text') return typeof b.text === 'string' && b.text.trim().length > 0;
+        if (b.type === 'thinking') return typeof b.thinking === 'string' && b.thinking.trim().length > 0;
+        return false;
+      });
+      if (hasVisibleContent) {
+        streamingLiveItem = (
+          <ChatMessage
+            key="streaming-live-msg"
+            role="assistant"
+            content={liveBlocks}
+            timestamp={sl.timestamp}
+            collapseToolResults={this.props.collapseToolResults}
+            expandThinking={this.props.expandThinking}
+            showFullToolContent={this.props.showFullToolContent}
+            showTrailingCursor={true}
+            toolResultMap={EMPTY_MAP}
+          />
+        );
+        // 方案 C：流式 overlay 活跃时隐藏 Last Response（上一轮），让 overlay 独占其视觉位置，
+        // 避免上下双区叠加造成纵向画面弹动。流式结束 streamingLatest 原子清除后，
+        // Last Response 被新 entry 接管显示本轮完整内容，过渡自然。
+        filteredLastResponseItems = null;
+      }
+    }
 
     const targetIdx = this._scrollTargetIdx;
     const { highlightTs, highlightFading, highlightVisibleIdx } = this.state;
@@ -2830,7 +2881,7 @@ class ChatView extends React.Component {
         {useVirtuoso ? (
           this._virtuosoHeader = loadMoreBtn,
           this._virtuosoFooter = <>
-            <div className={`${styles.streamingSpinnerWrap}${!this.props.isStreaming ? ' ' + styles.streamingSpinnerHidden : ''}`}>
+            <div className={`${styles.streamingSpinnerWrap}${(!this.props.isStreaming || streamingLiveItem) ? ' ' + styles.streamingSpinnerHidden : ''}`}>
               <svg width="20" height="20" viewBox="0 0 20 20">
                 <defs>
                   <linearGradient id="ccv-spinnerGrad" x1="0" y1="0" x2="1" y2="1">
@@ -2846,7 +2897,11 @@ class ChatView extends React.Component {
                 </circle>
               </svg>
             </div>
-          {filteredLastResponseItems}{pendingBubble}</>,
+          {filteredLastResponseItems}{pendingBubble}{streamingLiveItem && (
+            !filteredLastResponseItems && targetIdx != null && targetIdx >= visible.length
+              ? <div key="stream-resp-anchor" ref={this._scrollTargetRef}>{streamingLiveItem}</div>
+              : streamingLiveItem
+          )}</>,
           <Virtuoso
             ref={this.virtuosoRef}
             className={styles.mobileVirtuoso}
@@ -2898,7 +2953,7 @@ class ChatView extends React.Component {
                 ? <div key={item.key + '-anchor'} ref={this._scrollTargetRef}>{el}</div>
                 : el;
             })}
-            <div className={`${styles.streamingSpinnerWrap}${!this.props.isStreaming ? ' ' + styles.streamingSpinnerHidden : ''}`}>
+            <div className={`${styles.streamingSpinnerWrap}${(!this.props.isStreaming || streamingLiveItem) ? ' ' + styles.streamingSpinnerHidden : ''}`}>
               <svg width="20" height="20" viewBox="0 0 20 20">
                 <defs>
                   <linearGradient id="ccv-spinnerGrad-desktop" x1="0" y1="0" x2="1" y2="1">
@@ -2920,6 +2975,11 @@ class ChatView extends React.Component {
                 : filteredLastResponseItems
             )}
             {pendingBubble}
+            {streamingLiveItem && (
+              !filteredLastResponseItems && targetIdx != null && targetIdx >= visible.length
+                ? <div key="stream-resp-anchor" ref={this._scrollTargetRef}>{streamingLiveItem}</div>
+                : streamingLiveItem
+            )}
           </div>
         )}
         {stickyBtn}

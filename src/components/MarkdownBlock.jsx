@@ -7,7 +7,7 @@ import { isMobile, isPad } from '../env';
 import { t } from '../i18n';
 import styles from './MarkdownBlock.module.css';
 
-function MarkdownBlock({ text, className, style }) {
+function MarkdownBlock({ text, className, style, trailingCursor }) {
   const [hovered, setHovered] = useState(false);
   const [saveMenuOpen, setSaveMenuOpen] = useState(false);
   const timerRef = useRef(null);
@@ -130,7 +130,7 @@ function MarkdownBlock({ text, className, style }) {
       onMouseLeave={(isMobile && !isPad) ? undefined : handleMouseLeave}
     >
       <div
-        className={`chat-md ${className || ''}`}
+        className={`chat-md ${className || ''} ${trailingCursor ? styles.streamingTail : ''}`}
         style={style}
         dangerouslySetInnerHTML={{ __html: html }}
       />

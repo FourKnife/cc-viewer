@@ -76,6 +76,7 @@ class AppBase extends React.Component {
       pendingUploadPaths: [],
       contextWindow: null,
       isStreaming: false,
+      streamingLatest: null, // { timestamp, url, content, model } — Live typewriter overlay for latest assistant message
       hasMoreHistory: false,
       loadingMore: false,
       sessionIndex: [],
@@ -395,6 +396,8 @@ class AppBase extends React.Component {
   };
 
   _reconnectSSE() {
+    // SSE 连接真死（心跳超时 / 重试上限），清除流式 overlay 避免卡死
+    if (this.state.streamingLatest) this.setState({ streamingLatest: null });
     if (this._sseReconnectCount >= 10) {
       console.error('SSE reconnect limit reached');
       return;
@@ -541,6 +544,32 @@ class AppBase extends React.Component {
       // 每次收到任何 SSE 事件（包括心跳注释帧触发的隐式活动）都重置超时
       this.eventSource.onmessage = (event) => { this._resetSSETimeout(); this.handleEventMessage(event); };
       this.eventSource.onopen = () => { this._resetSSETimeout(); };
+      // Live streaming overlay: 直接更新 streamingLatest state（不走 reconstructor / dedup）
+      this.eventSource.addEventListener('stream-progress', (event) => {
+        this._resetSSETimeout();
+        try {
+          const data = JSON.parse(event.data);
+          // 防 stale：若 requests 中已有同 timestamp 的完成条目，说明最终 entry 已到达，
+          // 此 chunk 是乱序/延迟到达的旧包，直接丢弃以免复活已清除的 overlay
+          const existingFinal = this.state.requests.find(r =>
+            r && r.timestamp === data.timestamp && !r.inProgress
+          );
+          if (existingFinal) return;
+          // streamingLatest 生命周期只由两种信号终结（不再用短 timeout 兜底）：
+          // 1) 正常：最终 entry 到达时 _flushPendingEntries 原子清除
+          // 2) 异常：SSE 连接真死 (_reconnectSSE)
+          // 避免长 thinking / 网络抖动 / 切 tab 等场景误杀 overlay。
+          this.setState({
+            streamingLatest: {
+              timestamp: data.timestamp,
+              url: data.url,
+              content: data.content || [],
+              model: data.model,
+              updatedAt: Date.now(),
+            }
+          });
+        } catch { }
+      });
       this.eventSource.addEventListener('resume_prompt', (event) => {
         this._resetSSETimeout();
         try {
@@ -753,6 +782,7 @@ class AppBase extends React.Component {
             requests: [],
             mainAgentSessions: [],
             selectedIndex: null,
+            streamingLatest: null,
           });
           if (isMobile) clearEntries();
         } catch {}
@@ -766,6 +796,7 @@ class AppBase extends React.Component {
           mainAgentSessions: [],
           projectName: '',
           selectedIndex: null,
+          streamingLatest: null,
         });
       });
       this.eventSource.addEventListener('context_window', (event) => {
@@ -818,7 +849,12 @@ class AppBase extends React.Component {
           }
         } catch (err) { console.error('Failed to parse streaming_status:', err); }
       });
-      this.eventSource.onerror = () => console.error('SSE连接错误');
+      this.eventSource.onerror = () => {
+        console.error('SSE连接错误');
+        // 不清 streamingLatest：浏览器会自动 3s 重连，新 chunk 到达会覆盖 state；
+        // 若彻底断连，45s heartbeat 超时触发 _reconnectSSE，那里会清 overlay；
+        // 若流式已完成，最终 entry 的原子清除会收走 overlay。
+      };
     } catch (error) {
       console.error('EventSource初始化失败:', error);
       this.setState({ fileLoading: false, fileLoadingCount: 0 });
@@ -910,6 +946,7 @@ class AppBase extends React.Component {
       let cacheExpireAt = prev.cacheExpireAt;
       let cacheType = prev.cacheType;
       let mainAgentSessions = prev.mainAgentSessions;
+      let shouldClearStreaming = false;  // 检测到最终 entry 时原子清除 Live overlay
 
       // P0 perf: lazy init 增量剪枝器
       if (!this._sseSlimmer) {
@@ -942,6 +979,12 @@ class AppBase extends React.Component {
           if (kvCached && (kvCached.system.length > 0 || kvCached.messages.length > 0 || kvCached.tools.length > 0)) {
             this._lastKvCacheContent = kvCached;
           }
+        }
+
+        // Live overlay 原子清除：最终 entry（非 inProgress）到达且 timestamp 匹配 → 同 setState 清除 overlay
+        if (!entry.inProgress && isMainAgent(entry) && prev.streamingLatest
+            && prev.streamingLatest.timestamp === entry.timestamp) {
+          shouldClearStreaming = true;
         }
 
         // 记录 mainAgent 缓存信息
@@ -1023,7 +1066,10 @@ class AppBase extends React.Component {
         }, 200);
       }
 
-      return { requests, cacheExpireAt, cacheType, mainAgentSessions };
+      return {
+        requests, cacheExpireAt, cacheType, mainAgentSessions,
+        ...(shouldClearStreaming && { streamingLatest: null }),
+      };
     }, () => {
       // 移动端：防抖 5s 批量写入缓存
       if (isMobile && this.state.projectName) {
@@ -1173,6 +1219,7 @@ class AppBase extends React.Component {
           mainAgentSessions: [],
           projectName: '',
           selectedIndex: null,
+          streamingLatest: null,
         });
       })
       .catch(() => {});

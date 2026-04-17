@@ -80,3 +80,31 @@
   background: var(--bg-surface);
   color: var(--text-primary);
 }
+
+/* 流式光标：贴在流式 overlay 最后一个 MarkdownBlock 的最深叶子元素末尾。
+   多选择器覆盖常见 markdown 末尾结构（段落 / 列表末 li / 代码块末行 /
+   引用 / 表格最后一个单元格）。:not(:empty) 过滤 marked 流式半途产生的空 <p></p>，
+   避免光标飘到空行。深嵌套列表（<ul><li><ul><li>...）通过 li:last-child ul:last-child
+   li:last-child 递归命中最深一层。 */
+.streamingTail > :not(ol):not(ul):not(pre):not(blockquote):not(table):not(:empty):last-child::after,
+.streamingTail > ol:last-child > li:last-child::after,
+.streamingTail > ul:last-child > li:last-child::after,
+.streamingTail > ol:last-child > li:last-child > ol:last-child > li:last-child::after,
+.streamingTail > ul:last-child > li:last-child > ul:last-child > li:last-child::after,
+.streamingTail > pre:last-child code::after,
+.streamingTail > blockquote:last-child > :not(:empty):last-child::after,
+.streamingTail > table:last-child tr:last-child td:last-child::after {
+  content: '▌';
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--color-primary, #0969DA);
+  animation: cursorBlinkInline 1s step-end infinite;
+  user-select: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  vertical-align: baseline;
+}
+
+@keyframes cursorBlinkInline {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}

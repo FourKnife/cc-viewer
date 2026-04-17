@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.161 (2026-04-17)
+
+- Feat: SSE live typewriter effect for latest assistant message in PTY mode — `lib/interceptor-core.js` exports `createStreamAssembler` for incremental SSE parsing; `interceptor.js` adds throttled HTTP POST (100ms / 16KB / content_block_stop) to new `/api/stream-chunk` endpoint; `server.js` broadcasts via dedicated `stream-progress` named SSE event; `AppBase.jsx` adds `streamingLatest` state; `ChatView.jsx` renders live overlay that occupies Last Response position (scheme C) with pendingBubble above it; mainAgent only, Teammate / sub-agent / SDK mode unchanged
+- Feat: inline streaming cursor `▌` — `MarkdownBlock.jsx` accepts `trailingCursor` prop; CSS `::after` multi-selector covers last leaf element of paragraph / list / code block / blockquote / table in `.streamingTail` container
+- Feat: streaming thinking auto-collapse — `ChatMessage.jsx` switches `Collapse` to controlled `activeKey` during streaming so the panel collapses with ~250ms antd transition when the first text token arrives, eliminating the height jump when overlay hands off to finalized Last Response
+- Feat: SSE overlay sticks to bottom during streaming — `ChatView.jsx` double-rAF compensates for Virtuoso ResizeObserver async measurement; works on all layouts (desktop / iOS / iPad non-Virtuoso)
+- Feat: loading spinner auto-hides while SSE overlay is active to avoid duplicate "in-progress" indicators
+- Fix: SSE overlay was disappearing mid-stream under long thinking pauses / network jitter / tab switches — removed aggressive 10s timeout and `onerror` immediate clear; streamingLatest lifecycle now ends only via atomic clear on final entry arrival (normal) or `_reconnectSSE` (connection death)
+- Fix: `process.env.CCVIEWER_PORT` no longer polluted on main process — `setLivePort(port)` module-level setter in `interceptor.js` replaces env write, preventing leak to Bash / MCP / Electron tab-worker child processes
+- Fix: `/api/stream-chunk` now enforces loopback-only + `x-cc-viewer-internal: 1` header to prevent same-machine injection into SSE broadcast
+- Fix: stream-chunk POST payload slimmed to 4 fields (`timestamp` / `url` / `content` / `model`) instead of cloning full requestEntry, eliminating O(N²) accumulated copy cost on long responses
+- Fix: skeleton POST first frame now has `onDone` callback for 413 circuit-breaking
+- Fix: roleFilter with assistant deselected now also skips streamingLiveItem to honor filter semantics
+- Fix: scrollToTimestamp targeting Last Response during streaming now attaches `_scrollTargetRef` to streamingLiveItem as fallback
+- Fix: `workspace_stopped` / `project_selected` / `handleReturnToWorkspaces` now clear streamingLatest to prevent zombie overlay on project switch
+
 ## 1.6.160 (2026-04-16)
 
 - Fix: permission hook concurrency — `pendingPermHook` single variable → `pendingPermHooks` Map, supports concurrent sub-agent/teammate approval requests without superseding

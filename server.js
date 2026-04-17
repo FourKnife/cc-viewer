@@ -34,7 +34,7 @@ function execWithStdin(cmd, args, input, options) {
     child.stdin.end();
   });
 }
-import { LOG_FILE, _initPromise, _resumeState, resolveResumeChoice, _projectName, _logDir, _cachedApiKey, _cachedAuthHeader, _cachedHaikuModel, initForWorkspace, resetWorkspace, streamingState, resetStreamingState, _loadProxyProfile, PROFILE_PATH, _defaultConfig } from './interceptor.js';
+import { LOG_FILE, _initPromise, _resumeState, resolveResumeChoice, _projectName, _logDir, _cachedApiKey, _cachedAuthHeader, _cachedHaikuModel, initForWorkspace, resetWorkspace, streamingState, resetStreamingState, _loadProxyProfile, PROFILE_PATH, _defaultConfig, setLivePort } from './interceptor.js';
 import { LOG_DIR, setLogDir } from './findcc.js';
 import { t, detectLanguage } from './i18n.js';
 import { checkAndUpdate } from './lib/updater.js';
@@ -121,6 +121,10 @@ let pendingAskHook = null; // { questions, res, timer, createdAt }
 // Map supports concurrent sub-agent/teammate requests (keyed by request id)
 const pendingPermHooks = new Map(); // Map<id, { toolName, input, res, timer, createdAt }>
 const PERM_HOOK_MAP_MAX = 50;
+
+// Live stream chunk sequence tracking (per request key) — prevents out-of-order broadcasts
+const _liveStreamLastSeq = new Map(); // Map<`${timestamp}|${url}`, lastSeq>
+
 
 // Editor session state (for $EDITOR intercept)
 const editorSessions = new Map(); // sessionId → { filePath, done, createdAt }
@@ -2002,6 +2006,60 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // 流式 chunk 接收端点：interceptor 在 SSE 流过程中推送的 partial entry
+  // 仅广播，不落盘。前端按 timestamp|url 自动与最终 entry 去重覆盖。
+  // 鉴权：server 绑 0.0.0.0 允许同机任意进程访问，必须校验 remote 必须是 loopback
+  // 且请求带 x-cc-viewer-internal: 1 header，防止同机其他进程伪造 SSE 内容注入广播。
+  if (url === '/api/stream-chunk' && method === 'POST') {
+    const remote = req.socket.remoteAddress || '';
+    const isLoopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+    const internalHeader = req.headers['x-cc-viewer-internal'] === '1';
+    if (!isLoopback || !internalHeader) {
+      try { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Forbidden' })); } catch {}
+      return;
+    }
+    let body = '';
+    let aborted = false;
+    req.on('data', (chunk) => {
+      if (aborted) return;
+      body += chunk;
+      if (body.length > 8 * 1024 * 1024) {
+        aborted = true;
+        try { res.writeHead(413, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Payload too large' })); } catch {}
+      }
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      try {
+        const entry = JSON.parse(body);
+        const key = `${entry.timestamp}|${entry.url}`;
+        const seq = typeof entry._chunkSeq === 'number' ? entry._chunkSeq : 0;
+        const lastSeq = _liveStreamLastSeq.get(key);
+        if (lastSeq !== undefined && seq < lastSeq) {
+          // 乱序到达的旧 chunk 丢弃
+          try { res.writeHead(204); res.end(); } catch {}
+          return;
+        }
+        _liveStreamLastSeq.set(key, seq);
+        // 清理 seq 记录：超过 200 条时 FIFO 驱逐最早的 100 条（Map 保持插入顺序）
+        if (_liveStreamLastSeq.size > 200) {
+          const keys = Array.from(_liveStreamLastSeq.keys()).slice(0, 100);
+          for (const k of keys) _liveStreamLastSeq.delete(k);
+        }
+        // 用 named event 'stream-progress' 避免混入 data: 流与 dedup 冲突
+        // 精简 payload：前端只需要 timestamp/url/content 渲染 Live overlay
+        sendEventToClients(clients, 'stream-progress', {
+          timestamp: entry.timestamp,
+          url: entry.url,
+          content: entry.response?.body?.content || [],
+          model: entry.body?.model,
+        });
+      } catch {}
+      try { res.writeHead(204); res.end(); } catch {}
+    });
+    return;
+  }
+
   // 读取文件内容 API
   if (url === '/api/file-content' && method === 'GET') {
     const reqPath = parsedUrl.searchParams.get('path');
@@ -2789,6 +2847,10 @@ export async function startViewer() {
         currentServer.listen(port, HOST, async () => {
           server = currentServer;
           actualPort = port;
+          // interceptor.js runs in this same process (via proxy.js → setupInterceptor).
+          // Inject live-port via module-level setter instead of process.env to avoid
+          // polluting env of child_process.spawn descendants (Bash tools / MCP / Electron tabs).
+          setLivePort(port);
           const url = `${serverProtocol}://127.0.0.1:${port}`;
           if (!isCliMode) {
             console.error(t('server.started'));
@@ -3174,6 +3236,9 @@ async function _doStop() {
     _streamingStatusTimer = null;
   }
   resetStreamingState();
+  // 清 interceptor 的 live-port，避免 stop/start 循环（Electron tab 切换 / 测试）间隙内
+  // 早期请求向已关闭的端口 POST 丢包。新 startViewer 的 listen 回调会再次 setLivePort
+  setLivePort(null);
   try { unwatchFile(PROFILE_PATH); } catch {} // 清理 interceptor 的 StatWatcher
 }
 

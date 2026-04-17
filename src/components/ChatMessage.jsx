@@ -62,6 +62,7 @@ class ChatMessage extends React.Component {
     return p.role !== n.role || p.content !== n.content || p.text !== n.text ||
       p.timestamp !== n.timestamp || p.highlight !== n.highlight ||
       p.collapseToolResults !== n.collapseToolResults || p.expandThinking !== n.expandThinking || p.showFullToolContent !== n.showFullToolContent ||
+      p.showTrailingCursor !== n.showTrailingCursor ||
       p.showThinkingSummaries !== n.showThinkingSummaries ||
       p.toolResultMap !== n.toolResultMap || p.readContentMap !== n.readContentMap ||
       p.editSnapshotMap !== n.editSnapshotMap || p.askAnswerMap !== n.askAnswerMap ||
@@ -151,7 +152,17 @@ class ChatMessage extends React.Component {
     return userProfile?.name || 'User';
   }
 
-  renderSegments(segments) {
+  renderSegments(segments, trailingCursor = false) {
+    // 光标只给"最后一个可见 markdown segment"，跳过末尾的 system-tag
+    let lastMdIdx = -1;
+    if (trailingCursor) {
+      for (let j = segments.length - 1; j >= 0; j--) {
+        if (segments[j].type !== 'system-tag' && segments[j].content && segments[j].content.trim()) {
+          lastMdIdx = j;
+          break;
+        }
+      }
+    }
     return segments.map((seg, i) => {
       if (seg.type === 'system-tag') {
         return (
@@ -168,7 +179,7 @@ class ChatMessage extends React.Component {
           />
         );
       }
-      return <MarkdownBlock key={i} text={seg.content} />;
+      return <MarkdownBlock key={i} text={seg.content} trailingCursor={i === lastMdIdx} />;
     });
   }
 
@@ -759,17 +770,39 @@ class ChatMessage extends React.Component {
     const textBlocks = content.filter(b => b.type === 'text');
     const toolUseBlocks = content.filter(b => b.type === 'tool_use');
 
+    // 流式光标分发：有 text 时贴在最后一段 text 的末尾；否则贴在最后一个非空 thinking 末尾
+    const showTC = !!this.props.showTrailingCursor;
+    const hasTextWithContent = textBlocks.some(b => b.text && b.text.trim());
+    const lastThinkingIdxWithContent = showTC && !hasTextWithContent
+      ? thinkingBlocks.reduce((acc, b, i) => (b.thinking && b.thinking.trim() ? i : acc), -1)
+      : -1;
+    const lastTextIdxWithContent = showTC && hasTextWithContent
+      ? textBlocks.reduce((acc, b, i) => (b.text && b.text.trim() ? i : acc), -1)
+      : -1;
+    // 流式 thinking 展开策略：text 未开始则展开让用户看推理；text 开始后按用户偏好（通常折叠）。
+    // 走 antd Collapse controlled 模式（activeKey）+ 稳定 React key，activeKey 变化触发
+    // 内置 height transition 动画，避免流式结束切到正式 entry 时的瞬时高度跳变。
+    const streamThinkingExpanded = !hasTextWithContent || !!this.props.expandThinking;
+
     let innerContent = [];
 
     thinkingBlocks.forEach((tb, i) => {
       const thinkingText = tb.thinking || '';
       const isEmpty = !thinkingText.trim();
+      const isCursorTarget = i === lastThinkingIdxWithContent;
+      // 流式走 controlled activeKey（稳定 key + 变化 activeKey 触发 antd 高度 transition，
+      // 动画在流式内部 text 到达时跑完）。非流式走 uncontrolled defaultActiveKey，且 key 包含
+      // e/c 标识——用户切换 expandThinking 全局偏好时通过 key 变化重挂载让 Collapse 响应新 prop
+      // （defaultActiveKey 本身仅初始生效）。流式→正式 entry 切换期间父 ChatMessage 实例必然
+      // 重挂（不同 key），Collapse 跟随重挂载；高度跳变靠流式结束前已折叠 + 正式默认折叠实现。
+      const collapseProps = showTC
+        ? { key: `think-stream-${i}`, activeKey: streamThinkingExpanded ? ['1'] : [] }
+        : { key: `think-${i}-${this.props.expandThinking ? 'e' : 'c'}`, defaultActiveKey: this.props.expandThinking ? ['1'] : [] };
       innerContent.push(
         <Collapse
-          key={`think-${i}-${this.props.expandThinking ? 'e' : 'c'}`}
+          {...collapseProps}
           ghost
           size="small"
-          defaultActiveKey={this.props.expandThinking ? ['1'] : []}
           items={[{
             key: '1',
             label: <Text type="secondary" className={styles.thinkingLabel}>{t('ui.thinking')}</Text>,
@@ -803,7 +836,7 @@ class ChatMessage extends React.Component {
                 )}
               </div>
             ) : (
-              <MarkdownBlock text={thinkingText} />
+              <MarkdownBlock text={thinkingText} trailingCursor={isCursorTarget} />
             ),
           }]}
           className={styles.collapseMargin}
@@ -814,8 +847,9 @@ class ChatMessage extends React.Component {
     textBlocks.forEach((tb, i) => {
       if (tb.text) {
         const { segments } = renderAssistantText(tb.text);
+        const isCursorTarget = i === lastTextIdxWithContent;
         innerContent.push(
-          <div key={`text-${i}`} className="chat-boxer">{this.renderSegments(segments)}</div>
+          <div key={`text-${i}`} className="chat-boxer">{this.renderSegments(segments, isCursorTarget)}</div>
         );
       }
     });

@@ -516,6 +516,7 @@ class Mobile extends AppBase {
                   <ChatView
                     requests={filteredRequests}
                     mainAgentSessions={mainAgentSessions}
+                    streamingLatest={this.state.streamingLatest}
                     userProfile={this.state.userProfile}
                     collapseToolResults={this.state.collapseToolResults}
                     expandThinking={this.state.expandThinking}

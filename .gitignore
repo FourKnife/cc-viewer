@@ -3,6 +3,7 @@ dist
 electron-dist
 .claude/setting.local.json
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 .idea/
 .DS_Store
 .omc/

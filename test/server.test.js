@@ -489,4 +489,132 @@ describe('server API endpoints', { concurrency: false }, () => {
     const data = res.json();
     assert.equal(data.ok, true);
   });
+
+  // --- /api/stream-chunk 鉴权与基础接收 ---
+  function streamChunkRequest(port, path, { method = 'POST', body = null, headers = {} } = {}) {
+    return new Promise((resolve, reject) => {
+      const req = request({
+        hostname: '127.0.0.1',
+        port,
+        path,
+        method,
+        headers: { 'Content-Type': 'application/json', ...headers },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => { resolve({ status: res.statusCode, body: data }); });
+      });
+      req.on('error', reject);
+      if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+      req.end();
+    });
+  }
+
+  it('POST /api/stream-chunk without x-cc-viewer-internal header returns 403', async () => {
+    const res = await streamChunkRequest(port, '/api/stream-chunk', {
+      body: { timestamp: 't1', url: 'u1', _chunkSeq: 1, response: { body: { content: [] } } },
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it('POST /api/stream-chunk with internal header returns 204', async () => {
+    const res = await streamChunkRequest(port, '/api/stream-chunk', {
+      body: { timestamp: 't1', url: 'u1', _chunkSeq: 1, response: { body: { content: [] } } },
+      headers: { 'x-cc-viewer-internal': '1' },
+    });
+    assert.equal(res.status, 204);
+  });
+
+  it('POST /api/stream-chunk drops out-of-order (smaller seq) chunks silently', async () => {
+    // First chunk seq=5
+    await streamChunkRequest(port, '/api/stream-chunk', {
+      body: { timestamp: 'ts-ooo', url: 'u-ooo', _chunkSeq: 5, response: { body: { content: [] } } },
+      headers: { 'x-cc-viewer-internal': '1' },
+    });
+    // Smaller seq=3 should be dropped (still returns 204, but no broadcast)
+    const res = await streamChunkRequest(port, '/api/stream-chunk', {
+      body: { timestamp: 'ts-ooo', url: 'u-ooo', _chunkSeq: 3, response: { body: { content: [] } } },
+      headers: { 'x-cc-viewer-internal': '1' },
+    });
+    assert.equal(res.status, 204);
+  });
+
+  it('POST /api/stream-chunk rejects payload > 8MB with 413', async () => {
+    const huge = 'x'.repeat(9 * 1024 * 1024);
+    const res = await streamChunkRequest(port, '/api/stream-chunk', {
+      body: { timestamp: 't', url: 'u', _chunkSeq: 1, response: { body: { content: [{ type: 'text', text: huge }] } } },
+      headers: { 'x-cc-viewer-internal': '1' },
+    });
+    assert.equal(res.status, 413);
+  });
+
+  it('POST /api/stream-chunk accepts monotonically increasing seq without drops', async () => {
+    // happy path: seq 10, 11, 12 for same key should all 204 (no drop)
+    const key = { timestamp: 'ts-inc', url: 'u-inc' };
+    for (const seq of [10, 11, 12]) {
+      const res = await streamChunkRequest(port, '/api/stream-chunk', {
+        body: { ...key, _chunkSeq: seq, response: { body: { content: [{ type: 'text', text: 's' + seq }] } } },
+        headers: { 'x-cc-viewer-internal': '1' },
+      });
+      assert.equal(res.status, 204, `seq=${seq} should not be dropped`);
+    }
+  });
+
+  it('POST /api/stream-chunk broadcasts stream-progress SSE event with slimmed payload', async () => {
+    // Subscribe to /events, then POST a chunk, assert the SSE event arrives with the 4-field shape.
+    const received = [];
+    const events = await new Promise((resolve, reject) => {
+      const req = request({
+        hostname: '127.0.0.1',
+        port,
+        path: '/events',
+        method: 'GET',
+        headers: { 'Accept': 'text/event-stream' },
+      }, (res) => {
+        let buf = '';
+        res.on('data', (chunk) => {
+          buf += chunk.toString();
+          // parse complete SSE events separated by \n\n
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) !== -1) {
+            const block = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const lines = block.split('\n');
+            const eventLine = lines.find(l => l.startsWith('event:'));
+            const dataLine = lines.find(l => l.startsWith('data:'));
+            if (eventLine && dataLine) {
+              const eventName = eventLine.slice(6).trim();
+              const dataStr = dataLine.startsWith('data: ') ? dataLine.slice(6) : dataLine.slice(5);
+              try { received.push({ event: eventName, data: JSON.parse(dataStr) }); } catch {}
+              if (eventName === 'stream-progress') {
+                req.destroy();
+                resolve(received);
+                return;
+              }
+            }
+          }
+        });
+        res.on('error', () => resolve(received));
+      });
+      req.on('error', () => resolve(received));
+      req.end();
+      // Give SSE stream a moment to establish, then POST chunk
+      setTimeout(() => {
+        streamChunkRequest(port, '/api/stream-chunk', {
+          body: { timestamp: 'broadcast-ts', url: 'broadcast-url', _chunkSeq: 1,
+                  response: { body: { content: [{ type: 'text', text: 'hello' }] } },
+                  body: { model: 'claude-test' } },
+          headers: { 'x-cc-viewer-internal': '1' },
+        }).catch(() => {});
+      }, 100);
+      setTimeout(() => { req.destroy(); resolve(received); }, 2000);
+    });
+    const sp = events.find(e => e.event === 'stream-progress');
+    assert.ok(sp, 'should receive stream-progress event');
+    assert.equal(sp.data.timestamp, 'broadcast-ts');
+    assert.equal(sp.data.url, 'broadcast-url');
+    assert.deepEqual(sp.data.content, [{ type: 'text', text: 'hello' }]);
+    // model field present (may be undefined if interceptor sent nothing, but here we sent it)
+    assert.ok('content' in sp.data, 'content field present');
+  });
 });
