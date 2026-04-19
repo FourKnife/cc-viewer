@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { isImageFile } from '../utils/commandValidator';
+import { fetchAllRepos } from '../utils/gitApi';
 import FullFileDiffView from './FullFileDiffView';
+import ImageLightbox from './ImageLightbox';
 import styles from './MobileGitDiff.module.css';
 
 const STATUS_COLORS = {
@@ -58,7 +61,7 @@ function buildTree(changes) {
   return root;
 }
 
-function TreeDir({ name, node, depth, selectedFile, onFileClick }) {
+function TreeDir({ name, node, depth, selectedFile, selectedRepo, repoPath, onFileClick }) {
   const dirNames = Object.keys(node.dirs).sort();
   const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
   return (
@@ -75,14 +78,14 @@ function TreeDir({ name, node, depth, selectedFile, onFileClick }) {
         </div>
       )}
       {dirNames.map(dir => (
-        <TreeDir key={dir} name={dir} node={node.dirs[dir]} depth={name ? depth + 1 : depth} selectedFile={selectedFile} onFileClick={onFileClick} />
+        <TreeDir key={dir} name={dir} node={node.dirs[dir]} depth={name ? depth + 1 : depth} selectedFile={selectedFile} selectedRepo={selectedRepo} repoPath={repoPath} onFileClick={onFileClick} />
       ))}
       {files.map(file => (
         <div
           key={file.fullPath}
-          className={`${styles.changeItem} ${selectedFile === file.fullPath ? styles.changeItemActive : ''}`}
+          className={`${styles.changeItem} ${selectedFile === file.fullPath && selectedRepo === repoPath ? styles.changeItemActive : ''}`}
           style={{ paddingLeft: 8 + (name ? depth + 1 : depth) * 16 }}
-          onClick={() => onFileClick && onFileClick(file.fullPath)}
+          onClick={() => onFileClick && onFileClick(repoPath, file.fullPath)}
         >
           <span className={styles.icon}>{getFileIcon(file.name)}</span>
           <span className={styles.fileName}>{file.name}</span>
@@ -95,14 +98,17 @@ function TreeDir({ name, node, depth, selectedFile, onFileClick }) {
   );
 }
 
-export default function MobileGitDiff({ visible }) {
-  const [changes, setChanges] = useState(null);
+export default function MobileGitDiff({ visible, onClose }) {
+  const [repos, setRepos] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null); // string
+  const [selectedRepo, setSelectedRepo] = useState(null); // string
+  const [collapsedRepos, setCollapsedRepos] = useState(new Set());
   const [diffData, setDiffData] = useState(null);
   const [diffError, setDiffError] = useState(null);
   const [diffLoading, setDiffLoading] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -110,11 +116,10 @@ export default function MobileGitDiff({ visible }) {
     if (!visible) return;
     setLoading(true);
     setError(null);
-    fetch(apiUrl('/api/git-status'))
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => {
+    fetchAllRepos()
+      .then(results => {
         if (mounted.current) {
-          setChanges(data.changes || []);
+          setRepos(results);
           setLoading(false);
         }
       })
@@ -128,7 +133,7 @@ export default function MobileGitDiff({ visible }) {
   }, [visible]);
 
   useEffect(() => {
-    if (!selectedFile) {
+    if (!selectedFile || !selectedRepo) {
       setDiffData(null);
       setDiffError(null);
       return;
@@ -137,7 +142,8 @@ export default function MobileGitDiff({ visible }) {
     setDiffData(null);
     setDiffError(null);
 
-    fetch(apiUrl(`/api/git-diff?files=${encodeURIComponent(selectedFile)}`))
+    const repoParam = selectedRepo && selectedRepo !== '.' ? `&repo=${encodeURIComponent(selectedRepo)}` : '';
+    fetch(apiUrl(`/api/git-diff?files=${encodeURIComponent(selectedFile)}${repoParam}`))
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -158,27 +164,79 @@ export default function MobileGitDiff({ visible }) {
           setDiffLoading(false);
         }
       });
-  }, [selectedFile]);
+  }, [selectedFile, selectedRepo]);
+
+  const totalChanges = useMemo(() => {
+    if (!repos) return 0;
+    return repos.reduce((sum, r) => sum + r.changes.length, 0);
+  }, [repos]);
+
+  const isSingleRepo = !repos || repos.length <= 1;
+
+  const handleFileClick = (repoPath, filePath) => {
+    setSelectedFile(filePath);
+    setSelectedRepo(repoPath);
+  };
+
+  const diffDisplayPath = selectedFile && selectedRepo && selectedRepo !== '.'
+    ? `${selectedRepo}/${selectedFile}` : selectedFile;
 
   return (
     <div className={styles.container}>
       {/* 上半部分：文件列表，固定 300px */}
       <div className={styles.fileListSection}>
         <div className={styles.header}>
-          <span className={styles.headerTitle}>{t('ui.gitChanges')}</span>
-          <span className={styles.fileCount}>
-            {changes ? changes.length : 0}
-          </span>
+          <div className={styles.headerLeft}>
+            <span className={styles.headerTitle}>{t('ui.gitChanges')}</span>
+            <span className={styles.fileCount}>{totalChanges}</span>
+          </div>
+          {onClose && (
+            <button className={styles.closeBtn} onClick={onClose}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
         </div>
         <div className={styles.changesContainer}>
           {loading && <div className={styles.statusText}>Loading...</div>}
           {error && <div className={styles.errorText}>{error}</div>}
-          {!loading && !error && changes && changes.length === 0 && (
+          {!loading && !error && (!repos || repos.length === 0) && (
             <div className={styles.emptyText}>No changes</div>
           )}
-          {!loading && !error && changes && changes.length > 0 && (
-            <TreeDir name="" node={buildTree(changes)} depth={0} selectedFile={selectedFile} onFileClick={setSelectedFile} />
-          )}
+          {!loading && !error && repos && repos.map(repo => {
+            const collapsed = collapsedRepos.has(repo.path);
+            return isSingleRepo ? (
+              <TreeDir key={repo.path} name="" node={buildTree(repo.changes)} depth={0} selectedFile={selectedFile} selectedRepo={selectedRepo} repoPath={repo.path} onFileClick={handleFileClick} />
+            ) : (
+              <React.Fragment key={repo.path}>
+                <div
+                  className={styles.repoHeader}
+                  onClick={() => setCollapsedRepos(prev => {
+                    const next = new Set(prev);
+                    collapsed ? next.delete(repo.path) : next.add(repo.path);
+                    return next;
+                  })}
+                >
+                  <span className={`${styles.repoArrow} ${collapsed ? '' : styles.repoArrowExpanded}`}>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="9 6 15 12 9 18"/>
+                    </svg>
+                  </span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                    <path d="M18 9a9 9 0 0 1-9 9"/>
+                  </svg>
+                  <span className={styles.repoName}>{repo.name}</span>
+                  <span className={styles.repoBadge}>{repo.changes.length}</span>
+                </div>
+                {!collapsed && (
+                  <TreeDir name="" node={buildTree(repo.changes)} depth={1} selectedFile={selectedFile} selectedRepo={selectedRepo} repoPath={repo.path} onFileClick={handleFileClick} />
+                )}
+              </React.Fragment>
+            );
+          })}
         </div>
       </div>
 
@@ -187,7 +245,7 @@ export default function MobileGitDiff({ visible }) {
         {selectedFile ? (
           <>
             <div className={styles.diffHeader}>
-              <span className={styles.diffFilePath}>{selectedFile}</span>
+              <span className={styles.diffFilePath}>{diffDisplayPath}</span>
               <span className={styles.diffBadge}>DIFF</span>
             </div>
             <div className={styles.diffContent}>
@@ -201,6 +259,22 @@ export default function MobileGitDiff({ visible }) {
                       <p className={styles.fileSizeNote}>
                         {t('ui.fileSize')}: {(diffData.size / (1024 * 1024)).toFixed(2)} MB
                       </p>
+                    </div>
+                  ) : isImageFile(selectedFile) && !diffData.is_deleted ? (
+                    <div className={styles.imagePreviewWrap}>
+                      <img
+                        className={styles.imagePreview}
+                        src={apiUrl(`/api/file-raw?path=${encodeURIComponent(diffDisplayPath)}`)}
+                        alt={selectedFile}
+                        onClick={() => setLightboxOpen(true)}
+                      />
+                      {lightboxOpen && (
+                        <ImageLightbox
+                          src={apiUrl(`/api/file-raw?path=${encodeURIComponent(diffDisplayPath)}`)}
+                          alt={selectedFile}
+                          onClose={() => setLightboxOpen(false)}
+                        />
+                      )}
                     </div>
                   ) : diffData.is_binary ? (
                     <div className={`${styles.statusText} ${styles.statusTextItalic}`}>{t('ui.binaryFileNotice')}</div>

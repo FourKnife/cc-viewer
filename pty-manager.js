@@ -115,10 +115,22 @@ export async function spawnClaude(proxyPort, cwd, extraArgs = [], claudePath = n
   env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${proxyPort}`;
   env.CCV_PROXY_MODE = '1'; // 告诉 interceptor.js 不要再启动 server
 
+  // Resolve real Node.js path (Electron's process.execPath is the Electron binary)
+  let nodePath = process.execPath;
+  if (process.versions.electron) {
+    const { execSync } = await import('node:child_process');
+    try {
+      nodePath = execSync(process.platform === 'win32' ? 'where node' : 'which node', { encoding: 'utf-8' }).trim();
+      if (process.platform === 'win32') nodePath = nodePath.split('\n')[0].trim();
+    } catch {
+      nodePath = process.platform === 'win32' ? 'node' : '/usr/local/bin/node';
+    }
+  }
+
   // Override EDITOR/VISUAL to use built-in FileContentView
   if (serverPort) {
     const editorScript = join(__dirname, 'lib', 'ccv-editor.js');
-    env.EDITOR = `${process.execPath} ${editorScript}`;
+    env.EDITOR = `${nodePath} ${editorScript}`;
     env.VISUAL = env.EDITOR;
     env.CCV_EDITOR_PORT = String(serverPort);
     env.CCVIEWER_PORT = String(serverPort); // For ask-hook bridge
@@ -137,7 +149,7 @@ export async function spawnClaude(proxyPort, cwd, extraArgs = [], claudePath = n
 
   // 如果是 npm 版本（cli.js），需要使用 node 来运行
   if (isNpmVersion && claudePath.endsWith('.js')) {
-    command = process.execPath; // node 可执行文件路径
+    command = nodePath;
     args = [claudePath, '--settings', settingsJson, ...extraArgs];
   }
 
@@ -172,6 +184,16 @@ export async function spawnClaude(proxyPort, cwd, extraArgs = [], claudePath = n
     flushBatch();
     lastExitCode = exitCode;
     ptyProcess = null;
+
+    // Auto-retry without -c/--continue if "No conversation found"
+    const hasContinue = extraArgs.includes('-c') || extraArgs.includes('--continue');
+    if (hasContinue && exitCode !== 0 && outputBuffer.includes('No conversation found')) {
+      console.error('[CC Viewer] -c failed (no conversation), retrying without -c');
+      const retryArgs = extraArgs.filter(a => a !== '-c' && a !== '--continue');
+      spawnClaude(proxyPort, cwd, retryArgs, claudePath, isNpmVersion, serverPort);
+      return;
+    }
+
     // 保留 lastWorkspacePath，不清除，用于 respawn
     currentWorkspacePath = null;
     for (const cb of exitListeners) {
@@ -256,12 +278,18 @@ export async function spawnShell() {
   lastExitCode = null;
   currentWorkspacePath = cwd;
 
+  // Clean env: remove cc-viewer specific vars so child shells don't inherit them
+  // (prevents CCVIEWER_PORT leaking to non-cc-viewer Claude instances)
+  const shellEnv = { ...process.env };
+  delete shellEnv.CCVIEWER_PORT;
+  delete shellEnv.CCV_EDITOR_PORT;
+
   ptyProcess = pty.spawn(shell, [], {
     name: 'xterm-256color',
     cols: lastPtyCols,
     rows: lastPtyRows,
     cwd,
-    env: { ...process.env },
+    env: shellEnv,
   });
 
   ptyProcess.onData((data) => {

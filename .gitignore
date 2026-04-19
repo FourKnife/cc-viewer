@@ -1,9 +1,21 @@
 node_modules
 dist
-package-lock.json
+electron-dist
 .claude/setting.local.json
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 .idea/
 .DS_Store
 .omc/
 tmp/
+
+# 签名相关敏感文件
+*.p12
+*.cer
+*.certSigningRequest
+*.pem
+*.key
+*.pfx
+.env
+.env.*
+!.env.example

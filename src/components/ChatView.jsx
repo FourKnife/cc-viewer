@@ -1,31 +1,39 @@
 import React from 'react';
-import { Empty, Typography, Divider, Spin, Popover } from 'antd';
+import { Empty, Typography, Divider, Spin, Popover, Modal, message } from 'antd';
 import ChatMessage from './ChatMessage';
-import TerminalPanel from './TerminalPanel';
+import TerminalPanel, { uploadFileAndGetPath } from './TerminalPanel';
 import FileExplorer from './FileExplorer';
 import FileContentView from './FileContentView';
 import ImageViewer from './ImageViewer';
 import ImageLightbox from './ImageLightbox';
 import GitChanges from './GitChanges';
 import GitDiffView from './GitDiffView';
+import ToolApprovalPanel from './ToolApprovalPanel';
 import { getModelInfo } from '../utils/helpers';
 import { getTeammateAvatar } from '../utils/teammateAvatars';
 import { isSystemText, classifyUserContent, isMainAgent, isTeammate, resolveTeammateNames } from '../utils/contentFilter';
 import { classifyRequest, formatRequestTag, formatTeammateLabel } from '../utils/requestType';
 import { buildChunksForAnswer } from '../utils/ptyChunkBuilder';
-import { isPlanApprovalPrompt, isDangerousOperationPrompt } from '../utils/promptClassifier';
+import { isPlanApprovalPrompt, isDangerousOperationPrompt, parseToolInfoFromBuffer } from '../utils/promptClassifier';
 import { isImageFile, isMutatingCommand } from '../utils/commandValidator';
 import { createEmptyToolState, appendToolResultMap, cachedBuildToolResultMap, getToolResultCache, setToolResultCache } from '../utils/toolResultBuilder';
 import { TeamButton, TeamModal } from './TeamSessionPanel';
 import SnapLineOverlay from './SnapLineOverlay';
 import RoleFilterBar from './RoleFilterBar';
 import ChatInputBar from './ChatInputBar';
+import PresetModal from './PresetModal';
+import UltraPlanModal from './UltraPlanModal';
+import CustomUltraplanEditModal from './CustomUltraplanEditModal';
+import { buildLocalUltraplan } from '../utils/ultraplanTemplates';
+import { getModelMaxTokens } from '../utils/helpers';
 import { Virtuoso } from 'react-virtuoso';
-import { isMobile } from '../env';
+import { isMobile, isIOS, isPad } from '../env';
 import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { tryOpenWithSystem } from '../utils/fileOpen';
 import { BUILTIN_PRESETS } from '../utils/builtinPresets';
 import defaultAvatarUrl from '../img/default-avatar.svg';
+import loadingPetUrl from '../img/loading-pet.gif';
 import styles from './ChatView.module.css';
 
 const { Text } = Typography;
@@ -33,7 +41,9 @@ const { Text } = Typography;
 const QUEUE_THRESHOLD = 20;
 
 const MOBILE_ITEM_LIMIT = 240;
+const IOS_ITEM_LIMIT = 150;
 const MOBILE_LOAD_MORE_STEP = 100;
+const useVirtuoso = isMobile && !isIOS && !isPad;
 
 // 稳定空对象引用，避免每次 render 创建新 {} 导致子组件重渲染
 const EMPTY_OBJ = {};
@@ -65,6 +75,11 @@ class ChatView extends React.Component {
     // requests 扫描缓存（tsToIndex / modelName / subAgentEntries）
     this._reqScanCache = { tsToIndex: {}, modelName: null, subAgentEntries: [], processedCount: 0 };
 
+    // buildAllItems session 级缓存
+    // 每项: { session, msgsLen, subCount, items, tsEntries, lastPendingAskId, lastPendingPlanId }
+    this._sessionItemCache = [];
+    this._itemCacheToggleSig = null;
+
 
     // 从 localStorage 读取用户偏好的终端宽度（像素）
     const savedWidth = localStorage.getItem('cc-viewer-terminal-width');
@@ -78,6 +93,7 @@ class ChatView extends React.Component {
       highlightTs: null,
       highlightFading: false,
       highlightVisibleIdx: -1,
+      sidebarWidth: parseInt(localStorage.getItem('cc-viewer-sidebar-width'), 10) || 240,
       terminalWidth: initialTerminalWidth || 624, // 默认 80cols * 7.8px
       needsInitialSnap: initialTerminalWidth === null, // 标记是否需要初始化吸附
       inputEmpty: true,
@@ -86,12 +102,15 @@ class ChatView extends React.Component {
       ptyPrompt: null,
       ptyPromptHistory: [],
       inputSuggestion: null,
-      fileExplorerOpen: !isMobile && localStorage.getItem('ccv_fileExplorerOpen') !== 'false',
+      fileExplorerOpen: !isMobile
+        ? localStorage.getItem('ccv_fileExplorerOpen') !== 'false'
+        : (isPad ? localStorage.getItem('ccv_fileExplorerOpen') === 'true' : false),
       currentFile: null,
       currentGitDiff: null,
       scrollToLine: null,
       fileExplorerExpandedPaths: new Set(),
       gitChangesOpen: false,
+      hasGit: true,
       snapLines: [],
       activeSnapLine: null,
       isDragging: false,
@@ -106,7 +125,20 @@ class ChatView extends React.Component {
       mdLightboxSrc: null,
       streamingFading: false,
       presetItems: [],
+      mobilePresetModalVisible: false,
       localAskAnswers: {}, // 提交后的本地答案映射，用于 Last Response 立即切换到非交互式
+      pendingPermission: null, // { id, toolName, input } — active permission approval request
+      permissionQueue: [], // queued permission requests when one is already active
+      pendingPlanApproval: null, // { id, input } — active ExitPlanMode approval in SDK mode
+      pendingImages: [], // [{ path, source }] — images uploaded/pasted, shown as previews in chat input
+      agentTeamEnabled: false,
+      ultraplanModalOpen: false,
+      ultraplanVariant: 'codeExpert',
+      ultraplanPrompt: '',
+      ultraplanFiles: [],
+      customUltraplanExperts: [],
+      customUltraplanEditOpen: false,
+      customUltraplanEditing: null,
     };
     this._processedToolIds = new Set();
     this._projectDirCache = null; // 缓存项目目录绝对路径
@@ -118,6 +150,7 @@ class ChatView extends React.Component {
     this._scrollTargetRef = React.createRef();
     this._scrollFadeTimer = null;
     this._resizing = false;
+    this._dragTarget = null; // 'terminal' | 'sidebar'
     this._inputWs = null;
     this._inputRef = React.createRef();
     this._ptyBuffer = '';
@@ -232,21 +265,39 @@ class ChatView extends React.Component {
     if (this.props.cliMode) {
       this.connectInputWs();
     }
-    if (!isMobile) this._bindStickyScroll();
+    // 检测项目是否有 git（优先多仓库 API，回退旧 API）
+    fetch(apiUrl('/api/git-repos')).then(r => r.ok ? r.json() : Promise.reject()).then(data => {
+      if (!data.repos?.length) this.setState({ hasGit: false, gitChangesOpen: false });
+    }).catch(() => {
+      fetch(apiUrl('/api/git-status')).then(r => {
+        if (!r.ok) this.setState({ hasGit: false, gitChangesOpen: false });
+      }).catch(() => this.setState({ hasGit: false, gitChangesOpen: false }));
+    });
+    // 检测 Agent Team 是否启用（UltraPlan 依赖）
+    fetch(apiUrl('/api/claude-settings')).then(r => r.ok ? r.json() : null).then(data => {
+      if (data?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1') {
+        this.setState({ agentTeamEnabled: true });
+      }
+    }).catch(() => {});
+    if (!useVirtuoso) this._bindStickyScroll();
     // 初始化时吸附到 60cols
     if (this.state.needsInitialSnap && this.props.cliMode && this.props.terminalVisible) {
       this._snapToInitialPosition();
     }
     // 加载 Agent Team 预置项
     this._loadPresets();
+    this._onPresetsChanged = () => this._loadPresets();
+    window.addEventListener('ccv-presets-changed', this._onPresetsChanged);
   }
 
   shouldComponentUpdate(nextProps, nextState) {
     return (
       nextProps.requests !== this.props.requests ||
       nextProps.mainAgentSessions !== this.props.mainAgentSessions ||
+      nextProps.streamingLatest !== this.props.streamingLatest ||
       nextProps.collapseToolResults !== this.props.collapseToolResults ||
       nextProps.expandThinking !== this.props.expandThinking ||
+      nextProps.showFullToolContent !== this.props.showFullToolContent ||
       nextProps.scrollToTimestamp !== this.props.scrollToTimestamp ||
       nextProps.cliMode !== this.props.cliMode ||
       nextProps.terminalVisible !== this.props.terminalVisible ||
@@ -263,7 +314,41 @@ class ChatView extends React.Component {
     );
   }
 
-  componentDidUpdate(prevProps) {
+  componentDidUpdate(prevProps, prevState) {
+    // 通知父组件权限审批状态变化（用于移动端全局浮层）
+    if (prevState.pendingPermission !== this.state.pendingPermission && this.props.onPendingPermission) {
+      if (this.state.pendingPermission) {
+        this.props.onPendingPermission({
+          permission: this.state.pendingPermission,
+          modelName: this._reqScanCache?.modelName,
+          handlers: {
+            allow: this.handlePermissionAllow,
+            allowSession: this.props.sdkMode ? this.handlePermissionAllowSession : null,
+            deny: this.handlePermissionDeny,
+          },
+        });
+      } else {
+        this.props.onPendingPermission(null);
+      }
+    }
+    if (prevState.pendingPlanApproval !== this.state.pendingPlanApproval && this.props.onPendingPlanApproval) {
+      if (this.state.pendingPlanApproval) {
+        this.props.onPendingPlanApproval({
+          plan: this.state.pendingPlanApproval,
+          handlers: { approve: this.handlePlanApprove, reject: this.handlePlanReject },
+        });
+      } else {
+        this.props.onPendingPlanApproval(null);
+      }
+    }
+    // Last Response 出现/消失时，Footer 高度变化会导致 Virtuoso atBottom 误判，需要重新吸底
+    if (useVirtuoso && prevState.lastResponseItems !== this.state.lastResponseItems && this.state.stickyBottom) {
+      this._startSmoothStickyFollow(true);
+    }
+    // 同样：Live streaming overlay 变化时也要重新吸底（丝滑缓动，避免每个 chunk 画面硬跳）。
+    if (prevProps.streamingLatest !== this.props.streamingLatest && this.state.stickyBottom) {
+      this._startSmoothStickyFollow(useVirtuoso);
+    }
     // Streaming border fade-out: when isStreaming goes from true to false, trigger fade
     if (prevProps.isStreaming && !this.props.isStreaming) {
       this.setState({ streamingFading: true });
@@ -272,34 +357,43 @@ class ChatView extends React.Component {
         this.setState({ streamingFading: false });
       }, 500);
     }
-    // Handle files dropped onto the app
+    // 如果 streaming 在 fade-out 期间恢复，立即取消 fade 避免 spinner 以 opacity:0 显示
+    if (!prevProps.isStreaming && this.props.isStreaming && this.state.streamingFading) {
+      clearTimeout(this._streamingFadeTimer);
+      this.setState({ streamingFading: false });
+    }
+    // Handle files dropped onto the app — add to pendingImages, send at submit time
     if (this.props.pendingUploadPaths && this.props.pendingUploadPaths.length > 0
       && this.props.pendingUploadPaths !== prevProps.pendingUploadPaths) {
-      const paths = this.props.pendingUploadPaths.join(' ');
-      const textarea = this._inputRef.current;
-      if (textarea) {
-        textarea.value = (textarea.value ? textarea.value + ' ' : '') + paths;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        this.setState({ inputEmpty: false });
-      } else if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
-        this._inputWs.send(JSON.stringify({ type: 'input', data: paths }));
+      for (const p of this.props.pendingUploadPaths) {
+        const raw = p.replace(/^"|"$/g, '');
+        this._addPendingImage(raw, 'drop');
       }
       if (this.props.onUploadPathsConsumed) this.props.onUploadPathsConsumed();
     }
     if (prevProps.mainAgentSessions !== this.props.mainAgentSessions) {
-      // sessions 引用变化 → 重置增量状态
+      // sessions 引用变化 → 仅在 session 对象真正变化时重置增量状态
+      // Plan 1 的 push 模式下，外层数组是浅拷贝（新引用），但 session 对象不变 → 保留增量状态
       if (this.props.mainAgentSessions !== this._prevSessions) {
-        this._incToolState = null;
-        this._incToolProcessedCount = 0;
-        this._incToolSessionIdx = -1;
+        const prev = this._prevSessions || [];
+        const next = this.props.mainAgentSessions || [];
+        const sessionsActuallyChanged = prev.length !== next.length ||
+          prev.some((s, i) => s !== next[i]);
+        if (sessionsActuallyChanged) {
+          this._incToolState = null;
+          this._incToolProcessedCount = 0;
+          this._incToolSessionIdx = -1;
+          this._reqScanCache = { tsToIndex: {}, modelName: null, subAgentEntries: [], processedCount: 0, subAgentProcessedCount: 0 };
+          this._sessionItemCache = [];
+        }
         this._prevSessions = this.props.mainAgentSessions;
-        this._reqScanCache = { tsToIndex: {}, modelName: null, subAgentEntries: [], processedCount: 0, subAgentProcessedCount: 0 };
       }
       if (isMobile) this._mobileExtraItems = 0;
       this.startRender();
       if (this.state.pendingInput) {
         this.setState({ pendingInput: null });
       }
+      this._clearPendingImages();
       this._updateSuggestion();
       this._checkToolFileChanges();
     } else if (prevProps.requests !== this.props.requests) {
@@ -314,6 +408,12 @@ class ChatView extends React.Component {
       const allItems = this._applyMobileSlice(rawItems);
       this.setState({ allItems, lastResponseItems: this._lastResponseItems, visibleCount: allItems.length });
     }
+    // localAskAnswers 变化时重建 Last Response，使交互表单切换到已回答的静态视图
+    if (prevState.localAskAnswers !== this.state.localAskAnswers &&
+        prevProps.mainAgentSessions === this.props.mainAgentSessions &&
+        prevProps.requests === this.props.requests) {
+      this.startRender();
+    }
     // scrollToTimestamp 变化时（如从 raw 模式切回 chat），重建 items 并滚动定位
     if (!prevProps.scrollToTimestamp && this.props.scrollToTimestamp) {
       // If target is in hidden area, expand to include it
@@ -321,10 +421,11 @@ class ChatView extends React.Component {
         const rawItems = this.buildAllItems();
         const targetIdx = this._scrollTargetIdx;
         if (targetIdx != null) {
-          const limit = MOBILE_ITEM_LIMIT + this._mobileExtraItems;
+          const mobileLimit = isIOS ? IOS_ITEM_LIMIT : MOBILE_ITEM_LIMIT;
+          const limit = mobileLimit + this._mobileExtraItems;
           const offset = rawItems.length > limit ? rawItems.length - limit : 0;
           if (targetIdx < offset) {
-            this._mobileExtraItems = rawItems.length - targetIdx - MOBILE_ITEM_LIMIT;
+            this._mobileExtraItems = rawItems.length - targetIdx - mobileLimit;
             if (this._mobileExtraItems < 0) this._mobileExtraItems = 0;
           }
         }
@@ -351,11 +452,15 @@ class ChatView extends React.Component {
     if (!prevProps.cliMode && this.props.cliMode) {
       this.connectInputWs();
     }
-    if (!isMobile) this._rebindStickyEl();
+    if (!useVirtuoso) this._rebindStickyEl();
   }
 
   componentWillUnmount() {
     this._unmounted = true;
+    window.removeEventListener('ccv-presets-changed', this._onPresetsChanged);
+    // 清理全局权限通知
+    if (this.props.onPendingPermission) this.props.onPendingPermission(null);
+    if (this.props.onPendingPlanApproval) this.props.onPendingPlanApproval(null);
     if (this._queueTimer) clearTimeout(this._queueTimer);
     if (this._fadeClearTimer) clearTimeout(this._fadeClearTimer);
     if (this._ptyDebounceTimer) clearTimeout(this._ptyDebounceTimer);
@@ -370,7 +475,11 @@ class ChatView extends React.Component {
     if (this._hookWaitTimer) clearTimeout(this._hookWaitTimer);
     this._pendingHookAnswers = null;
     this._unbindScrollFade();
-    if (!isMobile) this._unbindStickyScroll();
+    if (!useVirtuoso) this._unbindStickyScroll();
+    if (this._smoothFollowRafId) {
+      cancelAnimationFrame(this._smoothFollowRafId);
+      this._smoothFollowRafId = null;
+    }
     if (this._inputWs) {
       this._inputWs.close();
       this._inputWs = null;
@@ -380,13 +489,22 @@ class ChatView extends React.Component {
   startRender() {
     if (this._queueTimer) clearTimeout(this._queueTimer);
 
+    // 快照：捕获 startRender 开始时的 stickyBottom，防止 scroll handler 在 DOM 过渡期翻转它
+    const wasSticky = this.state.stickyBottom;
+    // 加锁：阻止 scroll handler 在 DOM commit 过渡期间误翻转 stickyBottom
+    this._stickyScrollLock = true;
+
     const rawItems = this.buildAllItems();
     const lastResponseItems = this._lastResponseItems;
     const allItems = this._applyMobileSlice(rawItems);
     this._prevItemsLen = allItems.length;
 
     this.setState({ allItems, lastResponseItems, visibleCount: allItems.length, loading: false },
-      () => this.scrollToBottom());
+      () => {
+        this.scrollToBottom(wasSticky);
+        // 延迟解锁：等待浏览器完成本次 layout + paint 后再允许 scroll handler 工作
+        requestAnimationFrame(() => { this._stickyScrollLock = false; });
+      });
   }
 
   queueNext(current, total) {
@@ -405,9 +523,11 @@ class ChatView extends React.Component {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= 30;
   }
 
-  scrollToBottom() {
+  scrollToBottom(stickyOverride) {
+    // stickyOverride: startRender 传入的快照值，优先于当前 state（防止竞态翻转）
+    const shouldStick = stickyOverride != null ? stickyOverride : this.state.stickyBottom;
     // 移动端：Virtuoso API
-    if (isMobile && this.virtuosoRef.current) {
+    if (useVirtuoso && this.virtuosoRef.current) {
       if (this._scrollTargetIdx != null) {
         this.virtuosoRef.current.scrollToIndex({ index: this._scrollTargetIdx, align: 'center' });
         const targetTs = this.props.scrollToTimestamp;
@@ -419,13 +539,19 @@ class ChatView extends React.Component {
         if (this.props.onScrollTsDone) this.props.onScrollTsDone();
         return;
       }
-      if (this.state.stickyBottom) {
-        this.virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'auto' });
+      if (shouldStick) {
+        // 直接滚到容器最底部，避免 scrollToIndex('LAST') 对高消息的 atBottom 误判
+        const scroller = this._virtuosoScrollerEl;
+        if (scroller) {
+          scroller.scrollTop = scroller.scrollHeight;
+        } else {
+          this.virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'auto' });
+        }
       }
       return;
     }
-    // 桌面端：原有逻辑
-    if (this._scrollTargetRef.current) {
+    // 桌面端/iPad/iPhone：用户主动跳转到指定消息（scrollToTimestamp 场景）
+    if (this._scrollTargetRef.current && this.props.scrollToTimestamp) {
       const targetEl = this._scrollTargetRef.current;
       const container = this.containerRef.current;
       if (container && targetEl.offsetHeight > container.clientHeight) {
@@ -442,7 +568,8 @@ class ChatView extends React.Component {
       if (this.props.onScrollTsDone) this.props.onScrollTsDone();
       return;
     }
-    if (this.state.stickyBottom) {
+    // 常规吸底：直接滚到容器最底部
+    if (shouldStick) {
       const el = this.containerRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     }
@@ -491,7 +618,7 @@ class ChatView extends React.Component {
 
   handleStickToBottom = () => {
     this.setState({ stickyBottom: true }, () => {
-      if (isMobile && this.virtuosoRef.current) {
+      if (useVirtuoso && this.virtuosoRef.current) {
         this.virtuosoRef.current.scrollToIndex({ index: 'LAST', behavior: 'smooth' });
       } else {
         const el = this.containerRef.current;
@@ -500,13 +627,71 @@ class ChatView extends React.Component {
     });
   };
 
+  // rAF 缓动吸底：流式 chunk 抵达后用 easeOut 平滑追底，避免每帧 scrollTop=scrollHeight
+  // 带来的硬跳与换行抖动。gap<=0.5 停止；新 chunk 到达会续约（cancel 旧 rAF 重启循环）。
+  _startSmoothStickyFollow = (useVirtuoso) => {
+    const scroller = useVirtuoso ? this._virtuosoScrollerEl : this.containerRef.current;
+    if (!scroller) return;
+    this._stickyScrollLock = true;
+    if (this._smoothFollowRafId) cancelAnimationFrame(this._smoothFollowRafId);
+    const step = () => {
+      this._smoothFollowRafId = null;
+      if (this._unmounted) { this._stickyScrollLock = false; return; }
+      if (!this.state.stickyBottom) { this._stickyScrollLock = false; return; }
+      const target = scroller.scrollHeight - scroller.clientHeight;
+      const current = scroller.scrollTop;
+      const gap = target - current;
+      if (gap <= 0.5) {
+        scroller.scrollTop = target;
+        this._stickyScrollLock = false;
+        return;
+      }
+      // easeOut：每帧吃 35% gap，最小 1px，最大 120px（防极端高度突增瞬移感）
+      const delta = Math.max(1, Math.min(gap * 0.35, 120));
+      scroller.scrollTop = current + delta;
+      this._smoothFollowRafId = requestAnimationFrame(step);
+    };
+    // 先让新内容 layout 完成再测量（原实现用双 rAF 正是为此）
+    this._smoothFollowRafId = requestAnimationFrame(() => {
+      this._smoothFollowRafId = requestAnimationFrame(step);
+    });
+  };
+
+  _addPendingImage = (path, source) => {
+    if (!path) return;
+    this.setState(prev => {
+      if (prev.pendingImages.length >= 20) return null; // cap
+      if (prev.pendingImages.some(img => img.path === path)) return null; // dedup
+      return { pendingImages: [...prev.pendingImages, { path, source }] };
+    });
+  };
+
+  _removePendingImage = (index) => {
+    this.setState(prev => {
+      const img = prev.pendingImages[index];
+      if (!img) return null;
+      const next = prev.pendingImages.filter((_, i) => i !== index);
+      // Notify other clients to remove the same file
+      if (img.path && this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+        this._inputWs.send(JSON.stringify({ type: 'image-remove-notify', path: img.path }));
+      }
+      return { pendingImages: next };
+    });
+  };
+
+  _clearPendingImages = () => {
+    if (this.state.pendingImages.length > 0) {
+      this.setState({ pendingImages: [] });
+    }
+  };
+
   handleLoadMore = () => {
     this._mobileExtraItems += MOBILE_LOAD_MORE_STEP;
     const prevLen = this.state.allItems?.length || 0;
     const rawItems = this.buildAllItems();
     const allItems = this._applyMobileSlice(rawItems);
     const addedCount = allItems.length - prevLen;
-    if (isMobile && this.virtuosoRef.current) {
+    if (useVirtuoso && this.virtuosoRef.current) {
       this.setState({ allItems, lastResponseItems: this._lastResponseItems, visibleCount: allItems.length }, () => {
         if (this.virtuosoRef.current && addedCount > 0) {
           this.virtuosoRef.current.scrollToIndex({ index: addedCount, align: 'start' });
@@ -526,7 +711,7 @@ class ChatView extends React.Component {
   };
 
   _getScrollContainer() {
-    return isMobile ? this._virtuosoScrollerEl : this.containerRef.current;
+    return useVirtuoso ? this._virtuosoScrollerEl : this.containerRef.current;
   }
 
   _bindScrollFade() {
@@ -563,10 +748,15 @@ class ChatView extends React.Component {
     }
   }
 
-  renderSessionMessages(messages, keyPrefix, modelInfo, tsToIndex) {
-    const { userProfile, collapseToolResults, expandThinking, showThinkingSummaries, onViewRequest } = this.props;
+  renderSessionMessages(messages, keyPrefix, modelInfo, tsToIndex, startIdx = 0) {
+    const { userProfile, collapseToolResults, expandThinking, showFullToolContent, showThinkingSummaries, onViewRequest } = this.props;
     // 增量 / WeakMap 缓存
     let cached = getToolResultCache(messages);
+    if (cached && messages.length > this._incToolProcessedCount) {
+      // WeakMap 命中但 messages 增长了（push 模式增量追加）→ 只处理新增消息的 tool 映射
+      appendToolResultMap(cached, messages, this._incToolProcessedCount);
+      this._incToolProcessedCount = messages.length;
+    }
     if (!cached) {
       const si = parseInt(keyPrefix.slice(1), 10);
       if (this._incToolSessionIdx === si && messages.length >= this._incToolProcessedCount && this._incToolProcessedCount > 0) {
@@ -580,12 +770,21 @@ class ChatView extends React.Component {
       cached = this._incToolState;
       setToolResultCache(messages, cached);
     }
-    const { toolUseMap, toolResultMap, readContentMap, editSnapshotMap, askAnswerMap, planApprovalMap, latestPlanContent } = cached;
+    const { toolUseMap, toolResultMap, readContentMap, editSnapshotMap, askAnswerMap, latestPlanContent } = cached;
+    // planApprovalMap 是同一对象引用被原地修改，需要在 _planDirty 变化时创建新引用
+    // 以触发 ChatMessage shouldComponentUpdate 检测到变化
+    const _planDirty = cached._planDirty || 0;
+    if (this._prevPlanCache !== cached.planApprovalMap || this._prevPlanDirty !== _planDirty) {
+      this._mergedPlanApprovalMap = { ...cached.planApprovalMap };
+      this._prevPlanCache = cached.planApprovalMap;
+      this._prevPlanDirty = _planDirty;
+    }
+    const planApprovalMap = this._mergedPlanApprovalMap || cached.planApprovalMap;
 
     const activePlanPrompt = this.props.cliMode
       ? this.state.ptyPromptHistory.slice().reverse().find(p => isPlanApprovalPrompt(p) && p.status === 'active') || null
       : null;
-    const activeDangerousPrompt = this.props.cliMode
+    const activeDangerousPrompt = this.props.cliMode && !(this.state.pendingPermission?.source === 'pty')
       ? this.state.ptyPromptHistory.slice().reverse().find(p => isDangerousOperationPrompt(p) && p.status === 'active') || null
       : null;
 
@@ -593,6 +792,21 @@ class ChatView extends React.Component {
     let lastPendingPlanId = null;
     // P2: 只允许最后一个 pending 的 AskUserQuestion 卡片交互
     let lastPendingAskId = null;
+    // 收集历史中所有 AskUserQuestion block ID，用于 Last Response 去重
+    const historyAskIds = new Set();
+    // 合并 localAskAnswers 到历史 askAnswerMap，使提交后立即显示已回答
+    // 缓存引用：只在 _localAsk 或 askAnswerMap 变化时重建，避免每次创建新对象导致 shouldComponentUpdate 级联触发
+    const _localAsk = this.state.localAskAnswers || {};
+    const _askDirty = cached?._askDirty || 0;
+    if (this._prevAskCache !== askAnswerMap || this._prevLocalAsk !== _localAsk || this._prevAskDirty !== _askDirty) {
+      this._mergedAskAnswerMap = Object.keys(_localAsk).length > 0
+        ? { ...askAnswerMap, ..._localAsk }
+        : askAnswerMap;
+      this._prevAskCache = askAnswerMap;
+      this._prevLocalAsk = _localAsk;
+      this._prevAskDirty = _askDirty;
+    }
+    const mergedAskAnswerMap = this._mergedAskAnswerMap;
     for (const msg of messages) {
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
         for (const block of msg.content) {
@@ -603,7 +817,8 @@ class ChatView extends React.Component {
             }
           }
           if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
-            const answers = askAnswerMap[block.id];
+            historyAskIds.add(block.id);
+            const answers = mergedAskAnswerMap[block.id];
             if (!answers || Object.keys(answers).length === 0) {
               lastPendingAskId = block.id;
             }
@@ -614,7 +829,7 @@ class ChatView extends React.Component {
 
     const renderedMessages = [];
 
-    for (let mi = 0; mi < messages.length; mi++) {
+    for (let mi = startIdx; mi < messages.length; mi++) {
       const msg = messages[mi];
       const content = msg.content;
       const ts = msg._timestamp || null;
@@ -629,7 +844,7 @@ class ChatView extends React.Component {
           if (suggestionText && toolResults.length > 0) {
             // AskUserQuestion 的用户回复：跳过渲染（答案已在 assistant 侧问卷卡片上显示）
           } else {
-            const { commands, textBlocks, skillBlocks } = classifyUserContent(content);
+            const { commands, textBlocks, skillBlocks, teammateBlocks, taskNotificationBlocks } = classifyUserContent(content);
             // 渲染 slash command 作为独立用户输入
             for (let ci = 0; ci < commands.length; ci++) {
               renderedMessages.push(
@@ -651,27 +866,87 @@ class ChatView extends React.Component {
                 <ChatMessage key={`${keyPrefix}-user-${mi}-${ti}`} role={isPlan ? 'plan-prompt' : 'user'} text={textBlocks[ti].text} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} {...viewReqProps} />
               );
             }
+            // 渲染 teammate-message 块
+            for (let tmi = 0; tmi < teammateBlocks.length; tmi++) {
+              const tm = teammateBlocks[tmi];
+              renderedMessages.push(
+                <ChatMessage
+                  key={`${keyPrefix}-teammate-${mi}-${tmi}`}
+                  role={tm.status ? 'teammate-status' : 'teammate-message'}
+                  text={tm.content}
+                  label={tm.status ? (tm.statusFrom || tm.id) : tm.id}
+                  toolName={tm.status || null}
+                  timestamp={ts}
+                  modelInfo={modelInfo}
+                  {...viewReqProps}
+                />
+              );
+            }
+            // 渲染 task-notification 块
+            for (let tni = 0; tni < taskNotificationBlocks.length; tni++) {
+              const tn = taskNotificationBlocks[tni];
+              renderedMessages.push(
+                <ChatMessage
+                  key={`${keyPrefix}-tasknotif-${mi}-${tni}`}
+                  role="task-notification"
+                  taskNotification={tn}
+                  timestamp={ts}
+                  modelInfo={modelInfo}
+                  {...viewReqProps}
+                />
+              );
+            }
           }
-        } else if (typeof content === 'string' && !isSystemText(content)) {
-          const isPlan = /Implement the following plan:/i.test(content);
-          renderedMessages.push(
-            <ChatMessage key={`${keyPrefix}-user-${mi}`} role={isPlan ? 'plan-prompt' : 'user'} text={content} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} {...viewReqProps} />
-          );
+        } else if (typeof content === 'string') {
+          // 复用 classifyUserContent 解析 task-notification（避免重复正则）
+          if (/<task-notification>/i.test(content)) {
+            const { taskNotificationBlocks: strTnBlocks } = classifyUserContent([{ type: 'text', text: content }]);
+            for (let tni = 0; tni < strTnBlocks.length; tni++) {
+              renderedMessages.push(
+                <ChatMessage
+                  key={`${keyPrefix}-tasknotif-str-${mi}-${tni}`}
+                  role="task-notification"
+                  taskNotification={strTnBlocks[tni]}
+                  timestamp={ts}
+                  modelInfo={modelInfo}
+                  {...viewReqProps}
+                />
+              );
+            }
+          } else if (!isSystemText(content)) {
+            const isPlan = /Implement the following plan:/i.test(content);
+            renderedMessages.push(
+              <ChatMessage key={`${keyPrefix}-user-${mi}`} role={isPlan ? 'plan-prompt' : 'user'} text={content} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} {...viewReqProps} />
+            );
+          }
         }
       } else if (msg.role === 'assistant') {
+        // 定向传递 lastPendingAskId/PlanId：只传给包含匹配 block 的消息，避免全量 re-render
+        const msgLastAskId = lastPendingAskId && Array.isArray(content) && content.some(b => b.type === 'tool_use' && b.name === 'AskUserQuestion' && b.id === lastPendingAskId) ? lastPendingAskId : null;
+        const msgLastPlanId = lastPendingPlanId && Array.isArray(content) && content.some(b => b.type === 'tool_use' && b.name === 'ExitPlanMode' && b.id === lastPendingPlanId) ? lastPendingPlanId : null;
         if (Array.isArray(content)) {
-          renderedMessages.push(
-            <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={content} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={askAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={lastPendingPlanId} lastPendingAskId={lastPendingAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} {...viewReqProps} />
+          // 过滤掉系统文本块（例如 SUGGESTION MODE）
+          const filteredContent = content.filter(block =>
+            block.type !== 'text' || !isSystemText(block.text)
           );
+          // 只在有非系统内容时才渲染
+          if (filteredContent.length > 0) {
+            renderedMessages.push(
+              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={filteredContent} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} {...viewReqProps} />
+            );
+          }
         } else if (typeof content === 'string') {
-          renderedMessages.push(
-            <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={askAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={lastPendingPlanId} lastPendingAskId={lastPendingAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} {...viewReqProps} />
-          );
+          // 过滤字符串类型的系统文本
+          if (!isSystemText(content)) {
+            renderedMessages.push(
+              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} {...viewReqProps} />
+            );
+          }
         }
       }
     }
 
-    return renderedMessages;
+    return { items: renderedMessages, lastPendingAskId, lastPendingPlanId };
   }
 
   /**
@@ -679,7 +954,7 @@ class ChatView extends React.Component {
    * 解决 JSONL 截断后只剩 teammate entries 导致界面空白的问题。
    */
   _buildTeammateFallbackItems() {
-    const { requests, collapseToolResults, expandThinking, onViewRequest } = this.props;
+    const { requests, collapseToolResults, expandThinking, showFullToolContent, onViewRequest } = this.props;
     if (!requests || requests.length === 0) return [];
 
     // Teammate 名称解析
@@ -711,7 +986,7 @@ class ChatView extends React.Component {
           <Text className={styles.sessionDividerText}>{name}</Text>
         </Divider>
       );
-      const msgs = this.renderSessionMessages(session.messages, `tm${si}`, modelInfo, {});
+      const { items: msgs } = this.renderSessionMessages(session.messages, `tm${si}`, modelInfo, {});
       allItems.push(...msgs);
 
       // 渲染 response content（如果有）
@@ -721,7 +996,7 @@ class ChatView extends React.Component {
           const lastItems = respContent
             .filter(b => b.type === 'text' && b.text)
             .map((b, bi) => (
-              <ChatMessage key={`tm-resp-${si}-${bi}`} role="assistant" content={[b]} collapseToolResults={collapseToolResults} expandThinking={expandThinking} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
+              <ChatMessage key={`tm-resp-${si}-${bi}`} role="assistant" content={[b]} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
             ));
           if (lastItems.length > 0) {
             this._lastResponseItems = lastItems;
@@ -735,7 +1010,7 @@ class ChatView extends React.Component {
   }
 
   buildAllItems() {
-    const { mainAgentSessions, requests, collapseToolResults, expandThinking, onViewRequest } = this.props;
+    const { mainAgentSessions, requests, collapseToolResults, expandThinking, showFullToolContent, onViewRequest } = this.props;
     this._lastResponseItems = null;
     this._lastResponseAskQuestions = null;
     if (!mainAgentSessions || mainAgentSessions.length === 0) {
@@ -809,13 +1084,25 @@ class ChatView extends React.Component {
     const allItems = [];
     const tsItemMap = {};
 
+    // === session item 缓存：toggle 签名检查 ===
+    const { showThinkingSummaries } = this.props;
+    const activePromptIds = (this.state.ptyPromptHistory || []).filter(p => p.status === 'active').map(p => p.id).join(',');
+    const toggleSig = `${collapseToolResults}|${expandThinking}|${showFullToolContent}|${showThinkingSummaries}|${this.props.cliMode}|${this.state.ptyPrompt?.id || ''}|${activePromptIds}|${this.props.userProfile?.name || ''}|${this.props.lang || ''}|${Object.keys(this.state.localAskAnswers || {}).join(',')}`;
+    if (toggleSig !== this._itemCacheToggleSig) {
+      this._sessionItemCache = [];
+      this._itemCacheToggleSig = toggleSig;
+    }
+    if (this._sessionItemCache.length > mainAgentSessions.length) {
+      this._sessionItemCache.length = mainAgentSessions.length;
+    }
+
     // Server-side pagination: "load earlier conversations" button
     if (this.props.hasMoreHistory || this.props.loadingMore) {
       allItems.push(
         <div key="load-more-history" className={styles.loadMoreWrap}>
           {this.props.loadingMore ? (
             <div className={`${styles.loadMoreBtn} ${styles.loadMoreBtnLoading}`}>
-              <Spin size="small" style={{ marginRight: 8 }} />
+              <span className={styles.loadMoreSpinner} />
               {t('ui.loadingMoreHistory')}
             </div>
           ) : (
@@ -845,7 +1132,7 @@ class ChatView extends React.Component {
           <div key={`cold-session-${si}`} className={styles.loadMoreWrap}>
             {isLoading ? (
               <div className={`${styles.loadMoreBtn} ${styles.loadMoreBtnLoading}`}>
-                <Spin size="small" style={{ marginRight: 8 }} />
+                <span className={styles.loadMoreSpinner} />
                 {t('ui.loadingMoreHistory')}
               </div>
             ) : (
@@ -859,7 +1146,51 @@ class ChatView extends React.Component {
         return; // 跳过 renderSessionMessages
       }
 
-      const msgs = this.renderSessionMessages(session.messages, `s${si}`, modelInfo, tsToIndex);
+      // === session 级缓存判断 ===
+      const sc = this._sessionItemCache[si];
+      let msgs, lastPendingAskId, lastPendingPlanId;
+
+      if (sc && sc.session === session && sc.msgsLen === session.messages.length) {
+        // 完全命中：session 对象不变且消息数不变 → 直接复用
+        msgs = sc.items;
+        lastPendingAskId = sc.lastPendingAskId;
+        lastPendingPlanId = sc.lastPendingPlanId;
+      } else if (sc && sc.session === session && session.messages.length > sc.msgsLen) {
+        // 增量：session 对象不变但消息增长 → 只渲染新消息，拼接到缓存
+        const result = this.renderSessionMessages(session.messages, `s${si}`, modelInfo, tsToIndex, sc.msgsLen);
+        msgs = sc.items.concat(result.items);
+        lastPendingAskId = result.lastPendingAskId;
+        lastPendingPlanId = result.lastPendingPlanId;
+        // 如果 lastPendingAskId 迁移了，修补旧缓存中持有旧 id 的 ChatMessage
+        if (sc.lastPendingAskId && sc.lastPendingAskId !== lastPendingAskId) {
+          for (let i = 0; i < sc.items.length; i++) {
+            if (msgs[i].props.lastPendingAskId === sc.lastPendingAskId) {
+              msgs[i] = React.cloneElement(msgs[i], { lastPendingAskId: null });
+              break;
+            }
+          }
+        }
+        if (sc.lastPendingPlanId && sc.lastPendingPlanId !== lastPendingPlanId) {
+          for (let i = 0; i < sc.items.length; i++) {
+            if (msgs[i].props.lastPendingPlanId === sc.lastPendingPlanId) {
+              msgs[i] = React.cloneElement(msgs[i], { lastPendingPlanId: null });
+              break;
+            }
+          }
+        }
+      } else {
+        // 缓存未命中 → 全量渲染
+        const result = this.renderSessionMessages(session.messages, `s${si}`, modelInfo, tsToIndex);
+        msgs = result.items;
+        lastPendingAskId = result.lastPendingAskId;
+        lastPendingPlanId = result.lastPendingPlanId;
+      }
+
+      // 更新缓存
+      this._sessionItemCache[si] = {
+        session, msgsLen: session.messages.length,
+        items: msgs, lastPendingAskId, lastPendingPlanId,
+      };
 
       // 将 SubAgent entries 按时间戳插入到 session 消息之间
       for (const m of msgs) {
@@ -869,7 +1200,7 @@ class ChatView extends React.Component {
           const sa = subAgentEntries[subIdx];
           if (sa.timestamp) tsItemMap[sa.timestamp] = allItems.length;
           allItems.push(
-            <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} requestIndex={sa.requestIndex} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
+            <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} requestIndex={sa.requestIndex} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
           );
           subIdx++;
         }
@@ -884,7 +1215,7 @@ class ChatView extends React.Component {
         if (nextSessionStart && sa.timestamp > nextSessionStart) break;
         if (sa.timestamp) tsItemMap[sa.timestamp] = allItems.length;
         allItems.push(
-          <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} requestIndex={sa.requestIndex} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
+          <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} requestIndex={sa.requestIndex} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
         );
         subIdx++;
       }
@@ -902,6 +1233,17 @@ class ChatView extends React.Component {
           const shouldHide = hasSuggestionMode && !hasInteractiveBlock;
 
           if (!shouldHide) {
+            // 收集历史消息中所有 AskUserQuestion block ID，用于 Last Response 去重
+            const historyAskIds = new Set();
+            for (const msg of session.messages) {
+              if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                for (const block of msg.content) {
+                  if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
+                    historyAskIds.add(block.id);
+                  }
+                }
+              }
+            }
             // Last Response 单独存储，不混入主列表
             if (session.entryTimestamp) tsItemMap[session.entryTimestamp] = allItems.length;
             let respLastPendingAskId = null;
@@ -937,19 +1279,28 @@ class ChatView extends React.Component {
             const activePlanPrompt = this.props.cliMode
               ? this.state.ptyPromptHistory.slice().reverse().find(p => isPlanApprovalPrompt(p) && p.status === 'active') || null
               : null;
-            const activeDangerousPrompt = this.props.cliMode
+            const activeDangerousPrompt = this.props.cliMode && !this.state.pendingPermission
               ? this.state.ptyPromptHistory.slice().reverse().find(p => isDangerousOperationPrompt(p) && p.status === 'active') || null
               : null;
             // Last Response 过滤：隐藏 tool_use 块，仅保留交互卡片（AskUserQuestion / ExitPlanMode）
+            // 去重：如果 AskUserQuestion 已在消息历史中渲染，不再在 Last Response 重复显示
             const lrContent = respContent.filter(b =>
-              b.type !== 'tool_use' || b.name === 'AskUserQuestion' || b.name === 'ExitPlanMode'
+              b.type !== 'tool_use' || ((b.name === 'AskUserQuestion' && !historyAskIds.has(b.id)) || b.name === 'ExitPlanMode')
             );
+            // 如果过滤后没有可见内容，不显示 Last Response 区域
+            const hasVisibleContent = lrContent.some(b => {
+              if (b.type === 'text') return typeof b.text === 'string' && b.text.trim().length > 0;
+              if (b.type === 'tool_use') return true; // AskUserQuestion / ExitPlanMode
+              if (b.type === 'thinking') return typeof b.thinking === 'string' && b.thinking.trim().length > 0;
+              return false;
+            });
+            if (!hasVisibleContent) return;
             this._lastResponseItems = (
               <React.Fragment key="last-response-group">
                 <Divider className={styles.lastResponseDivider}>
                   <Text type="secondary" className={styles.lastResponseLabel}>{t('ui.lastResponse')}</Text>
                 </Divider>
-                <ChatMessage key="resp-asst" role="assistant" content={lrContent} timestamp={session.entryTimestamp} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} toolResultMap={EMPTY_MAP} askAnswerMap={Object.keys(_localAsk).length > 0 ? _localAsk : EMPTY_MAP} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} lastPendingAskId={respLastPendingAskId} lastPendingPlanId={respLastPendingPlanId} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} ptyPrompt={this.state.ptyPrompt} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} cliMode={this.props.cliMode} onAskQuestionSubmit={this.handleAskQuestionSubmit} onOpenFile={this.handleOpenToolFilePath} />
+                <ChatMessage key="resp-asst" role="assistant" content={lrContent} timestamp={session.entryTimestamp} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} toolResultMap={EMPTY_MAP} askAnswerMap={Object.keys(_localAsk).length > 0 ? _localAsk : EMPTY_MAP} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} lastPendingAskId={respLastPendingAskId} lastPendingPlanId={respLastPendingPlanId} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} ptyPrompt={this.state.ptyPrompt} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} cliMode={this.props.cliMode} onAskQuestionSubmit={this.handleAskQuestionSubmit} onOpenFile={this.handleOpenToolFilePath} />
               </React.Fragment>
             );
           }
@@ -973,7 +1324,7 @@ class ChatView extends React.Component {
       return allItems;
     }
     this._totalItemCount = allItems.length;
-    const limit = MOBILE_ITEM_LIMIT + this._mobileExtraItems;
+    const limit = (isIOS ? IOS_ITEM_LIMIT : MOBILE_ITEM_LIMIT) + this._mobileExtraItems;
     if (allItems.length <= limit) {
       this._mobileSliceOffset = 0;
       return allItems;
@@ -1055,7 +1406,15 @@ class ChatView extends React.Component {
           if (dismissed.has(bp.builtinId) || existingBuiltinIds.has(bp.builtinId)) continue;
           items.unshift({ id: Date.now() + Math.random(), builtinId: bp.builtinId, teamName: bp.teamName, description: bp.description });
         }
-        this.setState({ presetItems: items });
+        const customExperts = Array.isArray(data.customUltraplanExperts) ? data.customUltraplanExperts : [];
+        // 若当前选中的自定义专家已不存在（被另一端删除），回退到 codeExpert
+        const current = this.state.ultraplanVariant;
+        const next = { presetItems: items, customUltraplanExperts: customExperts };
+        if (typeof current === 'string' && current.startsWith('custom:')) {
+          const id = current.slice('custom:'.length);
+          if (!customExperts.some(e => e.id === id)) next.ultraplanVariant = 'codeExpert';
+        }
+        this.setState(next);
       }).catch(() => {});
     });
   }
@@ -1066,9 +1425,126 @@ class ChatView extends React.Component {
     if (!textarea) return;
     textarea.value = description;
     textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, isMobile ? 160 : 120) + 'px';
+    textarea.style.height = Math.min(textarea.scrollHeight, (isMobile && !isPad) ? 160 : 120) + 'px';
     this.setState({ inputEmpty: false });
     textarea.focus();
+  };
+
+  // ─── UltraPlan handlers ─────────────────────────────────
+  _handleUltraplanSend = () => {
+    const trimmed = this.state.ultraplanPrompt.trim();
+    if (!trimmed && this.state.ultraplanFiles.length === 0) return;
+    const filePaths = this.state.ultraplanFiles.map(f => `"${f.path}"`).join(' ');
+    const userInput = filePaths ? (trimmed ? `${filePaths} ${trimmed}` : filePaths) : trimmed;
+    const variant = this.state.ultraplanVariant;
+    let assembled;
+    if (typeof variant === 'string' && variant.startsWith('custom:')) {
+      const id = variant.slice('custom:'.length);
+      const item = this.state.customUltraplanExperts.find(e => e.id === id);
+      if (!item) return;
+      assembled = buildLocalUltraplan(userInput, 'custom', undefined, item.content);
+    } else {
+      assembled = buildLocalUltraplan(userInput, variant);
+    }
+    if (!assembled) return;
+
+    // 复用对话输入框的发送方式：写入 textarea → 触发 handleInputSend
+    const textarea = this._inputRef.current;
+    if (textarea) {
+      textarea.value = assembled;
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+      this.setState({ inputEmpty: false, ultraplanModalOpen: false, ultraplanPrompt: '', ultraplanVariant: 'codeExpert', ultraplanFiles: [] }, () => {
+        this.handleInputSend();
+      });
+    }
+  };
+
+  _handleUltraplanUpload = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const path = await uploadFileAndGetPath(file);
+        this.setState(prev => ({
+          ultraplanFiles: [...prev.ultraplanFiles, { name: file.name, path }],
+        }));
+      } catch (err) {
+        console.error('Ultraplan upload failed:', err);
+        message.error(err?.message || 'Upload failed');
+      }
+    };
+    input.click();
+  };
+
+  _handleUltraplanPaste = async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) return;
+        try {
+          const path = await uploadFileAndGetPath(file);
+          const name = file.name || `paste-${Date.now()}.png`;
+          this.setState(prev => ({
+            ultraplanFiles: [...prev.ultraplanFiles, { name, path }],
+          }));
+        } catch (err) {
+          console.error('Ultraplan paste upload failed:', err);
+          message.error(err?.message || 'Upload failed');
+        }
+        return;
+      }
+    }
+  };
+
+  _handleUltraplanRemoveFile = (idx) => {
+    this.setState(prev => ({
+      ultraplanFiles: prev.ultraplanFiles.filter((_, i) => i !== idx),
+    }));
+  };
+
+  _openCustomUltraplanEditor = (item) => {
+    this.setState({ customUltraplanEditOpen: true, customUltraplanEditing: item || null });
+  };
+
+  _closeCustomUltraplanEditor = () => {
+    this.setState({ customUltraplanEditOpen: false, customUltraplanEditing: null });
+  };
+
+  _persistCustomUltraplanExperts = (experts) => {
+    this.setState({ customUltraplanExperts: experts });
+    fetch(apiUrl('/api/preferences'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customUltraplanExperts: experts }),
+    })
+      .then(() => window.dispatchEvent(new Event('ccv-presets-changed')))
+      .catch(() => {});
+  };
+
+  _saveCustomUltraplanExpert = (item) => {
+    const existing = this.state.customUltraplanExperts;
+    const idx = existing.findIndex(e => e.id === item.id);
+    const next = idx >= 0
+      ? existing.map(e => (e.id === item.id ? item : e))
+      : [...existing, item];
+    this._persistCustomUltraplanExperts(next);
+    this._closeCustomUltraplanEditor();
+  };
+
+  _deleteCustomUltraplanExpert = (id) => {
+    const next = this.state.customUltraplanExperts.filter(e => e.id !== id);
+    this._persistCustomUltraplanExperts(next);
+    // 如果当前选中的就是被删的，回退到 codeExpert
+    if (this.state.ultraplanVariant === 'custom:' + id) {
+      this.setState({ ultraplanVariant: 'codeExpert' });
+    }
+    this._closeCustomUltraplanEditor();
   };
 
   connectInputWs() {
@@ -1088,10 +1564,86 @@ class ChatView extends React.Component {
         } else if (msg.type === 'ask-hook-timeout') {
           this._askHookActive = false;
           this._askHookQuestions = null;
+        } else if (msg.type === 'sdk-plan-pending') {
+          // SDK mode: ExitPlanMode — show plan approval UI
+          this.setState({ pendingPlanApproval: { id: msg.id, input: msg.input } });
+        } else if (msg.type === 'sdk-ask-pending') {
+          // SDK mode: AskUserQuestion via canUseTool
+          this._askHookActive = true;
+          this._askHookQuestions = msg.questions;
+          this._sdkAskId = msg.id;
+        } else if (msg.type === 'sdk-ask-timeout') {
+          this._askHookActive = false;
+          this._askHookQuestions = null;
+          this._sdkAskId = null;
+        } else if (msg.type === 'perm-hook-pending') {
+          // Queue support: if a permission panel is already showing, queue the new one
+          this.setState(state => {
+            if (state.pendingPermission) {
+              return { permissionQueue: [...state.permissionQueue, { id: msg.id, toolName: msg.toolName, input: msg.input }] };
+            }
+            return { pendingPermission: { id: msg.id, toolName: msg.toolName, input: msg.input } };
+          });
+        } else if (msg.type === 'perm-hook-timeout') {
+          // Timeout carries id — only clear if it matches the active request, or remove from queue
+          this.setState(state => {
+            if (msg.id && state.pendingPermission?.id === msg.id) {
+              const next = state.permissionQueue[0] || null;
+              return { pendingPermission: next, permissionQueue: state.permissionQueue.slice(1) };
+            }
+            if (msg.id) {
+              return { permissionQueue: state.permissionQueue.filter(p => p.id !== msg.id) };
+            }
+            // Legacy timeout without id — clear all
+            return { pendingPermission: null, permissionQueue: [] };
+          });
+        } else if (msg.type === 'perm-hook-resolved') {
+          // 另一端已审批，清除本端面板 or remove from queue
+          this.setState(state => {
+            if (state.pendingPermission?.id === msg.id) {
+              const next = state.permissionQueue[0] || null;
+              return { pendingPermission: next, permissionQueue: state.permissionQueue.slice(1) };
+            }
+            return { permissionQueue: state.permissionQueue.filter(p => p.id !== msg.id) };
+          });
+        } else if (msg.type === 'ask-hook-resolved') {
+          // 另一端已回答 AskUserQuestion (PTY hook 模式)
+          this._askHookActive = false;
+          this._askHookQuestions = null;
+        } else if (msg.type === 'sdk-ask-resolved') {
+          // 另一端已回答 AskUserQuestion (SDK 模式)
+          if (this._sdkAskId === msg.id) {
+            this._askHookActive = false;
+            this._askHookQuestions = null;
+            this._sdkAskId = null;
+          }
+        } else if (msg.type === 'sdk-plan-resolved') {
+          if (this.state.pendingPlanApproval?.id === msg.id) {
+            this.setState({ pendingPlanApproval: null });
+          }
+        } else if (msg.type === 'image-upload-notify') {
+          // 另一个视图/设备上传了图片，同步到本端 pendingImages
+          this._addPendingImage(msg.path, msg.source);
+        } else if (msg.type === 'image-remove-notify') {
+          // 另一端删除了预览中的文件，同步移除
+          if (msg.path) {
+            this.setState(prev => {
+              const next = prev.pendingImages.filter(img => img.path !== msg.path);
+              if (next.length === prev.pendingImages.length) return null;
+              return { pendingImages: next };
+            });
+          }
         }
       } catch {}
     };
     this._inputWs.onclose = () => {
+      // 清除可能残留的审批面板（WS 断连后无法响应）
+      if (this.state.pendingPermission || this.state.pendingPlanApproval) {
+        this.setState({ pendingPermission: null, permissionQueue: [], pendingPlanApproval: null });
+      }
+      this._sdkAskId = null;
+      this._askHookActive = false;
+      this._askHookQuestions = null;
       this._wsReconnectTimer = setTimeout(() => {
         if (!this._unmounted && this.splitContainerRef.current && this.props.cliMode) {
           this.connectInputWs();
@@ -1128,7 +1680,8 @@ class ChatView extends React.Component {
     let options = null;
 
     // Pattern 1: Numbered options — "Question?\n  ❯ 1. Option A\n    2. Option B"
-    const match1 = buf.match(/([^\n]*\?)\s*\n((?:\s*[❯>]?\s*\d+\.\s+[^\n]+\n?){2,})$/);
+    // Allows trailing blank lines and hint lines (e.g. "\n\nEsc to cancel · Tab to amend")
+    const match1 = buf.match(/([^\n]*\?)\s*\n((?:\s*[❯>]?\s*\d+\.\s+[^\n]+\n?){2,})(?:\n[^\d❯>\n][^\n]*|\n)*$/);
     if (match1) {
       question = match1[1].trim();
       const optionLines = match1[2].match(/\s*([❯>])?\s*(\d+)\.\s+([^\n]+)/g);
@@ -1147,8 +1700,9 @@ class ChatView extends React.Component {
     // Pattern 2: Non-numbered cursor-based options (Ink Select) —
     // "Some prompt text\n  ❯ Allow once\n    Deny"
     // Question line may or may not end with "?"
+    // Allows trailing blank lines and hint lines (e.g. "\n\nEsc to cancel · Tab to amend")
     if (!options) {
-      const match2 = buf.match(/([^\n]+)\n((?:\s+[❯>]?\s+[^\n]+\n?){2,})$/);
+      const match2 = buf.match(/([^\n]+)\n((?:\s+[❯>]?\s+[^\n]+\n?){2,})(?:\n[^\s❯>\n][^\n]*|\n)*$/);
       if (match2) {
         const candidateQ = match2[1].trim();
         const block = match2[2];
@@ -1180,6 +1734,27 @@ class ChatView extends React.Component {
 
       const prev = this.state.ptyPrompt;
       const prompt = { question, options };
+
+      // SubAgent permission prompt: route to ToolApprovalPanel instead of renderDangerApproval
+      // when hooks don't fire (subAgent tool calls bypass PreToolUse hooks)
+      if (isDangerousOperationPrompt(prompt) && !this.state.pendingPermission) {
+        const toolInfo = parseToolInfoFromBuffer(this._ptyBuffer, question, options);
+        const id = `pty_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        this._currentPtyPrompt = prompt;
+        this.setState(state => {
+          const history = state.ptyPromptHistory.slice();
+          // Mark as 'pty-routed' (not 'active') to avoid triggering renderDangerApproval
+          history.push({ ...prompt, status: 'pty-routed', selectedNumber: null, timestamp: new Date().toISOString() });
+          if (history.length > 200) history.splice(0, history.length - 200);
+          return {
+            pendingPermission: { id, toolName: toolInfo.toolName, input: toolInfo.input, source: 'pty', ptyPrompt: prompt },
+            ptyPromptHistory: history,
+          };
+        });
+        this.scrollToBottom();
+        return;
+      }
+
       // 同一问题只更新选项（光标移动），不重复推入历史
       if (prev && prev.question === question) {
         this._currentPtyPrompt = prompt;
@@ -1291,6 +1866,90 @@ class ChatView extends React.Component {
     setTimeout(() => { this._promptSubmitting = false; }, 500);
   };
 
+  // Shift the next queued permission request into active position
+  _shiftPermissionQueue = () => {
+    this.setState(state => {
+      const next = state.permissionQueue[0] || null;
+      return { pendingPermission: next, permissionQueue: state.permissionQueue.slice(1) };
+    });
+  };
+
+  handlePermissionAllow = (id) => {
+    const perm = this.state.pendingPermission;
+    if (perm?.source === 'pty' && perm.ptyPrompt) {
+      const optNum = this._findPtyOptionNumber(perm.ptyPrompt, 'allow');
+      this.handlePromptOptionClick(optNum);
+      this._shiftPermissionQueue();
+      return;
+    }
+    const ws = this._inputWs;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'perm-hook-answer', id, decision: 'allow' }));
+    }
+    this._shiftPermissionQueue();
+  };
+
+  handlePermissionAllowSession = (id) => {
+    const perm = this.state.pendingPermission;
+    if (perm?.source === 'pty' && perm.ptyPrompt) {
+      const optNum = this._findPtyOptionNumber(perm.ptyPrompt, 'allowSession');
+      this.handlePromptOptionClick(optNum);
+      this._shiftPermissionQueue();
+      return;
+    }
+    const ws = this._inputWs;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'perm-hook-answer', id, decision: 'allow', allowSession: true }));
+    }
+    this._shiftPermissionQueue();
+  };
+
+  handlePermissionDeny = (id) => {
+    const perm = this.state.pendingPermission;
+    if (perm?.source === 'pty' && perm.ptyPrompt) {
+      const optNum = this._findPtyOptionNumber(perm.ptyPrompt, 'deny');
+      this.handlePromptOptionClick(optNum);
+      this._shiftPermissionQueue();
+      return;
+    }
+    const ws = this._inputWs;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'perm-hook-answer', id, decision: 'deny' }));
+    }
+    this._shiftPermissionQueue();
+  };
+
+  _findPtyOptionNumber(prompt, decision) {
+    const options = prompt?.options || [];
+    if (decision === 'allow') {
+      const opt = options.find(o => /^yes$/i.test(o.text.trim()))
+        || options.find(o => /^yes/i.test(o.text) && !/allow|session|project/i.test(o.text));
+      return opt?.number || 1;
+    }
+    if (decision === 'allowSession') {
+      const opt = options.find(o => /allow.*(?:project|session|during)/i.test(o.text));
+      return opt?.number || 2;
+    }
+    const opt = options.find(o => /^no$/i.test(o.text.trim()) || /^no[^a-z]/i.test(o.text));
+    return opt?.number || options.length;
+  }
+
+  handlePlanApprove = (id) => {
+    const ws = this._inputWs;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'sdk-plan-answer', id, approve: true }));
+    }
+    this.setState({ pendingPlanApproval: null });
+  };
+
+  handlePlanReject = (id, feedback) => {
+    const ws = this._inputWs;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'sdk-plan-answer', id, approve: false, feedback: feedback || '' }));
+    }
+    this.setState({ pendingPlanApproval: null });
+  };
+
   handlePlanFeedbackSubmit = (number, text) => {
     const ws = this._inputWs;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -1385,6 +2044,33 @@ class ChatView extends React.Component {
       this.setState(prev => ({
         localAskAnswers: { ...(prev.localAskAnswers || {}), [askId]: localAnswers },
       }));
+    }
+
+    // SDK 模式：直接通过 WS 发送结构化答案，无需 hook bridge 或 PTY
+    if (this.props.sdkMode) {
+      const resolvedId = askId || this._sdkAskId;
+      if (!resolvedId) return; // 已被其他设备回答，忽略重复提交
+      const ws = this._inputWs;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        // 构造 answers 对象: { questionText: selectedLabel }
+        const sdkAnswers = {};
+        const qs = this._askHookQuestions || questions;
+        for (const answer of answers) {
+          const q = qs?.[answer.questionIndex];
+          if (!q) continue;
+          if (answer.type === 'other') {
+            sdkAnswers[q.question] = answer.text;
+          } else if (answer.type === 'multi') {
+            const labels = answer.selectedIndices.map(i => (q.options || [])[i]?.label).filter(Boolean);
+            sdkAnswers[q.question] = labels.join(', ');
+          } else {
+            sdkAnswers[q.question] = (q.options || [])[answer.optionIndex]?.label || '';
+          }
+        }
+        ws.send(JSON.stringify({ type: 'sdk-ask-answer', id: resolvedId, answers: sdkAnswers }));
+        this._sdkAskId = null;
+      }
+      return;
     }
 
     // Hook bridge path: submit structured JSON instead of PTY simulation
@@ -1655,19 +2341,28 @@ class ChatView extends React.Component {
   handleInputSend = () => {
     const textarea = this._inputRef.current;
     if (!textarea) return;
-    const text = textarea.value.trim();
+    const userText = textarea.value.trim();
+    // 拼接 pendingImages 路径到消息前面（发送时才注入，支持用户删除后不发）
+    const imagePaths = this.state.pendingImages.map(img => `"${img.path.replace(/"/g, '')}"`).join(' ');
+    const text = imagePaths ? (userText ? `${imagePaths} ${userText}` : imagePaths) : userText;
     if (!text) return;
     if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
-      // Claude Code TUI 逐字符处理输入，需要先发文字再单独发回车
-      this._inputWs.send(JSON.stringify({ type: 'input', data: text }));
-      setTimeout(() => {
-        if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
-          this._inputWs.send(JSON.stringify({ type: 'input', data: '\r' }));
-        }
-      }, 50);
+      if (this.props.sdkMode) {
+        // SDK 模式：发送结构化用户消息
+        this._inputWs.send(JSON.stringify({ type: 'sdk-user-message', text }));
+      } else {
+        // PTY 模式：Claude Code TUI 逐字符处理输入，需要先发文字再单独发回车
+        this._inputWs.send(JSON.stringify({ type: 'input', data: text }));
+        setTimeout(() => {
+          if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+            this._inputWs.send(JSON.stringify({ type: 'input', data: '\r' }));
+          }
+        }, 50);
+      }
       textarea.value = '';
       textarea.style.height = 'auto';
-      this.setState({ inputEmpty: true, pendingInput: text, inputSuggestion: null }, () => this.scrollToBottom());
+      this._clearPendingImages();
+      this.setState({ inputEmpty: true, pendingInput: userText || imagePaths, inputSuggestion: null }, () => this.scrollToBottom());
     }
   };
 
@@ -1713,18 +2408,17 @@ class ChatView extends React.Component {
   };
 
   handleUploadPath = (path) => {
-    const quoted = `"${path}"`;
-    const textarea = this._inputRef.current;
-    if (textarea) {
-      textarea.value = (textarea.value ? textarea.value + ' ' : '') + quoted;
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      this.setState({ inputEmpty: false });
+    // 不插入 textarea，不立即注入 PTY — 仅添加到预览条，发送时再拼接路径
+    this._addPendingImage(path, 'chat');
+    if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+      this._inputWs.send(JSON.stringify({ type: 'image-upload-notify', path, source: 'chat' }));
     }
   };
 
   handleSplitMouseDown = (e) => {
     e.preventDefault();
     this._resizing = true;
+    this._dragTarget = 'terminal';
 
     // 计算吸附线位置（基于终端标准列宽）
     let snapLines = [];
@@ -1794,6 +2488,7 @@ class ChatView extends React.Component {
 
     const onMouseUp = () => {
       this._resizing = false;
+      this._dragTarget = null;
 
       // 松开鼠标时，吸附到最近的线
       if (this.state.activeSnapLine) {
@@ -1816,6 +2511,78 @@ class ChatView extends React.Component {
           snapLines: [],
           needsInitialSnap: false
         });
+      }
+
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  handleSidebarMouseDown = (e) => {
+    e.preventDefault();
+    this._resizing = true;
+    this._dragTarget = 'sidebar';
+
+    // 吸附线：180, 240, 300, 360（间距 60px）
+    const sidebarSnapWidths = [180, 240, 300, 360];
+    const container = this.innerSplitRef.current;
+    let snapLines = [];
+    if (container) {
+      const containerWidth = container.getBoundingClientRect().width;
+      snapLines = sidebarSnapWidths
+        .filter(w => w < containerWidth * 0.4)
+        .map(w => ({ cols: w, terminalPx: w, linePosition: w }));
+    }
+
+    this.setState({ isDragging: true, snapLines });
+
+    const onMouseMove = (ev) => {
+      if (!this._resizing) return;
+      const container = this.innerSplitRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const containerWidth = rect.width;
+      let sw = ev.clientX - rect.left;
+      sw = Math.max(160, Math.min(containerWidth * 0.4, sw));
+
+      // 吸附逻辑（与终端一致，阈值 60px）
+      let activeSnapLine = null;
+      if (snapLines.length > 0) {
+        const snapThreshold = 60;
+        let minDistance = Infinity;
+        let closestSnap = null;
+        for (const snap of snapLines) {
+          const distance = Math.abs(sw - snap.linePosition);
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestSnap = snap;
+          }
+        }
+        if (closestSnap && minDistance < snapThreshold) {
+          activeSnapLine = closestSnap;
+        }
+      }
+
+      this.setState({ sidebarWidth: sw, activeSnapLine });
+    };
+
+    const onMouseUp = () => {
+      this._resizing = false;
+      this._dragTarget = null;
+
+      if (this.state.activeSnapLine) {
+        const newWidth = this.state.activeSnapLine.linePosition;
+        localStorage.setItem('cc-viewer-sidebar-width', newWidth.toString());
+        this.setState({ sidebarWidth: newWidth, isDragging: false, activeSnapLine: null, snapLines: [] });
+      } else {
+        localStorage.setItem('cc-viewer-sidebar-width', this.state.sidebarWidth.toString());
+        this.setState({ isDragging: false, activeSnapLine: null, snapLines: [] });
       }
 
       document.removeEventListener('mousemove', onMouseMove);
@@ -1853,6 +2620,7 @@ class ChatView extends React.Component {
 
   handleOpenToolFilePath = async (filePath) => {
     if (!filePath) return;
+    if (tryOpenWithSystem(filePath, 'chat-message')) return;
     let resolved = filePath;
     if (filePath.startsWith('/')) {
       // 懒加载项目目录（只请求一次，后续用缓存）
@@ -1875,6 +2643,11 @@ class ChatView extends React.Component {
     for (let i = 1; i < parts.length; i++) {
       ancestors.push(parts.slice(0, i).join('/'));
     }
+    // 移动端：通过回调打开 MobileFileExplorer
+    if (this.props.onMobileOpenFile) {
+      this.props.onMobileOpenFile(resolved, ancestors);
+      return;
+    }
     this._setFileExplorerOpen(true);
     this.setState(prev => {
       const newSet = new Set(prev.fileExplorerExpandedPaths);
@@ -1886,6 +2659,23 @@ class ChatView extends React.Component {
         fileExplorerExpandedPaths: newSet,
       };
     });
+  };
+
+  _handleInsertPathToChat = (filePath) => {
+    const quoted = `"${filePath}"`;
+    // 终端开启时写入终端，否则写入对话输入框
+    if (this.props.terminalVisible && this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+      this._inputWs.send(JSON.stringify({ type: 'input', data: quoted }));
+      return;
+    }
+    const textarea = this._inputRef.current;
+    if (!textarea) return;
+    const cur = textarea.value;
+    textarea.value = cur ? `${cur} ${quoted}` : quoted;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    this.setState({ inputEmpty: false });
+    textarea.focus();
   };
 
   _snapToInitialPosition() {
@@ -1968,7 +2758,7 @@ class ChatView extends React.Component {
   }
 
   _doScrollToVisibleIdx(idx) {
-    if (isMobile && this.virtuosoRef.current) {
+    if (useVirtuoso && this.virtuosoRef.current) {
       this.virtuosoRef.current.scrollToIndex({ index: idx, align: 'center', behavior: 'smooth' });
     } else {
       const el = this.containerRef.current;
@@ -1980,7 +2770,18 @@ class ChatView extends React.Component {
 
   render() {
     const { mainAgentSessions, cliMode, terminalVisible, onToggleTerminal } = this.props;
-    const { allItems, visibleCount, loading, terminalWidth, lastResponseItems } = this.state;
+    const { allItems, visibleCount, loading, terminalWidth, sidebarWidth, lastResponseItems } = this.state;
+
+    // 计算 SnapLineOverlay 的 currentLeft（侧栏拖拽时用侧栏宽度，终端拖拽时用终端位置）
+    let snapCurrentLeft = 0;
+    if (this.state.isDragging) {
+      if (this._dragTarget === 'sidebar') {
+        snapCurrentLeft = sidebarWidth;
+      } else if (this._dragTarget === 'terminal') {
+        const c = this.innerSplitRef.current;
+        if (c) snapCurrentLeft = c.getBoundingClientRect().width - terminalWidth - 5;
+      }
+    }
 
     const noMainAgent = !mainAgentSessions || mainAgentSessions.length === 0;
     const noData = noMainAgent && (!allItems || allItems.length === 0);
@@ -2058,7 +2859,43 @@ class ChatView extends React.Component {
     }
 
     const _isFiltering = _selSize > 0 && _selSize < collectedRoles.length;
-    const filteredLastResponseItems = lastResponseItems && _isFiltering && !this.state.roleFilterSelected.has('assistant') ? null : lastResponseItems;
+    let filteredLastResponseItems = lastResponseItems && _isFiltering && !this.state.roleFilterSelected.has('assistant') ? null : lastResponseItems;
+
+    // Live streaming overlay: 实时打字机效果，独立于 mainAgentSessions / dedup 路径
+    // 仅显示 text + thinking blocks（tool_use 由最终 entry 通过 Last Response 渲染）。
+    // roleFilter 反选 assistant 时跳过 overlay 以遵从过滤语义（否则一边过滤一边仍实时输出自相矛盾）。
+    let streamingLiveItem = null;
+    const _assistantFilteredOut = _isFiltering && !this.state.roleFilterSelected.has('assistant');
+    if (this.props.streamingLatest && !_assistantFilteredOut) {
+      const sl = this.props.streamingLatest;
+      const liveBlocks = (sl.content || []).filter(b =>
+        b.type === 'text' || b.type === 'thinking'
+      );
+      const hasVisibleContent = liveBlocks.some(b => {
+        if (b.type === 'text') return typeof b.text === 'string' && b.text.trim().length > 0;
+        if (b.type === 'thinking') return typeof b.thinking === 'string' && b.thinking.trim().length > 0;
+        return false;
+      });
+      if (hasVisibleContent) {
+        streamingLiveItem = (
+          <ChatMessage
+            key="streaming-live-msg"
+            role="assistant"
+            content={liveBlocks}
+            timestamp={sl.timestamp}
+            collapseToolResults={this.props.collapseToolResults}
+            expandThinking={this.props.expandThinking}
+            showFullToolContent={this.props.showFullToolContent}
+            showTrailingCursor={true}
+            toolResultMap={EMPTY_MAP}
+          />
+        );
+        // 方案 D：保留 Last Response（上一轮）显示让用户能对比参考，仅通过 CSS 隐藏
+        // "---Last Response---" Divider 标识避免与 overlay 的"正在生成"语义重复。
+        // 两处渲染点（Virtuoso Footer 与非 Virtuoso 容器）把 filteredLastResponseItems
+        // 外包一层条件 div (styles.hideLastResponseDivider)，子 CSS display:none 掉 Divider。
+      }
+    }
 
     const targetIdx = this._scrollTargetIdx;
     const { highlightTs, highlightFading, highlightVisibleIdx } = this.state;
@@ -2078,6 +2915,7 @@ class ChatView extends React.Component {
 
     const stickyBtn = !stickyBottom ? (
       <button className={styles.stickyBottomBtn} onClick={this.handleStickToBottom}>
+        {this.props.isStreaming && <img src={loadingPetUrl} className={styles.loadingPet} alt="" />}
         <span>{t('ui.stickyBottom')}</span>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="6 9 12 15 18 9" />
@@ -2119,15 +2957,15 @@ class ChatView extends React.Component {
         {this.state.mdLightboxSrc && (
           <ImageLightbox src={this.state.mdLightboxSrc} alt="" onClose={() => this.setState({ mdLightboxSrc: null })} />
         )}
-        {isMobile ? (
+        {useVirtuoso ? (
           this._virtuosoHeader = loadMoreBtn,
-          this._virtuosoFooter = <>{(this.props.isStreaming || this.state.streamingFading) && (
-            <div className={styles.streamingSpinnerWrap} style={this.state.streamingFading ? { opacity: 0 } : undefined}>
+          this._virtuosoFooter = <>
+            <div className={`${styles.streamingSpinnerWrap}${(!this.props.isStreaming || streamingLiveItem) ? ' ' + styles.streamingSpinnerHidden : ''}`}>
               <svg width="20" height="20" viewBox="0 0 20 20">
                 <defs>
                   <linearGradient id="ccv-spinnerGrad" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="white" stopOpacity="1" />
-                    <stop offset="100%" stopColor="white" stopOpacity="0.1" />
+                    <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
+                    <stop offset="100%" stopColor="currentColor" stopOpacity="0.1" />
                   </linearGradient>
                 </defs>
                 <circle cx="10" cy="10" r="7.5" fill="none" strokeWidth="2"
@@ -2138,7 +2976,15 @@ class ChatView extends React.Component {
                 </circle>
               </svg>
             </div>
-          )}{filteredLastResponseItems}{pendingBubble}</>,
+          {filteredLastResponseItems && (
+            <div className={streamingLiveItem ? styles.hideLastResponseDivider : undefined}>
+              {filteredLastResponseItems}
+            </div>
+          )}{pendingBubble}{streamingLiveItem && (
+            !filteredLastResponseItems && targetIdx != null && targetIdx >= visible.length
+              ? <div key="stream-resp-anchor" ref={this._scrollTargetRef}>{streamingLiveItem}</div>
+              : streamingLiveItem
+          )}</>,
           <Virtuoso
             ref={this.virtuosoRef}
             className={styles.mobileVirtuoso}
@@ -2146,6 +2992,12 @@ class ChatView extends React.Component {
             initialTopMostItemIndex={Math.max(0, visible.length - 1)}
             followOutput={this.state.stickyBottom ? 'smooth' : false}
             atBottomStateChange={(atBottom) => {
+              if (this._stickyScrollLock) return;
+              // Footer 高度变化时 Virtuoso 可能误判，用真实 DOM 距离兜底
+              if (!atBottom && this.state.stickyBottom && this._virtuosoScrollerEl) {
+                const s = this._virtuosoScrollerEl;
+                if (s.scrollHeight - s.scrollTop - s.clientHeight <= 60) return;
+              }
               if (atBottom !== this.state.stickyBottom) this.setState({ stickyBottom: atBottom });
             }}
             atBottomThreshold={60}
@@ -2184,30 +3036,35 @@ class ChatView extends React.Component {
                 ? <div key={item.key + '-anchor'} ref={this._scrollTargetRef}>{el}</div>
                 : el;
             })}
-            {(this.props.isStreaming || this.state.streamingFading) && (
-              <div className={styles.streamingSpinnerWrap} style={this.state.streamingFading ? { opacity: 0 } : undefined}>
-                <svg width="20" height="20" viewBox="0 0 20 20">
-                  <defs>
-                    <linearGradient id="ccv-spinnerGrad-desktop" x1="0" y1="0" x2="1" y2="1">
-                      <stop offset="0%" stopColor="white" stopOpacity="1" />
-                      <stop offset="100%" stopColor="white" stopOpacity="0.1" />
-                    </linearGradient>
-                  </defs>
-                  <circle cx="10" cy="10" r="7.5" fill="none" strokeWidth="2"
-                    stroke="url(#ccv-spinnerGrad-desktop)" strokeLinecap="round"
-                    pathLength="100" strokeDasharray="75 25">
-                    <animateTransform attributeName="transform" type="rotate"
-                      from="0 10 10" to="360 10 10" dur="0.8s" repeatCount="indefinite" />
-                  </circle>
-                </svg>
+            <div className={`${styles.streamingSpinnerWrap}${(!this.props.isStreaming || streamingLiveItem) ? ' ' + styles.streamingSpinnerHidden : ''}`}>
+              <svg width="20" height="20" viewBox="0 0 20 20">
+                <defs>
+                  <linearGradient id="ccv-spinnerGrad-desktop" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
+                    <stop offset="100%" stopColor="currentColor" stopOpacity="0.1" />
+                  </linearGradient>
+                </defs>
+                <circle cx="10" cy="10" r="7.5" fill="none" strokeWidth="2"
+                  stroke="url(#ccv-spinnerGrad-desktop)" strokeLinecap="round"
+                  pathLength="100" strokeDasharray="75 25">
+                  <animateTransform attributeName="transform" type="rotate"
+                    from="0 10 10" to="360 10 10" dur="0.8s" repeatCount="indefinite" />
+                </circle>
+              </svg>
+            </div>
+            {filteredLastResponseItems && (
+              <div className={streamingLiveItem ? styles.hideLastResponseDivider : undefined}>
+                {targetIdx != null && targetIdx >= visible.length
+                  ? <div key="last-resp-anchor" ref={this._scrollTargetRef}>{filteredLastResponseItems}</div>
+                  : filteredLastResponseItems}
               </div>
             )}
-            {filteredLastResponseItems && (
-              targetIdx != null && targetIdx >= visible.length
-                ? <div key="last-resp-anchor" ref={this._scrollTargetRef}>{filteredLastResponseItems}</div>
-                : filteredLastResponseItems
-            )}
             {pendingBubble}
+            {streamingLiveItem && (
+              !filteredLastResponseItems && targetIdx != null && targetIdx >= visible.length
+                ? <div key="stream-resp-anchor" ref={this._scrollTargetRef}>{streamingLiveItem}</div>
+                : streamingLiveItem
+            )}
           </div>
         )}
         {stickyBtn}
@@ -2228,12 +3085,27 @@ class ChatView extends React.Component {
               </svg>
             </button>
           <TeamButton requests={this.props.requests} onOpenSession={(session) => this.setState({ teamModalSession: session })} navBtnClass={styles.navBtn} />
+          <Popover
+            content={this._buildUserPromptNav()}
+            trigger="hover"
+            placement="rightTop"
+            overlayStyle={{ maxWidth: 400 }}
+          >
+            <button className={styles.navBtn} title={t('ui.userPromptNav')}>
+              <img
+                src={this.props.userProfile?.avatar || defaultAvatarUrl}
+                className={styles.navAvatarImg}
+                alt="User"
+                onError={(e) => { e.target.onerror = null; e.target.src = defaultAvatarUrl; }}
+              />
+            </button>
+          </Popover>
           </div>
           <div className={styles.navSidebarContent}>
             {messageList}
           </div>
         </div>
-        <TeamModal session={this.state.teamModalSession} requests={this.props.requests} mainAgentSessions={this.props.mainAgentSessions} collapseToolResults={this.props.collapseToolResults} expandThinking={this.props.expandThinking} userProfile={this.props.userProfile} onViewRequest={this.props.onViewRequest} onClose={() => this.setState({ teamModalSession: null })} />
+        <TeamModal session={this.state.teamModalSession} requests={this.props.requests} mainAgentSessions={this.props.mainAgentSessions} collapseToolResults={this.props.collapseToolResults} expandThinking={this.props.expandThinking} showFullToolContent={this.props.showFullToolContent} userProfile={this.props.userProfile} onViewRequest={this.props.onViewRequest} onClose={() => this.setState({ teamModalSession: null })} />
       </>);
     }
 
@@ -2258,7 +3130,7 @@ class ChatView extends React.Component {
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2z"/>
             </svg>
           </button>
-          <button
+          {this.state.hasGit && <button
             className={this.state.gitChangesOpen ? styles.navBtnActive : styles.navBtn}
             onClick={() => this.setState(prev => {
               this._setFileExplorerOpen(false);
@@ -2269,7 +3141,7 @@ class ChatView extends React.Component {
             <svg width="24" height="24" viewBox="0 0 1024 1024" fill="currentColor">
               <path d="M759.53332137 326.35000897c0-48.26899766-39.4506231-87.33284994-87.87432908-86.6366625-46.95397689 0.69618746-85.08957923 39.14120645-85.39899588 86.09518335-0.23206249 40.68828971 27.53808201 74.87882971 65.13220519 84.47074592 10.82958281 2.78474987 18.41029078 12.37666607 18.64235327 23.51566553 0.38677082 21.11768647-3.40358317 44.40128953-17.24997834 63.81718442-22.20064476 31.17372767-62.42480948 42.46743545-97.93037026 52.44612248-22.43270724 6.26568719-38.75443563 7.89012462-53.14230994 9.28249954-20.42149901 2.01120825-39.76003975 3.94506233-63.89453858 17.79145747-5.10537475 2.93945818-10.13339535 6.18833303-14.85199928 9.74662453-4.09977063 3.09416652-9.90133285 0.15470833-9.90133286-4.95066641V302.60228095c0-9.43720788 5.26008307-18.17822829 13.69168683-22.3553531 28.69839444-14.23316598 48.42370599-43.93716454 48.19164353-78.20505872-0.38677082-48.57841433-41.15241468-87.71962076-89.730829-86.01782918C338.80402918 117.57112321 301.59667683 155.70672553 301.59667683 202.58334827c0 34.03583169 19.64795738 63.50776777 48.1916435 77.66357958 8.43160375 4.17712479 13.69168685 12.76343689 13.69168684 22.12329062v419.02750058c0 9.43720788-5.26008307 18.17822829-13.69168684 22.3553531-28.69839444 14.23316598-48.42370599 43.93716454-48.1916435 78.20505872 0.30941665 48.57841433 41.07506052 87.6422666 89.65347484 86.01782918C437.74000359 906.42887679 474.87000179 868.2159203 474.87000179 821.41665173c0-34.03583169-19.64795738-63.50776777-48.1916435-77.66357958-8.43160375-4.17712479-13.69168685-12.76343689-13.69168684-22.12329062v-14.85199926c0-32.48874844 15.39347842-63.27570528 42.00331048-81.91805854 2.39797906-1.70179159 4.95066642-3.32622901 7.50335379-4.79595812 14.92935344-8.58631209 25.91364457-9.66927037 44.09187287-11.4484161 15.62554091-1.54708326 35.04143581-3.48093734 61.65126786-10.90693699 39.06385228-10.98429114 92.51557887-25.91364457 124.84961898-71.39789238 18.56499911-26.06835292 27.38337367-58.01562219 26.37776956-95.14562041-0.15470833-5.33743724-0.54147915-10.67487447-1.08295828-16.16702004-0.85089578-8.27689543 2.70739569-16.24437421 9.12779121-21.50445729 19.57060322-15.78024923 32.02462345-39.99210223 32.02462345-67.14341343zM351.1033411 202.58334827c0-20.49885317 16.63114503-37.12999821 37.1299982-37.1299982s37.12999821 16.63114503 37.12999821 37.1299982-16.63114503 37.12999821-37.12999821 37.1299982-37.12999821-16.63114503-37.1299982-37.1299982z m74.25999641 618.83330346c0 20.49885317-16.63114503 37.12999821-37.12999821 37.1299982s-37.12999821-16.63114503-37.1299982-37.1299982 16.63114503-37.12999821 37.1299982-37.1299982 37.12999821 16.63114503 37.12999821 37.1299982z m247.53332139-457.93664456c-20.49885317 0-37.12999821-16.63114503-37.1299982-37.1299982s16.63114503-37.12999821 37.1299982-37.12999821 37.12999821 16.63114503 37.1299982 37.12999821-16.63114503 37.12999821-37.1299982 37.1299982z"/>
             </svg>
-          </button>
+          </button>}
           <TeamButton requests={this.props.requests} onOpenSession={(session) => this.setState({ teamModalSession: session })} navBtnClass={styles.navBtn} />
           <Popover
             content={this._buildUserPromptNav()}
@@ -2288,15 +3160,21 @@ class ChatView extends React.Component {
           </Popover>
         </div>
         <div className={styles.innerSplitArea} ref={this.innerSplitRef}>
-          <SnapLineOverlay isDragging={this.state.isDragging} activeSnapLine={this.state.activeSnapLine} snapLines={this.state.snapLines} terminalWidth={this.state.terminalWidth} containerRef={this.innerSplitRef} />
+          <SnapLineOverlay isDragging={this.state.isDragging} activeSnapLine={this.state.activeSnapLine} snapLines={this.state.snapLines} currentLeft={snapCurrentLeft} />
           {this.state.fileExplorerOpen && (
             <FileExplorer
+              style={{ width: this.state.sidebarWidth }}
               refreshTrigger={this.state.fileExplorerRefresh}
               onClose={() => this._setFileExplorerOpen(false)}
-              onFileClick={(path) => this.setState({ currentFile: path, currentGitDiff: null, scrollToLine: null })}
+              onFileClick={(path) => {
+                if (tryOpenWithSystem(path, 'file-explorer')) return;
+                this.setState({ currentFile: path, currentGitDiff: null, scrollToLine: null });
+              }}
               expandedPaths={this.state.fileExplorerExpandedPaths}
               onToggleExpand={this.handleToggleExpandPath}
               currentFile={this.state.currentFile}
+              onAttachToChat={(filePath) => this._addPendingImage(filePath, 'explorer')}
+              onInsertPathToChat={this._handleInsertPathToChat}
               onFileRenamed={(oldPath, newPath) => {
                 this.setState(prev => ({
                   currentFile: prev.currentFile === oldPath ? newPath : prev.currentFile,
@@ -2307,32 +3185,45 @@ class ChatView extends React.Component {
           )}
           {this.state.gitChangesOpen && (
             <GitChanges
+              style={{ width: this.state.sidebarWidth }}
               refreshTrigger={this.state.gitChangesRefresh}
               onClose={() => this.setState({ gitChangesOpen: false })}
-              onFileClick={(path) => this.setState({ currentGitDiff: path, currentFile: null })}
-              onOpenFile={(path) => {
-                const parts = path.split('/');
+              onFileClick={(repoPath, filePath) => {
+                const resolvedPath = repoPath && repoPath !== '.' ? `${repoPath}/${filePath}` : filePath;
+                if (tryOpenWithSystem(resolvedPath, 'git-changes')) return;
+                this.setState({ currentGitDiff: { repo: repoPath, file: filePath }, currentFile: null });
+              }}
+              onOpenFile={(repoPath, filePath) => {
+                const resolvedPath = repoPath && repoPath !== '.' ? `${repoPath}/${filePath}` : filePath;
+                if (tryOpenWithSystem(resolvedPath, 'git-changes')) return;
+                const parts = resolvedPath.split('/');
                 const ancestors = [];
                 for (let i = 1; i < parts.length; i++) ancestors.push(parts.slice(0, i).join('/'));
                 this._setFileExplorerOpen(true);
                 this.setState(prev => {
                   const newSet = new Set(prev.fileExplorerExpandedPaths);
                   ancestors.forEach(p => newSet.add(p));
-                  return { currentGitDiff: null, currentFile: path, scrollToLine: null, gitChangesOpen: false, fileExplorerExpandedPaths: newSet };
+                  return { currentGitDiff: null, currentFile: resolvedPath, scrollToLine: null, gitChangesOpen: false, fileExplorerExpandedPaths: newSet };
                 });
               }}
             />
+          )}
+          {(this.state.fileExplorerOpen || this.state.gitChangesOpen) && (
+            <div className={styles.vResizer} onMouseDown={this.handleSidebarMouseDown} />
           )}
           <div className={styles.chatSection}>
             <div className={styles.chatSectionFlex}>
             {this.state.currentGitDiff && (
               <div className={styles.overlayPanel}>
                 <GitDiffView
-                  filePath={this.state.currentGitDiff}
+                  filePath={this.state.currentGitDiff.file}
+                  repoPath={this.state.currentGitDiff.repo}
                   onClose={() => this.setState({ currentGitDiff: null })}
                   onOpenFile={(path, line) => {
-                    // 计算祖先目录路径并展开，确保文件在文件浏览器中可见并滚动定位
-                    const parts = path.split('/');
+                    const repo = this.state.currentGitDiff?.repo;
+                    const resolvedPath = repo && repo !== '.' ? `${repo}/${path}` : path;
+                    if (tryOpenWithSystem(resolvedPath, 'git-diff')) return;
+                    const parts = resolvedPath.split('/');
                     const ancestors = [];
                     for (let i = 1; i < parts.length; i++) {
                       ancestors.push(parts.slice(0, i).join('/'));
@@ -2343,7 +3234,7 @@ class ChatView extends React.Component {
                       ancestors.forEach(p => newSet.add(p));
                       return {
                         currentGitDiff: null,
-                        currentFile: path,
+                        currentFile: resolvedPath,
                         scrollToLine: line || 1,
                         gitChangesOpen: false,
                         fileExplorerExpandedPaths: newSet,
@@ -2362,7 +3253,7 @@ class ChatView extends React.Component {
                     editorSession={!!this.state.editorSessionId}
                     onClose={() => {
                       if (this.state.editorSessionId) {
-                        fetch('/api/editor-done', {
+                        fetch(apiUrl('/api/editor-done'), {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ sessionId: this.state.editorSessionId }),
@@ -2379,7 +3270,7 @@ class ChatView extends React.Component {
                     editorSession={!!this.state.editorSessionId}
                     onClose={() => {
                       if (this.state.editorSessionId) {
-                        fetch('/api/editor-done', {
+                        fetch(apiUrl('/api/editor-done'), {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ sessionId: this.state.editorSessionId }),
@@ -2392,6 +3283,37 @@ class ChatView extends React.Component {
               </div>
             )}
             {messageList}
+            {/* 如果父组件处理全局渲染（移动端），跳过本地渲染 */}
+            {!this.props.onPendingPermission && (
+              <ToolApprovalPanel
+                toolName={this.state.pendingPermission?.toolName}
+                toolInput={this.state.pendingPermission?.input}
+                requestId={this.state.pendingPermission?.id}
+                onAllow={this.handlePermissionAllow}
+                onAllowSession={
+                  (this.props.sdkMode || (this.state.pendingPermission?.source === 'pty' && this.state.pendingPermission?.ptyPrompt?.options?.length >= 3))
+                    ? this.handlePermissionAllowSession
+                    : null
+                }
+                onDeny={this.handlePermissionDeny}
+                visible={!!this.state.pendingPermission}
+                autoApproveSeconds={this.props.autoApproveSeconds}
+                onAutoApproveChange={this.props.onAutoApproveChange}
+                modelName={this._reqScanCache?.modelName}
+                source={this.state.pendingPermission?.source}
+                queueDepth={this.state.permissionQueue.length}
+              />
+            )}
+            {!this.props.onPendingPlanApproval && this.state.pendingPlanApproval && (
+              <ToolApprovalPanel
+                toolName="ExitPlanMode"
+                toolInput={this.state.pendingPlanApproval.input}
+                requestId={this.state.pendingPlanApproval.id}
+                onAllow={this.handlePlanApprove}
+                onDeny={(id) => this.handlePlanReject(id, '')}
+                visible={true}
+              />
+            )}
             <ChatInputBar
               inputRef={this._inputRef}
               inputEmpty={this.state.inputEmpty}
@@ -2404,12 +3326,54 @@ class ChatView extends React.Component {
               onUploadPath={this.handleUploadPath}
               presetItems={this.state.presetItems}
               onPresetSend={this.handlePresetSend}
+              onOpenPresetModal={() => this.setState({ mobilePresetModalVisible: true })}
+              onOpenUltraPlan={this.state.agentTeamEnabled && this.props.cliMode ? () => this.setState({ ultraplanModalOpen: true }) : null}
+              onClearContext={this.props.cliMode ? () => {
+                Modal.confirm({
+                  title: t('ui.chatInput.clearContextConfirm'),
+                  okType: 'danger',
+                  okText: t('ui.chatInput.clearContext'),
+                  onOk: () => {
+                    const textarea = this._inputRef.current;
+                    if (textarea) {
+                      textarea.value = '/clear';
+                      this.setState({ inputEmpty: false, pendingImages: [] }, () => this.handleInputSend());
+                    }
+                  },
+                });
+              } : null}
               isStreaming={this.props.isStreaming}
               streamingFading={this.state.streamingFading}
+              pendingImages={this.state.pendingImages}
+              onRemovePendingImage={this._removePendingImage}
+            />
+            <UltraPlanModal
+              open={this.state.ultraplanModalOpen}
+              variant={this.state.ultraplanVariant}
+              prompt={this.state.ultraplanPrompt}
+              files={this.state.ultraplanFiles}
+              modelName={this._reqScanCache?.modelName}
+              agentTeamEnabled={this.state.agentTeamEnabled}
+              customExperts={this.state.customUltraplanExperts}
+              onClose={() => this.setState({ ultraplanModalOpen: false })}
+              onVariantChange={(v) => this.setState({ ultraplanVariant: v })}
+              onPromptChange={(t) => this.setState({ ultraplanPrompt: t })}
+              onSend={this._handleUltraplanSend}
+              onUpload={this._handleUltraplanUpload}
+              onPaste={this._handleUltraplanPaste}
+              onRemoveFile={this._handleUltraplanRemoveFile}
+              onOpenCustomEditor={this._openCustomUltraplanEditor}
+            />
+            <CustomUltraplanEditModal
+              open={this.state.customUltraplanEditOpen}
+              initial={this.state.customUltraplanEditing}
+              onSave={this._saveCustomUltraplanExpert}
+              onDelete={this._deleteCustomUltraplanExpert}
+              onClose={this._closeCustomUltraplanEditor}
             />
             </div>
           </div>
-          {cliMode && onToggleTerminal && (
+          {cliMode && !this.props.sdkMode && onToggleTerminal && (
             <div
               className={styles.terminalToggle}
               onClick={onToggleTerminal}
@@ -2437,17 +3401,21 @@ class ChatView extends React.Component {
                     fileVersion: (this.state.fileVersion || 0) + 1,
                   });
                 }} onFilePath={(path) => {
-                  const quoted = `"${path}"`;
-                  if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
-                    this._inputWs.send(JSON.stringify({ type: 'input', data: quoted }));
-                  }
-                }} />
+                  // 加入 pendingImages，在终端 Enter 时统一注入 PTY
+                  this._addPendingImage(path, 'terminal');
+                }}
+                pendingImages={this.state.pendingImages}
+                onRemovePendingImage={this._removePendingImage}
+                onClearPendingImages={this._clearPendingImages}
+                modelName={this._reqScanCache?.modelName}
+                />
               </div>
             </>
           )}
         </div>
       </div>
-      <TeamModal session={this.state.teamModalSession} requests={this.props.requests} mainAgentSessions={this.props.mainAgentSessions} collapseToolResults={this.props.collapseToolResults} expandThinking={this.props.expandThinking} userProfile={this.props.userProfile} onViewRequest={this.props.onViewRequest} onClose={() => this.setState({ teamModalSession: null })} />
+      <TeamModal session={this.state.teamModalSession} requests={this.props.requests} mainAgentSessions={this.props.mainAgentSessions} collapseToolResults={this.props.collapseToolResults} expandThinking={this.props.expandThinking} showFullToolContent={this.props.showFullToolContent} userProfile={this.props.userProfile} onViewRequest={this.props.onViewRequest} onClose={() => this.setState({ teamModalSession: null })} />
+      <PresetModal open={this.state.mobilePresetModalVisible} onClose={() => this.setState({ mobilePresetModalVisible: false })} items={this.state.presetItems} onItemsChange={(items) => this.setState({ presetItems: items })} />
     </>);
   }
 }

@@ -1,8 +1,8 @@
 import React from 'react';
-import { ConfigProvider, Layout, theme, Modal, Button, Checkbox, Spin, message } from 'antd';
+import { ConfigProvider, Layout, theme, Modal, Button, Checkbox, Spin, Alert, message } from 'antd';
 import { UploadOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import AppBase, { styles } from './AppBase';
-import { isMobile } from './env';
+import { isMobile, setViewMode } from './env';
 import { uploadFileAndGetPath } from './components/TerminalPanel';
 import AppHeader from './components/AppHeader';
 import RequestList from './components/RequestList';
@@ -23,9 +23,42 @@ class App extends AppBase {
     Object.assign(this.state, {
       leftPanelWidth: 380,
       terminalVisible: true,
-      currentTab: 'request',
+      currentTab: 'context',
       pendingCacheHighlight: null,
     });
+  }
+
+  componentDidMount() {
+    super.componentDidMount();
+    // 窗口宽度 < 600px 时提示切换到侧边栏模式
+    this._mqlNarrow = window.matchMedia('(max-width: 600px)');
+    this._modeSwitchDialog = null;
+    this._onNarrowChange = (e) => {
+      if (e.matches) {
+        this._modeSwitchDialog = Modal.confirm({
+          title: t('ui.modeSwitchTitle'),
+          content: t('ui.modeSwitchToSidebar'),
+          okText: t('ui.ok'),
+          onOk: () => { this._modeSwitchDialog = null; setViewMode('pad'); },
+          onCancel: () => { this._modeSwitchDialog = null; },
+        });
+      } else if (this._modeSwitchDialog) {
+        this._modeSwitchDialog.destroy();
+        this._modeSwitchDialog = null;
+      }
+    };
+    this._mqlNarrow.addEventListener('change', this._onNarrowChange);
+  }
+
+  componentWillUnmount() {
+    if (this._mqlNarrow) {
+      this._mqlNarrow.removeEventListener('change', this._onNarrowChange);
+    }
+    if (this._modeSwitchDialog) {
+      this._modeSwitchDialog.destroy();
+      this._modeSwitchDialog = null;
+    }
+    super.componentWillUnmount();
   }
 
   // ─── PC 专属方法 ───────────────────────────────────────
@@ -210,6 +243,12 @@ class App extends AppBase {
   _onDragOver = (e) => {
     e.preventDefault();
     if (this._isInternalDrag(e)) return;
+    // FileExplorer 区域不显示全屏 overlay，由 FileExplorer 自己处理外部拖入反馈
+    const overFileExplorer = e.target.closest && e.target.closest('[data-file-explorer]');
+    if (overFileExplorer) {
+      if (this.state.isDragging) this.setState({ isDragging: false });
+      return;
+    }
     if (!this.state.isDragging) this.setState({ isDragging: true });
   };
 
@@ -257,7 +296,7 @@ class App extends AppBase {
     }
 
     return (
-      <ConfigProvider theme={this.darkThemeConfig}>
+      <ConfigProvider theme={this.themeConfig}>
         {fileLoading && (
           <div className={styles.loadingOverlay}>
             <div className={styles.loadingText}>Loading...({fileLoadingCount})</div>
@@ -289,14 +328,19 @@ class App extends AppBase {
               onCollapseToolResultsChange={this.handleCollapseToolResultsChange}
               expandThinking={this.state.expandThinking}
               onExpandThinkingChange={this.handleExpandThinkingChange}
+              showFullToolContent={this.state.showFullToolContent}
+              onShowFullToolContentChange={this.handleShowFullToolContentChange}
               expandDiff={this.state.expandDiff}
               onExpandDiffChange={this.handleExpandDiffChange}
               filterIrrelevant={!this.state.showAll}
               onFilterIrrelevantChange={this.handleFilterIrrelevantChange}
+              logDir={this.state.logDir}
+              onLogDirChange={this.handleLogDirChange}
               updateInfo={this.state.updateInfo}
               onDismissUpdate={() => this.setState({ updateInfo: null })}
               cliMode={this.state.cliMode}
-              terminalVisible={this.state.terminalVisible}
+              sdkMode={this.state.sdkMode}
+              terminalVisible={this.state.sdkMode ? false : this.state.terminalVisible}
               onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))}
               onReturnToWorkspaces={this.state.cliMode ? this.handleReturnToWorkspaces : null}
               contextWindow={this.state.contextWindow}
@@ -305,13 +349,25 @@ class App extends AppBase {
               resumeAutoChoice={this.state.resumeAutoChoice}
               onResumeAutoChoiceToggle={this.handleResumeAutoChoiceToggle}
               onResumeAutoChoiceChange={this.handleResumeAutoChoiceChange}
+              themeColor={this.state.themeColor}
+              onThemeColorChange={this.handleThemeColorChange}
+              autoApproveSeconds={this.state.autoApproveSeconds}
+              onAutoApproveChange={this.handleAutoApproveChange}
               proxyProfiles={this.state.proxyProfiles}
               activeProxyId={this.state.activeProxyId}
               defaultConfig={this.state.defaultConfig}
               onProxyProfileChange={this.handleProxyProfileChange}
             />
           </Layout.Header>
-
+          {this.state.claudeMissing && (
+            <Alert
+              type="warning"
+              showIcon
+              banner
+              message={t('ui.claudeMissing.title')}
+              description={<span>{t('ui.claudeMissing.desc')}<br /><code style={{ background: 'var(--bg-code)', padding: '2px 6px', borderRadius: 3 }}>npm install -g @anthropic-ai/claude-code</code> <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>{t('ui.claudeMissing.or')}</span> <a href="https://claude.ai/download" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary-light)' }}>{t('ui.claudeMissing.native')}</a></span>}
+            />
+          )}
           <Layout.Content className={styles.content}>
             {viewMode === 'raw' && (
               filteredRequests.length === 0 ? (
@@ -386,7 +442,7 @@ class App extends AppBase {
               )
             )}
             <div className={styles.chatViewWrapper} style={{ display: viewMode === 'chat' ? 'flex' : 'none' }}>
-              <ChatView requests={filteredRequests} mainAgentSessions={mainAgentSessions} userProfile={this.state.userProfile} collapseToolResults={this.state.collapseToolResults} expandThinking={this.state.expandThinking} showThinkingSummaries={this.state.showThinkingSummaries} onViewRequest={this.handleViewRequest} scrollToTimestamp={this.state.chatScrollToTs} onScrollTsDone={this.handleScrollTsDone} cliMode={this._isLocalLog ? false : this.state.cliMode} terminalVisible={this._isLocalLog ? false : this.state.terminalVisible} onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))} pendingUploadPaths={this.state.pendingUploadPaths} onUploadPathsConsumed={this.handleUploadPathsConsumed} fileLoading={this.state.fileLoading} isStreaming={this.state.isStreaming} hasMoreHistory={this.state.hasMoreHistory} loadingMore={this.state.loadingMore} onLoadMoreHistory={() => this.loadMoreHistory()} loadingSessionId={this.state.loadingSessionId} onLoadSession={(sid) => this.loadSession(sid)} lang={this.state.lang} />
+              <ChatView requests={filteredRequests} mainAgentSessions={mainAgentSessions} streamingLatest={this.state.streamingLatest} userProfile={this.state.userProfile} collapseToolResults={this.state.collapseToolResults} expandThinking={this.state.expandThinking} showFullToolContent={this.state.showFullToolContent} showThinkingSummaries={this.state.showThinkingSummaries} onViewRequest={this.handleViewRequest} scrollToTimestamp={this.state.chatScrollToTs} onScrollTsDone={this.handleScrollTsDone} cliMode={this._isLocalLog ? false : this.state.cliMode} sdkMode={this._isLocalLog ? false : this.state.sdkMode} terminalVisible={this._isLocalLog ? false : (this.state.sdkMode ? false : this.state.terminalVisible)} onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))} pendingUploadPaths={this.state.pendingUploadPaths} onUploadPathsConsumed={this.handleUploadPathsConsumed} fileLoading={this.state.fileLoading} isStreaming={this.state.isStreaming} hasMoreHistory={this.state.hasMoreHistory} loadingMore={this.state.loadingMore} onLoadMoreHistory={() => this.loadMoreHistory()} loadingSessionId={this.state.loadingSessionId} onLoadSession={(sid) => this.loadSession(sid)} lang={this.state.lang} autoApproveSeconds={this.state.autoApproveSeconds} onAutoApproveChange={this.handleAutoApproveChange} />
             </div>
           </Layout.Content>
           <div className={styles.footer}>
@@ -395,12 +451,48 @@ class App extends AppBase {
                 <svg className={styles.footerIcon} viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
                 GitHub{this.state.githubStars != null ? ` ★ ${this.state.githubStars}` : ''}
               </a>
-              <span className={styles.footerDivider}>|</span>
-              <a href="dingtalk://dingtalkclient/action/sendmsg?dingtalk_id=sthk5es" className={styles.footerLink}>{t('ui.footer.contact')}</a>
+              <span className={styles.footerSep}>|</span>
+              <span className={`${styles.footerVersion}${this.state.updateInfo ? ` ${styles.footerVersionNew}` : ''}`} onClick={() => this.setState({ updateModalVisible: true })} style={{ cursor: 'pointer' }}>
+                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''}
+                {this.state.updateInfo && (
+                  <svg className={styles.newBadge} width="28" height="12" viewBox="0 0 28 12">
+                    <rect width="28" height="12" rx="3" fill="currentColor" opacity="0.25" />
+                    <text x="14" y="9" textAnchor="middle" fill="currentColor" fontSize="8" fontWeight="600" fontFamily="system-ui">NEW</text>
+                  </svg>
+                )}
+              </span>
             </div>
           </div>
         </Layout>
 
+        <Modal
+          title={t('ui.update.title')}
+          open={this.state.updateModalVisible}
+          onCancel={() => this.setState({ updateModalVisible: false })}
+          footer={null}
+          width={480}
+        >
+          <div style={{ lineHeight: 1.8 }}>
+            <p><strong>{t('ui.update.current')}:</strong> v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''}</p>
+            {this.state.updateInfo && <p><strong>{t('ui.update.latest')}:</strong> v{this.state.updateInfo.version}</p>}
+            <p style={{ marginTop: 12 }}><strong>{t('ui.update.npm')}</strong></p>
+            <code style={{ display: 'block', background: 'var(--bg-code)', padding: '8px 12px', borderRadius: 6, fontSize: 13 }}>npm update -g cc-viewer</code>
+            {typeof window !== 'undefined' && window.electronAPI && (<>
+              <p style={{ marginTop: 16 }}><strong>{t('ui.update.electron')}</strong></p>
+              <p style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>{t('ui.update.electronDesc')}</p>
+              <ol style={{ color: 'var(--text-tertiary)', fontSize: 13, paddingLeft: 20, margin: '6px 0' }}>
+                <li>{t('ui.update.step1')}</li>
+                <li>{t('ui.update.step2')}</li>
+                <li>{t('ui.update.step3')}</li>
+              </ol>
+            </>)}
+            <div style={{ marginTop: 16, textAlign: 'right' }}>
+              <Button type="primary" href="https://github.com/weiesky/cc-viewer/releases" target="_blank" rel="noopener noreferrer">
+                {t('ui.update.goReleases')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
         <Modal
           title={t('ui.resume.title')}
           open={this.state.resumeModalVisible}

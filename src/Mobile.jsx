@@ -1,12 +1,15 @@
 import React from 'react';
-import { ConfigProvider, Spin, Button, Badge, Switch } from 'antd';
-import { MessageOutlined, BranchesOutlined, DownloadOutlined, DeleteOutlined, RollbackOutlined, ReloadOutlined } from '@ant-design/icons';
+import { ConfigProvider, Spin, Button, Badge, Switch, Select, Modal, message } from 'antd';
+import { BranchesOutlined, DownloadOutlined, DeleteOutlined, RollbackOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import AppBase, { styles } from './AppBase';
-import { isIOS } from './env';
+import { isIOS, isPad, setViewMode } from './env';
 import { isMainAgent, isSystemText, classifyUserContent } from './utils/contentFilter';
+import { getModelMaxTokens } from './utils/helpers';
 import ChatView from './components/ChatView';
-import TerminalPanel from './components/TerminalPanel';
+import TerminalPanel, { uploadFileAndGetPath } from './components/TerminalPanel';
+import ToolApprovalPanel from './components/ToolApprovalPanel';
 import MobileGitDiff from './components/MobileGitDiff';
+import MobileFileExplorer from './components/MobileFileExplorer';
 import MobileStats from './components/MobileStats';
 import OpenFolderIcon from './components/OpenFolderIcon';
 import { t } from './i18n';
@@ -25,15 +28,30 @@ class Mobile extends AppBase {
       mobileSettingsVisible: false,
       mobilePromptVisible: false,
       mobileTerminalVisible: false,
+      mobileFileExplorerVisible: false,
+      globalPermission: null,     // { permission, handlers } — 全局权限审批浮层
+      globalPlanApproval: null,   // { plan, handlers } — 全局计划审批浮层
+      autoApproveSeconds: 0,
+      hasGit: true,
+      terminalPendingImages: [],  // 终端面板独立的 pending 图片/文件
     });
+    this._lastContextPercent = 0;
   }
 
   componentDidMount() {
     super.componentDidMount();
+    // 检测项目是否有 git（优先多仓库 API，回退旧 API）
+    fetch(apiUrl('/api/git-repos')).then(r => r.ok ? r.json() : Promise.reject()).then(data => {
+      if (!data.repos?.length) this.setState({ hasGit: false, mobileGitDiffVisible: false });
+    }).catch(() => {
+      fetch(apiUrl('/api/git-status')).then(r => {
+        if (!r.ok) this.setState({ hasGit: false, mobileGitDiffVisible: false });
+      }).catch(() => this.setState({ hasGit: false, mobileGitDiffVisible: false }));
+    });
     // iOS 虚拟键盘弹出时，Safari 会滚动整个文档将页面上推，
     // 导致导航栏消失在视口之外。通过 visualViewport 的 resize + scroll
     // 事件同步可见区域的高度和偏移，用 fixed 定位将布局锁定在可见区域内。
-    if (isIOS && window.visualViewport) {
+    if (isIOS && !isPad && window.visualViewport) {
       this._onVisualViewportChange = () => {
         const el = this._layoutRef.current;
         if (!el) return;
@@ -48,6 +66,26 @@ class Mobile extends AppBase {
       window.visualViewport.addEventListener('scroll', this._onVisualViewportChange);
       this._onVisualViewportChange();
     }
+    // iPad/侧边栏模式：窗口宽度 > 1400px 时提示切换到全览模式
+    if (isPad) {
+      this._mqlWide = window.matchMedia('(min-width: 1400px)');
+      this._modeSwitchDialog = null;
+      this._onWideChange = (e) => {
+        if (e.matches) {
+          this._modeSwitchDialog = Modal.confirm({
+            title: t('ui.modeSwitchTitle'),
+            content: t('ui.modeSwitchToFullView'),
+            okText: t('ui.ok'),
+            onOk: () => { this._modeSwitchDialog = null; setViewMode('pc'); },
+            onCancel: () => { this._modeSwitchDialog = null; },
+          });
+        } else if (this._modeSwitchDialog) {
+          this._modeSwitchDialog.destroy();
+          this._modeSwitchDialog = null;
+        }
+      };
+      this._mqlWide.addEventListener('change', this._onWideChange);
+    }
   }
 
   componentWillUnmount() {
@@ -55,8 +93,32 @@ class Mobile extends AppBase {
       window.visualViewport.removeEventListener('resize', this._onVisualViewportChange);
       window.visualViewport.removeEventListener('scroll', this._onVisualViewportChange);
     }
+    if (this._mqlWide) {
+      this._mqlWide.removeEventListener('change', this._onWideChange);
+    }
+    if (this._modeSwitchDialog) {
+      this._modeSwitchDialog.destroy();
+      this._modeSwitchDialog = null;
+    }
     super.componentWillUnmount();
   }
+
+  // ─── 对话中文件路径点击 → 打开移动端文件浏览器 ────────────
+  _handleMobileOpenFile = (filePath, ancestors) => {
+    // local log 模式下不打开文件浏览器
+    if (this.state.localLogFile) return;
+    this.setState({
+      mobileFileExplorerVisible: true,
+      mobileFileExplorerTarget: { file: filePath, ancestors: ancestors || [] },
+      mobileGitDiffVisible: false,
+      mobileTerminalVisible: false,
+      mobileStatsVisible: false,
+      mobileLogMgmtVisible: false,
+      mobileSettingsVisible: false,
+      mobilePromptVisible: false,
+      mobileChatVisible: false,
+    });
+  };
 
   // ─── Prompt 提取 ───────────────────────────────────────
 
@@ -187,6 +249,86 @@ class Mobile extends AppBase {
 
   // ─── 移动端渲染 ────────────────────────────────────────
 
+  handlePendingPermission = (data) => { this.setState({ globalPermission: data }); };
+  handlePendingPlanApproval = (data) => { this.setState({ globalPlanApproval: data }); };
+
+  handleAutoApproveChange = (seconds) => {
+    this.setState({ autoApproveSeconds: seconds });
+    fetch(apiUrl('/api/preferences'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoApproveSeconds: seconds }),
+    }).catch(() => {});
+  };
+
+  // ─── 拖拽上传（iPad / Mobile） ────────────────────────────
+  _isInternalDrag = (e) => e.dataTransfer.types.includes('text/x-preset-reorder');
+
+  _onDragOver = (e) => {
+    e.preventDefault();
+    if (this._isInternalDrag(e)) return;
+    const overFileExplorer = e.target.closest && e.target.closest('[data-file-explorer]');
+    if (overFileExplorer) {
+      if (this.state.isDragging) this.setState({ isDragging: false });
+      return;
+    }
+    if (!this.state.isDragging) this.setState({ isDragging: true });
+  };
+
+  _onDragLeave = (e) => {
+    const layout = this._layoutRef.current;
+    if (layout && !layout.contains(e.relatedTarget)) {
+      this.setState({ isDragging: false });
+    }
+  };
+
+  _onDrop = (e) => {
+    e.preventDefault();
+    if (this._isInternalDrag(e)) return;
+    this.setState({ isDragging: false });
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
+    const toTerminal = this.state.mobileTerminalVisible;
+    Promise.all(
+      files.map(file =>
+        uploadFileAndGetPath(file).then(path => ({ name: file.name, path }))
+          .catch(err => { message.error(`${file.name}: ${err.message}`); return null; })
+      )
+    ).then(results => {
+      const uploaded = results.filter(Boolean);
+      if (!uploaded.length) return;
+      if (toTerminal) {
+        this.setState(prev => ({
+          terminalPendingImages: [...prev.terminalPendingImages, ...uploaded.map(r => ({ path: r.path, source: 'drop' }))],
+        }));
+      } else {
+        this.setState(prev => ({
+          pendingUploadPaths: [...(prev.pendingUploadPaths || []), ...uploaded.map(r => `"${r.path}"`)],
+        }));
+      }
+    });
+  };
+
+  handleUploadPathsConsumed = () => {
+    this.setState({ pendingUploadPaths: [] });
+  };
+
+  _handleTerminalFilePath = (path) => {
+    this.setState(prev => ({
+      terminalPendingImages: [...prev.terminalPendingImages, { path, source: 'terminal' }],
+    }));
+  };
+
+  _handleRemoveTerminalImage = (idx) => {
+    this.setState(prev => ({
+      terminalPendingImages: prev.terminalPendingImages.filter((_, i) => i !== idx),
+    }));
+  };
+
+  _handleClearTerminalImages = () => {
+    this.setState({ terminalPendingImages: [] });
+  };
+
   render() {
     const { filteredRequests, fileLoading, fileLoadingCount, mainAgentSessions } = this.renderPrepare();
 
@@ -196,10 +338,21 @@ class Mobile extends AppBase {
     }
 
     const mobileIsLocalLog = !!this._isLocalLog;
-    const mobileChatActive = mobileIsLocalLog || this.state.mobileChatVisible;
+    let mobileModelName = null;
+    for (let i = filteredRequests.length - 1; i >= 0; i--) {
+      if (isMainAgent(filteredRequests[i]) && filteredRequests[i].body?.model) { mobileModelName = filteredRequests[i].body.model; break; }
+    }
 
     return (
-      <div className={styles.mobileCLIRoot} ref={this._layoutRef}>
+      <div className={styles.mobileCLIRoot} ref={this._layoutRef} onDragOver={this._onDragOver} onDragLeave={this._onDragLeave} onDrop={this._onDrop}>
+        {this.state.isDragging && (
+          <div className={styles.dragOverlay}>
+            <div className={styles.dragOverlayContent}>
+              <UploadOutlined className={styles.dragIcon} />
+              <p>{t('ui.dragDropHint')}</p>
+            </div>
+          </div>
+        )}
         <div className={styles.mobileCLIHeader}>
           <div className={styles.mobileCLIHeaderLeft}>
             <button
@@ -213,8 +366,41 @@ class Mobile extends AppBase {
                 <line x1="3" y1="18" x2="21" y2="18" />
               </svg>
             </button>
-            <Badge status="processing" color="green" />
-            <span className={styles.mobileCLIStatusLabel}>{mobileIsLocalLog ? t('ui.historyLog', { file: this._localLogFile }) : (t('ui.liveMonitoring') + (this.state.projectName ? `: ${this.state.projectName}` : ''))}</span>
+            {isPad && !mobileIsLocalLog ? (() => {
+              // iPad 模式：渲染与 PC 一致的上下文血条
+              const contextWindow = this.state.contextWindow;
+              let contextPercent = 0;
+              if (contextWindow?.used_percentage != null) {
+                contextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / 83.5 * 100)));
+              } else if (filteredRequests.length > 0) {
+                for (let i = filteredRequests.length - 1; i >= 0; i--) {
+                  if (isMainAgent(filteredRequests[i]) && filteredRequests[i].response?.body?.usage) {
+                    const u = filteredRequests[i].response.body.usage;
+                    const total = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+                    const maxTokens = contextWindow?.context_window_size || getModelMaxTokens(filteredRequests[i].body?.model || this.state.settingsModel);
+                    const usable = maxTokens * 0.835;
+                    if (usable > 0 && total > 0) contextPercent = Math.min(100, Math.max(0, Math.round(total / usable * 100)));
+                    break;
+                  }
+                }
+              }
+              if (contextPercent === 0 && this._lastContextPercent > 0) contextPercent = this._lastContextPercent;
+              else this._lastContextPercent = contextPercent;
+              const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
+              return (
+                <span className={styles.mobileCtxTag} style={{ borderColor: ctxColor, color: ctxColor }}>
+                  <span className={styles.mobileCtxTagFill} style={{ width: `${contextPercent}%`, backgroundColor: ctxColor }} />
+                  <span className={styles.mobileCtxTagContent}>
+                    {t('ui.liveMonitoring')}{this.state.projectName ? `: ${this.state.projectName}` : ''}
+                  </span>
+                </span>
+              );
+            })() : (
+              <>
+                <Badge status="processing" color="green" />
+                <span className={styles.mobileCLIStatusLabel}>{mobileIsLocalLog ? t('ui.historyLog', { file: this._localLogFile }) : (t('ui.liveMonitoring') + (this.state.projectName ? `: ${this.state.projectName}` : ''))}</span>
+              </>
+            )}
           </div>
           <div className={styles.mobileCLIHeaderRight}>
             {mobileIsLocalLog ? (
@@ -227,38 +413,28 @@ class Mobile extends AppBase {
               >
                 {t('ui.mobileGoBack')}
               </Button>
-            ) : (
+            ) : this.state.hasGit ? (
               <Button
                 type="text"
                 size="small"
                 icon={<BranchesOutlined />}
-                onClick={() => this.setState(prev => ({ mobileGitDiffVisible: !prev.mobileGitDiffVisible, mobileChatVisible: false, mobileTerminalVisible: false, mobileStatsVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false }))}
-                style={{ color: this.state.mobileGitDiffVisible ? '#fff' : '#888', fontSize: 12 }}
+                onClick={() => this.setState(prev => ({ mobileGitDiffVisible: !prev.mobileGitDiffVisible, mobileChatVisible: false, mobileTerminalVisible: false, mobileStatsVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false, mobilePromptVisible: false, mobileFileExplorerVisible: false }))}
+                style={{ color: this.state.mobileGitDiffVisible ? 'var(--color-primary)' : 'var(--text-tertiary)', fontSize: 12 }}
               >
                 {this.state.mobileGitDiffVisible ? t('ui.mobileGitDiffExit') : t('ui.mobileGitDiffBrowse')}
               </Button>
-            )}
-            {!mobileIsLocalLog && (isIOS ? (
+            ) : null}
+            {!mobileIsLocalLog && (
               <Button
                 type="text"
                 size="small"
                 icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>}
-                onClick={() => this.setState(prev => ({ mobileTerminalVisible: !prev.mobileTerminalVisible, mobileGitDiffVisible: false, mobileStatsVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false }))}
-                style={{ color: this.state.mobileTerminalVisible ? '#fff' : '#888', fontSize: 12 }}
+                onClick={() => this.setState(prev => ({ mobileTerminalVisible: !prev.mobileTerminalVisible, mobileGitDiffVisible: false, mobileStatsVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false, mobilePromptVisible: false, mobileFileExplorerVisible: false }))}
+                style={{ color: this.state.mobileTerminalVisible ? 'var(--color-primary)' : 'var(--text-tertiary)', fontSize: 12 }}
               >
                 {this.state.mobileTerminalVisible ? t('ui.mobileTerminalExit') : t('ui.mobileTerminalBrowse')}
               </Button>
-            ) : (
-              <Button
-                type="text"
-                size="small"
-                icon={<MessageOutlined />}
-                onClick={() => this.setState(prev => ({ mobileChatVisible: !prev.mobileChatVisible, mobileGitDiffVisible: false, mobileTerminalVisible: false, mobileStatsVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false }))}
-                style={{ color: this.state.mobileChatVisible ? '#fff' : '#888', fontSize: 12 }}
-              >
-                {this.state.mobileChatVisible ? t('ui.mobileChatExit') : t('ui.mobileChatBrowse')}
-              </Button>
-            ))}
+            )}
           </div>
           {this.state.mobileMenuVisible && (
             <>
@@ -266,7 +442,7 @@ class Mobile extends AppBase {
               <div className={styles.mobileMenuDropdown}>
                 <button
                   className={styles.mobileMenuItem}
-                  onClick={() => { this.setState({ mobileMenuVisible: false, mobileLogMgmtVisible: true, mobileStatsVisible: false, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileSettingsVisible: false, mobilePromptVisible: false }); this.handleImportLocalLogs(); }}
+                  onClick={() => { this.setState({ mobileMenuVisible: false, mobileLogMgmtVisible: true, mobileStatsVisible: false, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileSettingsVisible: false, mobilePromptVisible: false, mobileFileExplorerVisible: false }); this.handleImportLocalLogs(); }}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -278,7 +454,7 @@ class Mobile extends AppBase {
                 </button>
                 <button
                   className={styles.mobileMenuItem}
-                  onClick={() => { this.setState({ mobileMenuVisible: false, mobileStatsVisible: true, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false, mobilePromptVisible: false }); }}
+                  onClick={() => { this.setState({ mobileMenuVisible: false, mobileStatsVisible: true, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false, mobilePromptVisible: false, mobileFileExplorerVisible: false }); }}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="3" width="7" height="7" />
@@ -290,7 +466,7 @@ class Mobile extends AppBase {
                 </button>
                 <button
                   className={styles.mobileMenuItem}
-                  onClick={() => { this.setState({ mobileMenuVisible: false, mobileSettingsVisible: true, mobileStatsVisible: false, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileLogMgmtVisible: false, mobilePromptVisible: false }); }}
+                  onClick={() => { this.setState({ mobileMenuVisible: false, mobileSettingsVisible: true, mobileStatsVisible: false, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileLogMgmtVisible: false, mobilePromptVisible: false, mobileFileExplorerVisible: false }); }}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="3" />
@@ -298,9 +474,20 @@ class Mobile extends AppBase {
                   </svg>
                   {t('ui.settings')}
                 </button>
+                {!mobileIsLocalLog && (
                 <button
                   className={styles.mobileMenuItem}
-                  onClick={() => { this.setState({ mobileMenuVisible: false, mobilePromptVisible: true, mobileStatsVisible: false, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false }); }}
+                  onClick={() => { this.setState({ mobileMenuVisible: false, mobileFileExplorerVisible: true, mobileStatsVisible: false, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false, mobilePromptVisible: false }); }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                  {t('ui.projectFolder')}
+                </button>
+                )}
+                <button
+                  className={styles.mobileMenuItem}
+                  onClick={() => { this.setState({ mobileMenuVisible: false, mobilePromptVisible: true, mobileStatsVisible: false, mobileGitDiffVisible: false, mobileChatVisible: false, mobileTerminalVisible: false, mobileLogMgmtVisible: false, mobileSettingsVisible: false, mobileFileExplorerVisible: false }); }}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -316,8 +503,7 @@ class Mobile extends AppBase {
           )}
         </div>
         <div className={styles.mobileCLIBody}>
-          {!mobileIsLocalLog && !isIOS && <TerminalPanel />}
-          {isIOS && !mobileIsLocalLog && (
+          {!mobileIsLocalLog && (
             <>
               {fileLoading && (
                 <div className={styles.mobileLoadingOverlay}>
@@ -325,20 +511,23 @@ class Mobile extends AppBase {
                   <div className={styles.mobileLoadingLabel}>{t('ui.loadingChat')}{fileLoadingCount > 0 ? ` (${fileLoadingCount})` : ''}</div>
                 </div>
               )}
-              <ConfigProvider theme={this.darkThemeConfig}>
+              <ConfigProvider theme={this.themeConfig}>
                 <div className={styles.mobileChatInner}>
                   <ChatView
                     requests={filteredRequests}
                     mainAgentSessions={mainAgentSessions}
+                    streamingLatest={this.state.streamingLatest}
                     userProfile={this.state.userProfile}
                     collapseToolResults={this.state.collapseToolResults}
                     expandThinking={this.state.expandThinking}
+                    showFullToolContent={this.state.showFullToolContent}
                     showThinkingSummaries={this.state.showThinkingSummaries}
                     onViewRequest={null}
                     scrollToTimestamp={null}
                     onScrollTsDone={() => {}}
                     cliMode={this.state.cliMode}
-                    terminalVisible={false}
+                    sdkMode={this.state.sdkMode}
+                    terminalVisible={this.state.mobileTerminalVisible}
                     mobileChatVisible={true}
                     fileLoading={this.state.fileLoading}
                     isStreaming={this.state.isStreaming}
@@ -347,56 +536,37 @@ class Mobile extends AppBase {
                     onLoadMoreHistory={() => this.loadMoreHistory()}
                     loadingSessionId={this.state.loadingSessionId}
                     onLoadSession={(sid) => this.loadSession(sid)}
+                    onPendingPermission={this.handlePendingPermission}
+                    onPendingPlanApproval={this.handlePendingPlanApproval}
+                    pendingUploadPaths={this.state.pendingUploadPaths}
+                    onUploadPathsConsumed={this.handleUploadPathsConsumed}
+                    onMobileOpenFile={this._handleMobileOpenFile}
                   />
                 </div>
               </ConfigProvider>
             </>
           )}
-          {isIOS && !mobileIsLocalLog && (
+          {!mobileIsLocalLog && (
             <div className={`${styles.mobileChatOverlay} ${this.state.mobileTerminalVisible ? styles.mobileChatOverlayVisible : ''}`}>
-              <TerminalPanel />
+              <TerminalPanel
+                modelName={mobileModelName}
+                onFilePath={this._handleTerminalFilePath}
+                pendingImages={this.state.terminalPendingImages}
+                onRemovePendingImage={this._handleRemoveTerminalImage}
+                onClearPendingImages={this._handleClearTerminalImages}
+              />
             </div>
           )}
           <div className={`${styles.mobileGitDiffOverlay} ${this.state.mobileGitDiffVisible ? styles.mobileGitDiffOverlayVisible : ''}`}>
             <div className={styles.mobileGitDiffInner}>
-              <MobileGitDiff visible={this.state.mobileGitDiffVisible} />
+              <MobileGitDiff visible={this.state.mobileGitDiffVisible} onClose={() => this.setState({ mobileGitDiffVisible: false })} />
             </div>
           </div>
-          {!isIOS && (
-          <div className={`${styles.mobileChatOverlay} ${mobileChatActive ? styles.mobileChatOverlayVisible : ''}`}>
-            {fileLoading && (
-              <div className={styles.mobileLoadingOverlay}>
-                <div className={styles.mobileLoadingSpinner} />
-                <div className={styles.mobileLoadingLabel}>{t('ui.loadingChat')}{fileLoadingCount > 0 ? ` (${fileLoadingCount})` : ''}</div>
-              </div>
-            )}
-            <ConfigProvider theme={this.darkThemeConfig}>
-              <div className={styles.mobileChatInner}>
-                <ChatView
-                  requests={filteredRequests}
-                  mainAgentSessions={mainAgentSessions}
-                  userProfile={this.state.userProfile}
-                  collapseToolResults={this.state.collapseToolResults}
-                  expandThinking={this.state.expandThinking}
-                  showThinkingSummaries={this.state.showThinkingSummaries}
-                  onViewRequest={null}
-                  scrollToTimestamp={null}
-                  onScrollTsDone={() => {}}
-                  cliMode={this.state.cliMode}
-                  terminalVisible={false}
-                  mobileChatVisible={this.state.mobileChatVisible}
-                  fileLoading={this.state.fileLoading}
-                  isStreaming={this.state.isStreaming}
-                  hasMoreHistory={this.state.hasMoreHistory}
-                  loadingMore={this.state.loadingMore}
-                  onLoadMoreHistory={() => this.loadMoreHistory()}
-                  loadingSessionId={this.state.loadingSessionId}
-                  onLoadSession={(sid) => this.loadSession(sid)}
-                />
-              </div>
-            </ConfigProvider>
+          <div className={`${styles.mobileFileExplorerOverlay} ${this.state.mobileFileExplorerVisible ? styles.mobileFileExplorerOverlayVisible : ''}`}>
+            <div className={styles.mobileFileExplorerInner}>
+              <MobileFileExplorer visible={this.state.mobileFileExplorerVisible} onClose={() => this.setState({ mobileFileExplorerVisible: false, mobileFileExplorerTarget: null })} targetFile={this.state.mobileFileExplorerTarget} />
+            </div>
           </div>
-          )}
           <div className={`${styles.mobileStatsOverlay} ${this.state.mobileStatsVisible ? styles.mobileStatsOverlayVisible : ''}`}>
             <div className={styles.mobileStatsInner}>
               <MobileStats
@@ -422,7 +592,7 @@ class Mobile extends AppBase {
                 type={this.state.selectedLogs.size >= 2 ? 'primary' : 'default'}
                 disabled={this.state.selectedLogs.size < 2}
                 onClick={this.handleMergeLogs}
-                style={this.state.selectedLogs.size < 2 ? { color: '#666', borderColor: '#333' } : undefined}
+                style={this.state.selectedLogs.size < 2 ? { color: 'var(--text-muted)', borderColor: 'var(--border-light)' } : undefined}
               >
                 {t('ui.mergeLogs')}
               </Button>
@@ -431,7 +601,7 @@ class Mobile extends AppBase {
                 icon={<DeleteOutlined />}
                 disabled={this.state.selectedLogs.size === 0}
                 onClick={this.handleDeleteLogs}
-                style={this.state.selectedLogs.size === 0 ? { color: '#666', borderColor: '#333' } : { color: '#ff4d4f', borderColor: '#ff4d4f' }}
+                style={this.state.selectedLogs.size === 0 ? { color: 'var(--text-muted)', borderColor: 'var(--border-light)' } : { color: 'var(--color-error-light)', borderColor: 'var(--color-error-light)' }}
               >
                 {t('ui.deleteLogs')}
               </Button>
@@ -457,7 +627,7 @@ class Mobile extends AppBase {
                   );
                 }
                 return (
-                  <ConfigProvider theme={this.darkThemeConfig}>
+                  <ConfigProvider theme={this.themeConfig}>
                   <div className={styles.logListContainer}>
                     {this.renderLogTable(currentLogs, true)}
                   </div>
@@ -490,6 +660,45 @@ class Mobile extends AppBase {
                 <Switch
                   checked={!!this.state.expandThinking}
                   onChange={this.handleExpandThinkingChange}
+                />
+              </div>
+              <div className={styles.mobileSettingsRow}>
+                <span className={styles.mobileSettingsLabel}>{t('ui.showFullToolContent')}</span>
+                <Switch
+                  checked={!!this.state.showFullToolContent}
+                  onChange={this.handleShowFullToolContentChange}
+                />
+              </div>
+              <div className={styles.mobileSettingsSectionTitle}>{t('ui.themeColor')}</div>
+              <div className={styles.mobileSettingsRow}>
+                <Select
+                  size="small"
+                  value={this.state.themeColor || 'dark'}
+                  onChange={this.handleThemeColorChange}
+                  options={[
+                    { label: t('ui.themeColor.dark'), value: 'dark' },
+                    { label: t('ui.themeColor.light'), value: 'light' },
+                  ]}
+                  style={{ width: 140 }}
+                />
+              </div>
+              <div className={styles.mobileSettingsSectionTitle}>{t('ui.permission.autoApprove.setting')}</div>
+              <div className={styles.mobileSettingsRow}>
+                <Select
+                  size="small"
+                  value={this.state.autoApproveSeconds || 0}
+                  onChange={this.handleAutoApproveChange}
+                  options={[
+                    { label: t('ui.permission.autoApprove.off'), value: 0 },
+                    { label: '3s', value: 3 },
+                    { label: '5s', value: 5 },
+                    { label: '10s', value: 10 },
+                    { label: '15s', value: 15 },
+                    { label: '20s', value: 20 },
+                    { label: '30s', value: 30 },
+                    { label: '60s', value: 60 },
+                  ]}
+                  style={{ width: 100 }}
                 />
               </div>
             </div>
@@ -546,6 +755,33 @@ class Mobile extends AppBase {
             </div>
           </div>
         </div>
+        {/* 全局权限审批浮层 — 在 mobileCLIBody 之外渲染，避免 transform 影响 position: fixed */}
+        {this.state.globalPermission && (
+          <ToolApprovalPanel
+            toolName={this.state.globalPermission.permission.toolName}
+            toolInput={this.state.globalPermission.permission.input}
+            requestId={this.state.globalPermission.permission.id}
+            onAllow={this.state.globalPermission.handlers.allow}
+            onAllowSession={this.state.globalPermission.handlers.allowSession}
+            onDeny={this.state.globalPermission.handlers.deny}
+            visible={true}
+            global={true}
+            autoApproveSeconds={this.state.autoApproveSeconds}
+            onAutoApproveChange={this.handleAutoApproveChange}
+            modelName={this.state.globalPermission.modelName}
+          />
+        )}
+        {this.state.globalPlanApproval && (
+          <ToolApprovalPanel
+            toolName="ExitPlanMode"
+            toolInput={this.state.globalPlanApproval.plan.input}
+            requestId={this.state.globalPlanApproval.plan.id}
+            onAllow={this.state.globalPlanApproval.handlers.approve}
+            onDeny={(id) => this.state.globalPlanApproval.handlers.reject(id, '')}
+            visible={true}
+            global={true}
+          />
+        )}
       </div>
     );
   }

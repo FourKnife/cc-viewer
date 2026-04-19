@@ -1,7 +1,7 @@
 import React from 'react';
 import { ConfigProvider, theme, Modal, Table, Tag, Spin, Button, Checkbox, Popover, message } from 'antd';
 import { DownloadOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
-import { isMobile } from './env';
+import { isMobile, isPad } from './env';
 import WorkspaceList from './components/WorkspaceList';
 import OpenFolderIcon from './components/OpenFolderIcon';
 import { t, getLang, setLang } from './i18n';
@@ -10,13 +10,15 @@ import { isMainAgent } from './utils/contentFilter';
 import { apiUrl } from './utils/apiUrl';
 import { saveEntries, loadEntries, clearEntries, getCacheMeta, saveSessionEntries, loadSessionEntries, saveSessionIndex } from './utils/entryCache';
 import { buildSessionIndex, splitHotCold, mergeSessionIndices, HOT_SESSION_COUNT } from './utils/sessionManager';
-import { reconstructEntries } from '../lib/delta-reconstructor.js';
-import { createEntrySlimmer, createIncrementalSlimmer } from './utils/entry-slim.js';
+import { mergeMainAgentSessions as _mergeMainAgentSessions } from './utils/sessionMerge';
+import { reconstructEntries, createIncrementalReconstructor } from '../lib/delta-reconstructor.js';
+import { createEntrySlimmer, createIncrementalSlimmer, restoreSlimmedEntry } from './utils/entry-slim.js';
+import { reinitializeMermaid } from './hooks/useMermaidRender';
 import styles from './App.module.css';
 
 export { styles };
 
-export const MAX_SESSIONS = isMobile ? 30 : 100;
+export const MAX_SESSIONS = (isMobile && !isPad) ? 30 : 100;
 
 /**
  * 共享基类：包含 PC 和 Mobile 通用的状态管理、SSE 通信、数据处理、偏好设置等逻辑。
@@ -51,22 +53,30 @@ class AppBase extends React.Component {
       resumeFileName: '',
       resumeRememberChoice: false,
       resumeAutoChoice: null, // null | "continue" | "new"
+      autoApproveSeconds: 0, // 自动审批倒计时秒数，0=关闭
       collapseToolResults: true,
       expandThinking: true,
       expandDiff: false,
+      logDir: '',
+      showFullToolContent: false,
       showThinkingSummaries: false,
+      themeColor: 'dark',
+      claudeMissing: false,
+      updateModalVisible: false,
       fileLoading: false,
       fileLoadingCount: 0,
       isDragging: false,
       selectedLogs: new Set(),   // Set<file>
       githubStars: null,
       cliMode: false,
+      sdkMode: false,
       workspaceMode: false,
       serverCachedContent: null,
       updateInfo: null,
       pendingUploadPaths: [],
       contextWindow: null,
       isStreaming: false,
+      streamingLatest: null, // { timestamp, url, content, model } — Live typewriter overlay for latest assistant message
       hasMoreHistory: false,
       loadingMore: false,
       sessionIndex: [],
@@ -94,9 +104,14 @@ class AppBase extends React.Component {
     this._cacheLossShowAll = undefined;
     // 增量维护的 KV-Cache 缓存内容（稳定引用，不受 inProgress 闪烁影响）
     this._lastKvCacheContent = null;
-    // P0 perf: 实时 SSE 增量剪枝（默认关闭，localStorage ccv_sseSlim=true 启用）
-    this._sseSlimEnabled = !isMobile && localStorage.getItem('ccv_sseSlim') === 'true';
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
+  }
+
+  /** 批量剪枝 entries：清空旧 MainAgent 的 body.messages，保留最后一条完整 */
+  _batchSlim(entries) {
+    const slimmer = createEntrySlimmer(isMainAgent);
+    for (let i = 0; i < entries.length; i++) slimmer.process(entries[i], entries, i);
+    slimmer.finalize(entries);
   }
 
   /** Rebuild the O(1) request dedup index from a full entries array. */
@@ -111,7 +126,7 @@ class AppBase extends React.Component {
     this._cacheLossLastMainAgent = null;
     this._cacheLossMap = new Map();
     this._lastKvCacheContent = null;
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
   }
 
   /**
@@ -131,7 +146,7 @@ class AppBase extends React.Component {
     this._cacheLossLastMainAgent = null;
     this._cacheLossMap = new Map();
     this._lastKvCacheContent = null;
-    this._sseSlimmer = null;
+    this._sseSlimmer = null; this._sseReconstructor = null;
 
     let currentSessionId = null;
 
@@ -156,7 +171,10 @@ class AppBase extends React.Component {
           (count < prevCount * 0.5 && (prevCount - count) > 4) ||
           (prevUserId && userId && userId !== prevUserId)
         );
-        if (isNewSession) {
+        // Transient 保护：极短 entry（<=4 msgs）在长对话后不应重置 timestamps 累积
+        // 这些通常是中间态请求（request body 只有 user message，尚未拿到 response）
+        const isTransient = isNewSession && count <= 4 && prevCount > 4 && count < prevCount * 0.5;
+        if (isNewSession && !isTransient) {
           currentSessionId = timestamp;
           timestamps = [];
         } else if (currentSessionId === null) {
@@ -185,6 +203,7 @@ class AppBase extends React.Component {
     // 获取 claude settings（showThinkingSummaries 等）
     fetch(apiUrl('/api/claude-settings')).then(r => r.json()).then(data => {
       if (data.showThinkingSummaries) this.setState({ showThinkingSummaries: true });
+      if (data.claudeAvailable === false) this.setState({ claudeMissing: true });
     }).catch(() => {});
 
     // 获取用户偏好设置（包含 filterIrrelevant）
@@ -205,12 +224,32 @@ class AppBase extends React.Component {
         if (data.expandDiff !== undefined) {
           this.setState({ expandDiff: !!data.expandDiff });
         }
+        if (data.showFullToolContent !== undefined) {
+          this.setState({ showFullToolContent: !!data.showFullToolContent });
+        }
         if (data.resumeAutoChoice) {
           this.setState({ resumeAutoChoice: data.resumeAutoChoice });
+        }
+        if (typeof data.autoApproveSeconds === 'number') {
+          this.setState({ autoApproveSeconds: data.autoApproveSeconds });
+        }
+        if (data.themeColor) {
+          this.setState({ themeColor: data.themeColor });
+          document.documentElement.setAttribute('data-theme', data.themeColor === 'light' ? 'light' : 'dark');
         }
         // filterIrrelevant 默认 true，showAll = !filterIrrelevant
         const filterIrrelevant = data.filterIrrelevant !== undefined ? !!data.filterIrrelevant : true;
         this.setState({ showAll: !filterIrrelevant });
+        if (data.logDir) {
+          this.setState({ logDir: data.logDir });
+        }
+        // URL 参数覆盖主题（白名单校验防 XSS）
+        const urlTheme = new URLSearchParams(window.location.search).get('theme');
+        if (urlTheme === 'light' || urlTheme === 'dark') {
+          this.setState({ themeColor: urlTheme });
+          document.documentElement.setAttribute('data-theme', urlTheme);
+        }
+
         return data;
       })
       .catch(() => ({}));
@@ -267,13 +306,17 @@ class AppBase extends React.Component {
         if (isMobile && projectName && !logfile && this.state.requests.length === 0) {
           loadEntries(projectName).then(cached => {
             if (cached && this.state.requests.length === 0) {
+              this._batchSlim(cached);
               const { mainAgentSessions, filtered } = this._processEntries(cached);
               // P1: 缓存恢复也做 hot/cold 分层，避免全量数据驻留内存
               if (mainAgentSessions.length > HOT_SESSION_COUNT) {
                 const sessionIndex = buildSessionIndex(cached, mainAgentSessions);
+                // slimmer 全平台：split 前还原 slimmed entries，确保 IndexedDB / hot 数据完整
+                const unslimmed = cached.map(e => e._slimmed ? restoreSlimmedEntry(e, cached) : e);
                 const { hotEntries, allSessions } = splitHotCold(
-                  cached, mainAgentSessions, sessionIndex, HOT_SESSION_COUNT
+                  unslimmed, mainAgentSessions, sessionIndex, HOT_SESSION_COUNT
                 );
+                this._sseSlimmer = null; this._sseReconstructor = null; // 重置，下帧 SSE 重建
                 const hotFiltered = hotEntries.filter(e => isRelevantRequest(e));
                 // 计算 _oldestTs 供"加载更多"使用
                 this._oldestTs = hotEntries.length > 0 ? hotEntries[0].timestamp : null;
@@ -314,7 +357,7 @@ class AppBase extends React.Component {
         if (data.workspaceMode) {
           this.setState({ cliMode: true, workspaceMode: true, isWorkspaceServer: true });
         } else if (data.cliMode) {
-          this.setState({ cliMode: true, viewMode: 'chat' });
+          this.setState({ cliMode: true, sdkMode: !!data.sdkMode, viewMode: 'chat' });
         }
       })
       .catch(() => { });
@@ -337,6 +380,7 @@ class AppBase extends React.Component {
     if (this._evictionTimer) clearTimeout(this._evictionTimer);
     if (this._sseTimeoutTimer) clearTimeout(this._sseTimeoutTimer);
     if (this._sseReconnectTimer) clearTimeout(this._sseReconnectTimer);
+    if (this._streamingOffTimer) clearTimeout(this._streamingOffTimer);
   }
 
   // ─── SSE 通信 ───────────────────────────────────────────
@@ -351,20 +395,35 @@ class AppBase extends React.Component {
     }, 45000);
   };
 
+  // 不关闭 EventSource —— 连接是会话级单例，workspace 切换复用同一条连接。
+  _teardownTransientLiveState = () => {
+    this._pendingEntries = [];
+    if (this._flushRafId) { cancelAnimationFrame(this._flushRafId); this._flushRafId = null; }
+    if (this._streamingOffTimer) { clearTimeout(this._streamingOffTimer); this._streamingOffTimer = null; }
+    if (this._loadingCountRafId) { cancelAnimationFrame(this._loadingCountRafId); this._loadingCountRafId = null; }
+    this._chunkedEntries = [];
+    this._chunkedTotal = 0;
+    this._isIncremental = false;
+    this._sseSlimmer = null;
+    this._sseReconstructor = null;
+  };
+
   _reconnectSSE() {
+    // SSE 连接真死（心跳超时 / 重试上限），清除流式 overlay 避免卡死
+    if (this.state.streamingLatest) this.setState({ streamingLatest: null });
     if (this._sseReconnectCount >= 10) {
       console.error('SSE reconnect limit reached');
       return;
     }
     this._sseReconnectCount = (this._sseReconnectCount || 0) + 1;
     if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
-    if (this._flushRafId) { cancelAnimationFrame(this._flushRafId); this._flushRafId = null; }
 
-    // 增量恢复：如果加载中断，保存已收到的 chunked entries 以便重连后增量续传
+    // 必须在 _teardownTransientLiveState() 之前，否则 _chunkedEntries 会被清零。
     if (this._chunkedEntries && this._chunkedEntries.length > 0 && isMobile) {
       try {
         const partial = reconstructEntries([...this._chunkedEntries]);
         if (Array.isArray(partial) && partial.length > 0) {
+          this._batchSlim(partial);
           const { mainAgentSessions } = this._processEntries(partial);
           // 保持 fileLoading: true，重连后继续加载
           this.setState({ requests: partial, mainAgentSessions });
@@ -380,14 +439,9 @@ class AppBase extends React.Component {
         console.warn('Failed to save partial entries on reconnect:', e);
       }
     }
-    this._chunkedEntries = [];
-    this._chunkedTotal = 0;
-    this._isIncremental = false;
-    if (this._loadingCountRafId) { cancelAnimationFrame(this._loadingCountRafId); this._loadingCountRafId = null; }
 
-    this._pendingEntries = [];
+    this._teardownTransientLiveState();
     this.setState({ isStreaming: false });
-    this._sseSlimmer = null;
     if (this._sseReconnectTimer) clearTimeout(this._sseReconnectTimer);
     this._sseReconnectTimer = setTimeout(() => { this.initSSE(); }, 2000);
   }
@@ -423,6 +477,7 @@ class AppBase extends React.Component {
       if (Array.isArray(data.entries) && data.entries.length > 0) {
         const reconstructed = reconstructEntries(data.entries);
         const merged = [...reconstructed, ...this.state.requests];
+        this._batchSlim(merged);
         const { mainAgentSessions } = this._processEntries(merged);
         this._oldestTs = data.oldestTimestamp;
 
@@ -430,9 +485,11 @@ class AppBase extends React.Component {
         if (isMobile && mainAgentSessions.length > HOT_SESSION_COUNT) {
           const sessionIndex = buildSessionIndex(merged, mainAgentSessions);
           const fullIndex = mergeSessionIndices(this.state.sessionIndex, sessionIndex);
+          const unslimmed = merged.map(e => e._slimmed ? restoreSlimmedEntry(e, merged) : e);
           const { hotEntries, allSessions, coldGroups } = splitHotCold(
-            merged, mainAgentSessions, fullIndex, HOT_SESSION_COUNT
+            unslimmed, mainAgentSessions, fullIndex, HOT_SESSION_COUNT
           );
+          this._sseSlimmer = null; this._sseReconstructor = null;
           const pn = this.state.projectName;
           if (pn) {
             for (const [sid, coldEntries] of coldGroups) {
@@ -493,6 +550,32 @@ class AppBase extends React.Component {
       // 每次收到任何 SSE 事件（包括心跳注释帧触发的隐式活动）都重置超时
       this.eventSource.onmessage = (event) => { this._resetSSETimeout(); this.handleEventMessage(event); };
       this.eventSource.onopen = () => { this._resetSSETimeout(); };
+      // Live streaming overlay: 直接更新 streamingLatest state（不走 reconstructor / dedup）
+      this.eventSource.addEventListener('stream-progress', (event) => {
+        this._resetSSETimeout();
+        try {
+          const data = JSON.parse(event.data);
+          // 防 stale：若 requests 中已有同 timestamp 的完成条目，说明最终 entry 已到达，
+          // 此 chunk 是乱序/延迟到达的旧包，直接丢弃以免复活已清除的 overlay
+          const existingFinal = this.state.requests.find(r =>
+            r && r.timestamp === data.timestamp && !r.inProgress
+          );
+          if (existingFinal) return;
+          // streamingLatest 生命周期只由两种信号终结（不再用短 timeout 兜底）：
+          // 1) 正常：最终 entry 到达时 _flushPendingEntries 原子清除
+          // 2) 异常：SSE 连接真死 (_reconnectSSE)
+          // 避免长 thinking / 网络抖动 / 切 tab 等场景误杀 overlay。
+          this.setState({
+            streamingLatest: {
+              timestamp: data.timestamp,
+              url: data.url,
+              content: data.content || [],
+              model: data.model,
+              updatedAt: Date.now(),
+            }
+          });
+        } catch { }
+      });
       this.eventSource.addEventListener('resume_prompt', (event) => {
         this._resetSSETimeout();
         try {
@@ -591,6 +674,7 @@ class AppBase extends React.Component {
         const entries = Array.isArray(rawEntries) ? reconstructEntries(rawEntries) : rawEntries;
 
         if (Array.isArray(entries) && entries.length > 0) {
+          this._batchSlim(entries);
           const { mainAgentSessions, filtered } = this._processEntries(entries);
 
           // P1: 移动端 hot/cold 分层
@@ -599,9 +683,11 @@ class AppBase extends React.Component {
             const fullIndex = isIncremental
               ? mergeSessionIndices(this.state.sessionIndex, sessionIndex)
               : sessionIndex;
+            const unslimmed = entries.map(e => e._slimmed ? restoreSlimmedEntry(e, entries) : e);
             const { hotEntries, allSessions, coldGroups } = splitHotCold(
-              entries, mainAgentSessions, fullIndex, HOT_SESSION_COUNT
+              unslimmed, mainAgentSessions, fullIndex, HOT_SESSION_COUNT
             );
+            this._sseSlimmer = null; this._sseReconstructor = null;
             // 冷 session entries 异步写入 IndexedDB
             const pn = this.state.projectName;
             if (pn) {
@@ -648,6 +734,7 @@ class AppBase extends React.Component {
         try {
           const entries = JSON.parse(event.data);
           if (Array.isArray(entries)) {
+            if (entries.length > 0) this._batchSlim(entries);
             const { mainAgentSessions, filtered } = entries.length > 0 ? this._processEntries(entries) : { mainAgentSessions: [], filtered: [] };
             if (entries.length > 0) {
               this.animateLoadingCount(entries.length, () => {
@@ -701,12 +788,14 @@ class AppBase extends React.Component {
             requests: [],
             mainAgentSessions: [],
             selectedIndex: null,
+            streamingLatest: null,
           });
           if (isMobile) clearEntries();
         } catch {}
       });
       this.eventSource.addEventListener('workspace_stopped', () => {
         this._resetSSETimeout();
+        this._teardownTransientLiveState();
         this._rebuildRequestIndex([]);
         this.setState({
           workspaceMode: true,
@@ -714,6 +803,7 @@ class AppBase extends React.Component {
           mainAgentSessions: [],
           projectName: '',
           selectedIndex: null,
+          streamingLatest: null,
         });
       });
       this.eventSource.addEventListener('context_window', (event) => {
@@ -753,10 +843,25 @@ class AppBase extends React.Component {
         this._resetSSETimeout();
         try {
           const data = JSON.parse(e.data);
-          this.setState({ isStreaming: !!data.active });
+          if (data.active) {
+            // 立即显示 loading
+            clearTimeout(this._streamingOffTimer);
+            this.setState({ isStreaming: true });
+          } else {
+            // 延迟隐藏，避免工具调用间隙导致 spinner 频繁闪烁
+            clearTimeout(this._streamingOffTimer);
+            this._streamingOffTimer = setTimeout(() => {
+              this.setState({ isStreaming: false });
+            }, 2000);
+          }
         } catch (err) { console.error('Failed to parse streaming_status:', err); }
       });
-      this.eventSource.onerror = () => console.error('SSE连接错误');
+      this.eventSource.onerror = () => {
+        console.error('SSE连接错误');
+        // 不清 streamingLatest：浏览器会自动 3s 重连，新 chunk 到达会覆盖 state；
+        // 若彻底断连，45s heartbeat 超时触发 _reconnectSSE，那里会清 overlay；
+        // 若流式已完成，最终 entry 的原子清除会收走 overlay。
+      };
     } catch (error) {
       console.error('EventSource初始化失败:', error);
       this.setState({ fileLoading: false, fileLoadingCount: 0 });
@@ -801,11 +906,7 @@ class AppBase extends React.Component {
       // Delta 重建必须在 entry-slim 之前：delta 条目的 body.messages 只有增量部分，
       // 如果先 slim 会永久丢失增量数据，导致重建后 messages 为空
       const reconstructed = reconstructEntries(entries);
-      const slimmer = createEntrySlimmer(isMainAgent);
-      for (let i = 0; i < reconstructed.length; i++) {
-        slimmer.process(reconstructed[i], reconstructed, i);
-      }
-      slimmer.finalize(reconstructed);
+      this._batchSlim(reconstructed);
       if (Array.isArray(reconstructed) && reconstructed.length > 0) {
         const { mainAgentSessions, filtered } = this._processEntries(reconstructed);
         this.setState({
@@ -852,13 +953,20 @@ class AppBase extends React.Component {
       let cacheExpireAt = prev.cacheExpireAt;
       let cacheType = prev.cacheType;
       let mainAgentSessions = prev.mainAgentSessions;
+      let shouldClearStreaming = false;  // 检测到最终 entry 时原子清除 Live overlay
 
       // P0 perf: lazy init 增量剪枝器
-      if (this._sseSlimEnabled && !this._sseSlimmer) {
+      if (!this._sseSlimmer) {
         this._sseSlimmer = createIncrementalSlimmer(isMainAgent);
       }
+      // Delta 增量重建器：SSE 逐条到达的 delta entry 只有增量 messages，
+      // 需要拼接为完整 messages（与批量加载时 reconstructEntries 对应）
+      if (!this._sseReconstructor) {
+        this._sseReconstructor = createIncrementalReconstructor();
+      }
 
-      for (const entry of batch) {
+      for (const rawEntry of batch) {
+        const entry = this._sseReconstructor.reconstruct(rawEntry);
         const key = `${entry.timestamp}|${entry.url}`;
         const existingIndex = this._requestIndexMap.get(key);
 
@@ -878,6 +986,12 @@ class AppBase extends React.Component {
           if (kvCached && (kvCached.system.length > 0 || kvCached.messages.length > 0 || kvCached.tools.length > 0)) {
             this._lastKvCacheContent = kvCached;
           }
+        }
+
+        // Live overlay 原子清除：最终 entry（非 inProgress）到达且 timestamp 匹配 → 同 setState 清除 overlay
+        if (!entry.inProgress && isMainAgent(entry) && prev.streamingLatest
+            && prev.streamingLatest.timestamp === entry.timestamp) {
+          shouldClearStreaming = true;
         }
 
         // 记录 mainAgent 缓存信息
@@ -959,7 +1073,10 @@ class AppBase extends React.Component {
         }, 200);
       }
 
-      return { requests, cacheExpireAt, cacheType, mainAgentSessions };
+      return {
+        requests, cacheExpireAt, cacheType, mainAgentSessions,
+        ...(shouldClearStreaming && { streamingLatest: null }),
+      };
     }, () => {
       // 移动端：防抖 5s 批量写入缓存
       if (isMobile && this.state.projectName) {
@@ -1008,15 +1125,18 @@ class AppBase extends React.Component {
       if (entries && entries.length > 0) {
         const reconstructed = reconstructEntries(entries);
         const merged = [...reconstructed, ...this.state.requests];
+        this._batchSlim(merged);
         const { mainAgentSessions } = this._processEntries(merged);
 
         const sessionIndex = buildSessionIndex(merged, mainAgentSessions);
         const fullIndex = mergeSessionIndices(this.state.sessionIndex, sessionIndex);
         // Fix #3: pin 加载的 session，防止 splitHotCold 立即淘汰
+        const unslimmed = merged.map(e => e._slimmed ? restoreSlimmedEntry(e, merged) : e);
         const { hotEntries, allSessions, coldGroups } = splitHotCold(
-          merged, mainAgentSessions, fullIndex, HOT_SESSION_COUNT,
+          unslimmed, mainAgentSessions, fullIndex, HOT_SESSION_COUNT,
           new Set([sessionId])
         );
+        this._sseSlimmer = null; this._sseReconstructor = null;
         const pn = this.state.projectName;
         if (pn) {
           for (const [sid, coldEntries] of coldGroups) {
@@ -1046,9 +1166,11 @@ class AppBase extends React.Component {
     const { requests, mainAgentSessions, projectName } = this.state;
     if (!isMobile || mainAgentSessions.length <= HOT_SESSION_COUNT) return;
 
+    const unslimmed = requests.map(e => e._slimmed ? restoreSlimmedEntry(e, requests) : e);
     const { hotEntries, allSessions, coldGroups } = splitHotCold(
-      requests, mainAgentSessions, this.state.sessionIndex, HOT_SESSION_COUNT
+      unslimmed, mainAgentSessions, this.state.sessionIndex, HOT_SESSION_COUNT
     );
+    this._sseSlimmer = null; this._sseReconstructor = null;
     const fullIndex = this.state.sessionIndex;
     if (projectName) {
       for (const [sid, coldEntries] of coldGroups) {
@@ -1068,33 +1190,7 @@ class AppBase extends React.Component {
   // ─── 数据处理 ───────────────────────────────────────────
 
   mergeMainAgentSessions(prevSessions, entry) {
-    const newMessages = entry.body.messages;
-    const newResponse = entry.response;
-    const userId = entry.body.metadata?.user_id || null;
-
-    const entryTimestamp = entry.timestamp || null;
-
-    if (prevSessions.length === 0) {
-      return [{ userId, messages: newMessages, response: newResponse, entryTimestamp }];
-    }
-
-    const lastSession = prevSessions[prevSessions.length - 1];
-
-    const prevMsgCount = lastSession.messages ? lastSession.messages.length : 0;
-    const isNewConversation = prevMsgCount > 0 && newMessages.length < prevMsgCount * 0.5 && (prevMsgCount - newMessages.length) > 4;
-    const sameUser = userId !== null && userId === lastSession.userId;
-
-    if (isNewConversation && newMessages.length <= 4 && prevMsgCount > 4) {
-      return prevSessions;
-    }
-
-    if (sameUser || (userId === lastSession.userId && !isNewConversation)) {
-      const updated = [...prevSessions];
-      updated[updated.length - 1] = { userId, messages: newMessages, response: newResponse, entryTimestamp };
-      return updated;
-    } else {
-      return [...prevSessions, { userId, messages: newMessages, response: newResponse, entryTimestamp }];
-    }
+    return _mergeMainAgentSessions(prevSessions, entry);
   }
 
   // ─── 选中 & 导航 ───────────────────────────────────────
@@ -1116,12 +1212,14 @@ class AppBase extends React.Component {
       projectName,
       viewMode: 'chat',
       cliMode: true,
+      terminalVisible: false,
     });
   };
 
   handleReturnToWorkspaces = () => {
     fetch(apiUrl('/api/workspaces/stop'), { method: 'POST' })
       .then(() => {
+        this._teardownTransientLiveState();
         this._rebuildRequestIndex([]);
         this.setState({
           workspaceMode: true,
@@ -1129,6 +1227,7 @@ class AppBase extends React.Component {
           mainAgentSessions: [],
           projectName: '',
           selectedIndex: null,
+          streamingLatest: null,
         });
       })
       .catch(() => {});
@@ -1185,6 +1284,51 @@ class AppBase extends React.Component {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ expandDiff: checked }),
+    }).catch(() => { });
+  };
+
+  handleAutoApproveChange = (seconds) => {
+    this.setState({ autoApproveSeconds: seconds });
+    fetch(apiUrl('/api/preferences'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoApproveSeconds: seconds }),
+    }).catch(() => {});
+  };
+
+  handleThemeColorChange = (value) => {
+    this.setState({ themeColor: value });
+    document.documentElement.setAttribute('data-theme', value === 'light' ? 'light' : 'dark');
+    reinitializeMermaid();
+    fetch(apiUrl('/api/preferences'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ themeColor: value }),
+    }).catch(() => { });
+    // 切换主题后让终端获得焦点，便于用户看到 /theme 切换效果
+    window.dispatchEvent(new CustomEvent('ccv-focus-terminal'));
+  };
+
+  handleLogDirChange = (value) => {
+    if (!value || typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    this.setState({ logDir: trimmed });
+    fetch(apiUrl('/api/preferences'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ logDir: trimmed }),
+    }).then(r => r.json()).then(data => {
+      if (data.logDir) this.setState({ logDir: data.logDir });
+    }).catch(() => { });
+  };
+
+  handleShowFullToolContentChange = (checked) => {
+    this.setState({ showFullToolContent: checked });
+    fetch(apiUrl('/api/preferences'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ showFullToolContent: checked }),
     }).catch(() => { });
   };
 
@@ -1283,8 +1427,8 @@ class AppBase extends React.Component {
               placement={mobile ? 'bottomLeft' : 'leftTop'}
               autoAdjustOverflow={{ adjustX: false, adjustY: true }}
               overlayInnerStyle={{
-                background: '#1e1e1e',
-                border: '1px solid #3a3a3a',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-hover)',
                 borderRadius: 8,
                 padding: 0,
                 maxHeight: 400,
@@ -1520,10 +1664,12 @@ class AppBase extends React.Component {
       return;
     }
     this.animateLoadingCount(entries.length, () => {
+      this._batchSlim(entries);
       const { mainAgentSessions, filtered } = this._processEntries(entries);
       this._isLocalLog = true;
       this._localLogFile = fileNames.length === 1 ? fileNames[0] : `${fileNames.length} files`;
       if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
+      if (this._streamingOffTimer) { clearTimeout(this._streamingOffTimer); this._streamingOffTimer = null; }
       this.setState({
         requests: entries,
         selectedIndex: filtered.length > 0 ? filtered.length - 1 : null,
@@ -1591,25 +1737,28 @@ class AppBase extends React.Component {
   /** 工作区选择器渲染（PC/Mobile 共用） */
   renderWorkspaceMode() {
     return (
-      <ConfigProvider
-        theme={{
-          algorithm: theme.darkAlgorithm,
-          token: {
-            colorPrimary: '#1668dc',
-            colorBgContainer: '#111',
-            colorBgLayout: '#0a0a0a',
-            colorBgElevated: '#1e1e1e',
-            colorBorder: '#2a2a2a',
-          },
-        }}
-      >
+      <ConfigProvider theme={this.themeConfig}>
         <WorkspaceList onLaunch={this.handleWorkspaceLaunch} />
       </ConfigProvider>
     );
   }
 
-  /** Ant Design 暗色主题配置 */
-  get darkThemeConfig() {
+  /** Ant Design 主题配置 (dark/light) */
+  get themeConfig() {
+    if (this.state.themeColor === 'light') {
+      return {
+        algorithm: theme.defaultAlgorithm,
+        token: {
+          colorPrimary: '#0969DA',
+          colorBgContainer: '#FFFFFF',
+          colorBgLayout: '#FAFAFA',
+          colorBgElevated: '#FFFFFF',
+          colorBorder: '#E0E0E0',
+          controlOutline: 'transparent',
+          controlOutlineWidth: 0,
+        },
+      };
+    }
     return {
       algorithm: theme.darkAlgorithm,
       token: {

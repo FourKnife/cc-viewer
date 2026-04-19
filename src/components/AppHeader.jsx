@@ -1,6 +1,6 @@
 import React from 'react';
 import { Space, Tag, Button, Dropdown, Popover, Modal, Collapse, Drawer, Switch, Radio, Tabs, Spin, Input, Table, Select, message } from 'antd';
-import { MessageOutlined, FileTextOutlined, ImportOutlined, DashboardOutlined, ExportOutlined, DownloadOutlined, SettingOutlined, BarChartOutlined, CodeOutlined, GlobalOutlined, CopyOutlined, ApiOutlined, DeleteOutlined, ReloadOutlined, PlusOutlined, CloudDownloadOutlined, SwapOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
+import { MessageOutlined, FileTextOutlined, ImportOutlined, DashboardOutlined, ExportOutlined, DownloadOutlined, SettingOutlined, BarChartOutlined, CodeOutlined, CopyOutlined, ApiOutlined, DeleteOutlined, ReloadOutlined, PlusOutlined, CloudDownloadOutlined, SwapOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { QRCodeCanvas } from 'qrcode.react';
 import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeToolUsageStats, computeSkillUsageStats, getModelMaxTokens, extractCachedContent } from '../utils/helpers';
 import { isSystemText, classifyUserContent, isMainAgent } from '../utils/contentFilter';
@@ -45,8 +45,8 @@ const countryToFlag = (code) => {
 class AppHeader extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { countdownText: '', countryFlag: null, countryInfo: null, promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false, cacheHighlightIdx: null, cacheHighlightFading: false, cdnModalVisible: false, cdnUrl: '', cdnLoading: false, calibrationModel: (v => CALIBRATION_MODELS.some(m => m.value === v) ? v : 'auto')(localStorage.getItem('ccv_calibrationModel') || 'auto'), proxyModalVisible: false, editingProxy: null, editForm: { name: '', baseURL: '', apiKey: '', models: '', activeModel: '' } };
-    this._rafId = null;
+    this.state = { countdownText: '', countryFlag: null, countryInfo: null, promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false, cacheHighlightIdx: null, cacheHighlightFading: false, cdnModalVisible: false, cdnUrl: '', cdnLoading: false, calibrationModel: (v => CALIBRATION_MODELS.some(m => m.value === v) ? v : 'auto')(localStorage.getItem('ccv_calibrationModel') || 'auto'), proxyModalVisible: false, editingProxy: null, editForm: { name: '', baseURL: '', apiKey: '', models: '', activeModel: '' }, logDirDraft: null };
+    this._countdownTimer = null;
     this._expiredTimer = null;
     this.updateCountdown = this.updateCountdown.bind(this);
   }
@@ -59,9 +59,9 @@ class AppHeader extends React.Component {
     fetch(apiUrl('/api/claude-settings')).then(r => r.json()).then(data => {
       if (data.model) this.setState({ settingsModel: data.model });
     }).catch(() => {});
-    fetch('https://ipinfo.io/json').then(r => r.json()).then(data => {
+    fetch('https://ipinfo.io/json', { signal: AbortSignal.timeout(5000) }).then(r => r.json()).then(data => {
       if (data.country) this.setState({ countryFlag: countryToFlag(data.country), countryInfo: data });
-    }).catch(() => { this.setState({ countryFlag: countryToFlag('CN') }); });
+    }).catch(() => {});
   }
 
   componentDidUpdate(prevProps) {
@@ -81,8 +81,10 @@ class AppHeader extends React.Component {
       nextProps.projectName !== this.props.projectName ||
       nextProps.collapseToolResults !== this.props.collapseToolResults ||
       nextProps.expandThinking !== this.props.expandThinking ||
+      nextProps.showFullToolContent !== this.props.showFullToolContent ||
       nextProps.expandDiff !== this.props.expandDiff ||
       nextProps.filterIrrelevant !== this.props.filterIrrelevant ||
+      nextProps.logDir !== this.props.logDir ||
       nextProps.cliMode !== this.props.cliMode ||
       nextProps.contextWindow !== this.props.contextWindow ||
       nextProps.serverCachedContent !== this.props.serverCachedContent ||
@@ -95,22 +97,29 @@ class AppHeader extends React.Component {
   }
 
   componentWillUnmount() {
-    if (this._rafId) cancelAnimationFrame(this._rafId);
+    if (this._countdownTimer) clearTimeout(this._countdownTimer);
     if (this._expiredTimer) clearTimeout(this._expiredTimer);
     if (this._cacheFadeClearTimer) clearTimeout(this._cacheFadeClearTimer);
+    if (this._cacheScrollSettleTimer) clearTimeout(this._cacheScrollSettleTimer);
+    if (this._cacheAutoFadeTimer) clearTimeout(this._cacheAutoFadeTimer);
+    if (this._cacheHighlightDelayTimer) clearTimeout(this._cacheHighlightDelayTimer);
     this._cacheUnbindScrollFade();
   }
 
   startCountdown() {
-    if (this._rafId) cancelAnimationFrame(this._rafId);
+    if (this._countdownTimer) clearTimeout(this._countdownTimer);
     if (this._expiredTimer) clearTimeout(this._expiredTimer);
     if (!this.props.cacheExpireAt) {
       if (this.state.countdownText !== '') this.setState({ countdownText: '' });
       return;
     }
-    this._rafId = requestAnimationFrame(this.updateCountdown);
+    this.updateCountdown();
   }
 
+  // 秒级倒计时：改用 setTimeout 对齐下一秒边界，替代原 rAF 60fps 递归。
+  // 旧实现每 16ms 跑一次 Date.now() + math + compare 虽然大多数帧不 setState，
+  // 但仍占大量调度开销（profile 中 ~1934 samples）。新实现每秒至多一次 tick，
+  // 保留 "text 未变不 setState" 守卫避免多余 render。
   updateCountdown() {
     const { cacheExpireAt } = this.props;
     if (!cacheExpireAt) {
@@ -118,7 +127,8 @@ class AppHeader extends React.Component {
       return;
     }
 
-    const remaining = Math.max(0, cacheExpireAt - Date.now());
+    const now = Date.now();
+    const remaining = Math.max(0, cacheExpireAt - now);
     if (remaining <= 0) {
       const expired = t('ui.cacheExpired');
       if (this.state.countdownText !== expired) this.setState({ countdownText: expired });
@@ -138,7 +148,8 @@ class AppHeader extends React.Component {
       text = t('ui.second', { s: totalSec });
     }
     if (text !== this.state.countdownText) this.setState({ countdownText: text });
-    this._rafId = requestAnimationFrame(this.updateCountdown);
+    const delay = 1000 - (now % 1000);
+    this._countdownTimer = setTimeout(this.updateCountdown, delay);
   }
 
   // 命令相关的标签集合，已作为独立 prompt 输出，在 segments 中直接丢弃
@@ -277,6 +288,18 @@ class AppHeader extends React.Component {
 
   renderTokenStats() {
     const { requests = [] } = this.props;
+    const { cacheHighlightIdx, cacheHighlightFading } = this.state;
+    // Popover 打开期间 AppHeader 可能因 contextWindow / serverCachedContent 等其他
+    // prop 变化而重渲，此时 requests 未变但会重跑 3 份 O(N) 聚合 + 大 JSX 构造。
+    // 按 requests 引用 + 2 个高亮 state 做 === memo，典型场景命中率 >80%。
+    if (
+      this._tokenStatsCache &&
+      this._tokenStatsCacheReq === requests &&
+      this._tokenStatsCacheHl === cacheHighlightIdx &&
+      this._tokenStatsCacheFade === cacheHighlightFading
+    ) {
+      return this._tokenStatsCache;
+    }
     const byModel = computeTokenStats(requests);
     const models = Object.keys(byModel);
     const toolStats = computeToolUsageStats(requests);
@@ -397,7 +420,7 @@ class AppHeader extends React.Component {
       </div>
     ) : null;
 
-    return (
+    const result = (
       <div className={styles.tokenStatsContainer}>
         {tokenColumn}
         {cacheRebuildColumn}
@@ -405,6 +428,11 @@ class AppHeader extends React.Component {
         {skillColumn}
       </div>
     );
+    this._tokenStatsCache = result;
+    this._tokenStatsCacheReq = requests;
+    this._tokenStatsCacheHl = cacheHighlightIdx;
+    this._tokenStatsCacheFade = cacheHighlightFading;
+    return result;
   }
 
   _cacheUnbindScrollFade() {
@@ -518,7 +546,7 @@ class AppHeader extends React.Component {
       if (items.length === 0) return null;
       const isMessages = title === t('ui.messages');
       const sectionState = (this.state._cacheSectionCollapsed || {})[sectionKey];
-      const collapsed = sectionState !== undefined ? !!sectionState : sectionKey === 'tools';
+      const collapsed = sectionState !== undefined ? !!sectionState : true;
       const toggleCollapse = () => this.setState(prev => ({
         _cacheSectionCollapsed: { ...(prev._cacheSectionCollapsed || {}), [sectionKey]: !collapsed },
       }));
@@ -699,7 +727,7 @@ class AppHeader extends React.Component {
     return (
       <div className={styles.toolStatsColumn}>
         {hasCacheStats && (
-          <div className={hasSubAgentStats ? styles.modelCardSpaced : styles.modelCard}>
+          <div className={(hasSubAgentStats || hasTeammateStats) ? styles.modelCardSpaced : styles.modelCard}>
             <div className={styles.modelName}>MainAgent<ConceptHelp doc="MainAgent" /> {t('ui.cacheRebuildStats')}<ConceptHelp doc="CacheRebuild" /></div>
             <table className={styles.statsTable}>
             <thead>
@@ -1171,7 +1199,7 @@ class AppHeader extends React.Component {
   }
 
   render() {
-    const { requestCount, requests = [], viewMode, cacheType, onToggleViewMode, onImportLocalLogs, onLangChange, isLocalLog, localLogFile, projectName, collapseToolResults, onCollapseToolResultsChange, expandThinking, onExpandThinkingChange, expandDiff, onExpandDiffChange, filterIrrelevant, onFilterIrrelevantChange, updateInfo, onDismissUpdate, cliMode, terminalVisible, onToggleTerminal, onReturnToWorkspaces, contextWindow, serverCachedContent, resumeAutoChoice, onResumeAutoChoiceToggle, onResumeAutoChoiceChange } = this.props;
+    const { requestCount, requests = [], viewMode, cacheType, onToggleViewMode, onImportLocalLogs, onLangChange, isLocalLog, localLogFile, projectName, collapseToolResults, onCollapseToolResultsChange, expandThinking, onExpandThinkingChange, showFullToolContent, onShowFullToolContentChange, expandDiff, onExpandDiffChange, filterIrrelevant, onFilterIrrelevantChange, logDir, onLogDirChange, updateInfo, onDismissUpdate, cliMode, terminalVisible, onToggleTerminal, onReturnToWorkspaces, contextWindow, serverCachedContent, resumeAutoChoice, onResumeAutoChoiceToggle, onResumeAutoChoiceChange, themeColor, onThemeColorChange, autoApproveSeconds, onAutoApproveChange } = this.props;
     const { countdownText } = this.state;
 
     const menuItems = [
@@ -1230,34 +1258,6 @@ class AppHeader extends React.Component {
         label: t('ui.settings'),
         onClick: () => this.setState({ settingsDrawerVisible: true }),
       }] : []),
-      {
-        key: 'language',
-        icon: <GlobalOutlined />,
-        label: t('ui.languageSettings'),
-        children: [{
-          key: 'lang-grid-container',
-          type: 'group',
-          label: (
-            <div className={styles.langGrid}>
-              {LANG_OPTIONS.map(o => (
-                <Button
-                  key={o.value}
-                  size="small"
-                  type={o.value === getLang() ? 'primary' : 'default'}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setLang(o.value);
-                    if (onLangChange) onLangChange();
-                  }}
-                  className={styles.langBtn}
-                >
-                  {o.label}
-                </Button>
-              ))}
-            </div>
-          ),
-        }],
-      },
     ];
 
     return (
@@ -1269,10 +1269,10 @@ class AppHeader extends React.Component {
             </span>
           </Dropdown>
           <Popover
-            content={this.renderTokenStats()}
+            content={() => this.renderTokenStats()}
             trigger="hover"
             placement="bottomLeft"
-            overlayInnerStyle={{ background: '#1e1e1e', border: '1px solid #3a3a3a', borderRadius: 8, padding: '8px 8px', maxHeight: '80vh', overflowY: 'auto' }}
+            overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: '8px 8px', maxHeight: '80vh', overflowY: 'auto' }}
           >
             <Tag className={styles.tokenStatsTag}>
               <DashboardOutlined className={styles.tokenStatsIcon} />
@@ -1350,7 +1350,7 @@ class AppHeader extends React.Component {
             if (contextPercent === 0 && this._lastContextPercent > 0) {
               contextPercent = this._lastContextPercent;
             }
-            const ctxColor = contextPercent >= 80 ? '#ff4d4f' : contextPercent >= 60 ? '#faad14' : '#52c41a';
+            const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
 
             return isLocalLog ? (
               <Tag className={`${styles.liveTag} ${styles.liveTagHistory}`}>
@@ -1361,7 +1361,7 @@ class AppHeader extends React.Component {
                 content={this.state._cachePopoverOpen ? this.renderCacheContentPopover(contextPercent) : <div className={styles.cachePopoverPlaceholder} />}
                 trigger="hover"
                 placement="bottomLeft"
-                overlayInnerStyle={{ background: '#1e1e1e', border: '1px solid #3a3a3a', borderRadius: 8, padding: '8px 8px' }}
+                overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: '8px 8px' }}
                 onOpenChange={(open) => { this.setState({ _cachePopoverOpen: open }); if (!open) this._cacheScrollInited = false; }}
               >
                 <span className={styles.liveTag} style={{ borderColor: ctxColor, color: ctxColor }}>
@@ -1390,14 +1390,14 @@ class AppHeader extends React.Component {
 
         <Space size="middle">
           {countdownText && viewMode === 'raw' && (
-            <Tag style={{ background: '#2a2a2a', border: '1px solid #3a3a3a', color: countdownText === t('ui.cacheExpired') ? '#ff6b6b' : '#ccc' }}>
+            <Tag style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-hover)', color: countdownText === t('ui.cacheExpired') ? 'var(--color-error-light)' : 'var(--text-secondary)' }}>
               {t('ui.cacheCountdown', { type: cacheType ? `(${cacheType})` : '' })}
               <strong className={styles.countdownStrong}>{countdownText}</strong>
             </Tag>
           )}
           {viewMode === 'chat' && cliMode && !isLocalLog && this.state.localUrl && (
             <>
-              {this.state.countryFlag && (
+              {this.state.countryFlag && this.state.countryInfo?.country !== 'CN' && (
                 <Popover
                   content={this.state.countryInfo ? (
                     <div className={styles.countryInfoPopover}>
@@ -1410,16 +1410,22 @@ class AppHeader extends React.Component {
                   ) : null}
                   trigger="hover"
                   placement="bottomRight"
-                  overlayInnerStyle={{ background: '#1e1e1e', border: '1px solid #3a3a3a', borderRadius: 8, padding: '8px 12px' }}
+                  overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: '8px 12px' }}
                 >
                   <Button className={styles.compactBtnNoBorder} icon={<span className={styles.countryFlagIcon}>{this.state.countryFlag}</span>} />
                 </Popover>
               )}
+              <Switch
+                checked={themeColor === 'light'}
+                onChange={(checked) => onThemeColorChange && onThemeColorChange(checked ? 'light' : 'dark')}
+                checkedChildren="雪山白"
+                unCheckedChildren="曜石黑"
+              />
               <Popover
               content={
                 <div className={styles.qrcodePopover}>
-                  <div className={styles.qrcodeTitle}>{t('ui.scanToCoding')}</div>
-                  <QRCodeCanvas value={this.state.localUrl} size={200} bgColor="#141414" fgColor="#d9d9d9" level="M" />
+                  <div className={styles.qrcodeTitle}>{t('ui.scanToCoding')} <ConceptHelp doc="QRCode" /></div>
+                  <QRCodeCanvas value={this.state.localUrl} size={200} bgColor={themeColor === 'light' ? '#ffffff' : '#141414'} fgColor={themeColor === 'light' ? '#1a1a1a' : '#d9d9d9'} level="M" />
                   <Input
                     readOnly
                     value={this.state.localUrl}
@@ -1439,14 +1445,16 @@ class AppHeader extends React.Component {
               }
               trigger="hover"
               placement="bottomRight"
-              overlayInnerStyle={{ background: '#1e1e1e', border: '1px solid #3a3a3a', borderRadius: 8, padding: '8px 8px' }}
+              overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: '8px 8px' }}
             >
               <Button
                 className={styles.compactBtnNoBorder}
                 icon={
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.svgIcon}>
-                    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-                    <line x1="12" y1="18" x2="12.01" y2="18"/>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ verticalAlign: 'middle' }}>
+                    {/* Three QR finder patterns (10×10 outer, 6×6 hollow, 4×4 inner dot) rendered
+                        as a single evenodd path so the rings stay crisp at 18px, plus a 5-dot X
+                        data pattern in the bottom-right quadrant (3×3 modules = 2.25px each). */}
+                    <path fillRule="evenodd" d="M0 0h10v10H0zM2 2v6h6V2zM3 3h4v4H3zM14 0h10v10H14zM16 2v6h6V2zM17 3h4v4H17zM0 14h10v10H0zM2 16v6h6v-6zM3 17h4v4H3zM14 14h3v3h-3zM20 14h3v3h-3zM17 17h3v3h-3zM14 20h3v3h-3zM20 20h3v3h-3z"/>
                   </svg>
                 }
               />
@@ -1545,6 +1553,13 @@ class AppHeader extends React.Component {
                 onChange={(checked) => onExpandThinkingChange && onExpandThinkingChange(checked)}
               />
             </div>
+            <div className={styles.settingsItem}>
+              <span className={styles.settingsLabel}>{t('ui.showFullToolContent')}</span>
+              <Switch
+                checked={!!showFullToolContent}
+                onChange={(checked) => onShowFullToolContentChange && onShowFullToolContentChange(checked)}
+              />
+            </div>
           </div>
           <div className={styles.settingsGroupBox}>
             <div className={styles.settingsGroupTitle}>{t('ui.userPreferences')}</div>
@@ -1567,10 +1582,59 @@ class AppHeader extends React.Component {
                 </Radio.Group>
               </div>
             )}
+            <div className={styles.settingsItem}>
+              <span className={styles.settingsLabel}>{t('ui.permission.autoApprove.setting')}</span>
+              <Select
+                size="small"
+                value={autoApproveSeconds || 0}
+                onChange={(value) => onAutoApproveChange && onAutoApproveChange(value)}
+                options={[
+                  { label: t('ui.permission.autoApprove.off'), value: 0 },
+                  { label: '3s', value: 3 },
+                  { label: '5s', value: 5 },
+                  { label: '10s', value: 10 },
+                  { label: '15s', value: 15 },
+                  { label: '20s', value: 20 },
+                  { label: '30s', value: 30 },
+                  { label: '60s', value: 60 },
+                ]}
+                style={{ width: 100 }}
+              />
+            </div>
+          </div>
+          <div className={styles.settingsGroupBox}>
+            <div className={styles.settingsItem}>
+              <span className={styles.settingsLabel}>{t('ui.themeColor')}</span>
+              <Select
+                size="small"
+                value={themeColor || 'dark'}
+                onChange={(value) => onThemeColorChange && onThemeColorChange(value)}
+                options={[
+                  { label: t('ui.themeColor.dark'), value: 'dark' },
+                  { label: t('ui.themeColor.light'), value: 'light' },
+                ]}
+                style={{ width: 140 }}
+              />
+            </div>
+          </div>
+          <div className={styles.settingsGroupBox}>
+            <div className={styles.settingsItem}>
+              <span className={styles.settingsLabel}>{t('ui.languageSettings')}</span>
+              <Select
+                size="small"
+                value={getLang()}
+                onChange={(value) => {
+                  setLang(value);
+                  if (onLangChange) onLangChange();
+                }}
+                options={LANG_OPTIONS.map(o => ({ label: o.label, value: o.value }))}
+                style={{ width: 140 }}
+              />
+            </div>
           </div>
         </Drawer>
         <Drawer
-          title={t('ui.globalSettings')}
+          title={<span>{t('ui.globalSettings')} <ConceptHelp doc="GlobalSettings" /></span>}
           placement="left"
           width={400}
           open={this.state.globalSettingsVisible}
@@ -1590,6 +1654,24 @@ class AppHeader extends React.Component {
               onChange={(checked) => onExpandDiffChange && onExpandDiffChange(checked)}
             />
           </div>
+          <div className={styles.settingsDivider} />
+          <div className={styles.settingsLabel}>{t('ui.logDirTitle')}</div>
+          <Input
+            className={styles.logDirInput}
+            value={this.state.logDirDraft ?? logDir}
+            onChange={(e) => this.setState({ logDirDraft: e.target.value })}
+            onBlur={() => {
+              const val = this.state.logDirDraft;
+              if (val != null && val !== logDir) onLogDirChange?.(val);
+              this.setState({ logDirDraft: null });
+            }}
+            onPressEnter={() => {
+              const val = this.state.logDirDraft;
+              if (val != null && val !== logDir) onLogDirChange?.(val);
+              this.setState({ logDirDraft: null });
+            }}
+            placeholder="~/.claude/cc-viewer"
+          />
         </Drawer>
         <Drawer
           title={<span><BarChartOutlined className={styles.titleIcon} />{t('ui.projectStats')}</span>}

@@ -1,10 +1,11 @@
 import React from 'react';
-import { Collapse, Typography, Radio, Checkbox, Input, Button, Tooltip, message } from 'antd';
-import { renderMarkdown } from '../utils/markdown';
+import { Collapse, Typography, Radio, Checkbox, Input, Button, Tooltip, Popover, message } from 'antd';
 import { escapeHtml, truncateText, getSvgAvatar } from '../utils/helpers';
+import MarkdownBlock from './MarkdownBlock';
 import { getTeammateAvatar } from '../utils/teammateAvatars';
 import { renderAssistantText } from '../utils/systemTags';
 import { apiUrl } from '../utils/apiUrl';
+import { isMobile, isIOS, isPad } from '../env';
 import AskQuestionForm from './AskQuestionForm';
 import { t } from '../i18n';
 import { isPlanApprovalPrompt } from '../utils/promptClassifier';
@@ -42,6 +43,38 @@ function ChatImage({ src, alt, fallbackText }) {
   );
 }
 
+// 流式期间 ChatMessage 整树每 chunk 重渲一次；Avatar / Label 的实际 props
+// （modelInfo / name / timestamp / requestIndex）在一轮响应内都是稳定的。
+// 提取为 memo 组件后 React 在浅比较通过时直接 bail out，不再进入内部
+// antd Text / 头像 innerHTML 的 reconciliation，显著降低 reconciler 工作量。
+const ModelAvatar = React.memo(function ModelAvatar({ modelInfo }) {
+  if (modelInfo?.svg) {
+    return (
+      <div className={styles.avatar} style={{ background: modelInfo.color || 'var(--bg-model-avatar)' }}
+        dangerouslySetInnerHTML={{ __html: modelInfo.svg }}
+      />
+    );
+  }
+  return <img src={defaultModelAvatarUrl} className={styles.avatarImg} alt={modelInfo?.name || 'Agent'} />;
+});
+
+const AssistantLabel = React.memo(function AssistantLabel({ name, extra, timeStr, requestIndex, onViewRequest }) {
+  const viewBtn = (requestIndex != null && onViewRequest) ? (
+    <span className={styles.viewRequestBtn} onClick={(e) => { e.stopPropagation(); onViewRequest(requestIndex); }}>
+      {t('ui.viewRequest')}
+    </span>
+  ) : null;
+  return (
+    <div className={styles.labelRow}>
+      <Text type="secondary" className={styles.labelText}>{name}{extra || ''}</Text>
+      <span className={styles.labelRight}>
+        {viewBtn}
+        {timeStr && <Text className={styles.timeText}>{timeStr}</Text>}
+      </span>
+    </div>
+  );
+});
+
 
 class ChatMessage extends React.Component {
   constructor(props) {
@@ -60,7 +93,8 @@ class ChatMessage extends React.Component {
     // 逐字段浅比较核心 prop，避免 inline {} 和 computed values 导致的无效重渲染
     return p.role !== n.role || p.content !== n.content || p.text !== n.text ||
       p.timestamp !== n.timestamp || p.highlight !== n.highlight ||
-      p.collapseToolResults !== n.collapseToolResults || p.expandThinking !== n.expandThinking ||
+      p.collapseToolResults !== n.collapseToolResults || p.expandThinking !== n.expandThinking || p.showFullToolContent !== n.showFullToolContent ||
+      p.showTrailingCursor !== n.showTrailingCursor ||
       p.showThinkingSummaries !== n.showThinkingSummaries ||
       p.toolResultMap !== n.toolResultMap || p.readContentMap !== n.readContentMap ||
       p.editSnapshotMap !== n.editSnapshotMap || p.askAnswerMap !== n.askAnswerMap ||
@@ -73,7 +107,8 @@ class ChatMessage extends React.Component {
       p.resultText !== n.resultText || p.toolName !== n.toolName ||
       p.onViewRequest !== n.onViewRequest || p.onOpenFile !== n.onOpenFile ||
       p.onPlanApprovalClick !== n.onPlanApprovalClick || p.onPlanFeedbackSubmit !== n.onPlanFeedbackSubmit ||
-      p.onDangerousApprovalClick !== n.onDangerousApprovalClick || p.onAskQuestionSubmit !== n.onAskQuestionSubmit;
+      p.onDangerousApprovalClick !== n.onDangerousApprovalClick || p.onAskQuestionSubmit !== n.onAskQuestionSubmit ||
+      p.taskNotification?.taskId !== n.taskNotification?.taskId;
   }
 
   componentDidUpdate(prevProps) {
@@ -127,7 +162,7 @@ class ChatMessage extends React.Component {
   renderModelAvatar(modelInfo) {
     if (modelInfo?.svg) {
       return (
-        <div className={styles.avatar} style={{ background: modelInfo.color || '#6b21a8' }}
+        <div className={styles.avatar} style={{ background: modelInfo.color || 'var(--bg-model-avatar)' }}
           dangerouslySetInnerHTML={{ __html: modelInfo.svg }}
         />
       );
@@ -149,7 +184,17 @@ class ChatMessage extends React.Component {
     return userProfile?.name || 'User';
   }
 
-  renderSegments(segments) {
+  renderSegments(segments, trailingCursor = false) {
+    // 光标只给"最后一个可见 markdown segment"，跳过末尾的 system-tag
+    let lastMdIdx = -1;
+    if (trailingCursor) {
+      for (let j = segments.length - 1; j >= 0; j--) {
+        if (segments[j].type !== 'system-tag' && segments[j].content && segments[j].content.trim()) {
+          lastMdIdx = j;
+          break;
+        }
+      }
+    }
     return segments.map((seg, i) => {
       if (seg.type === 'system-tag') {
         return (
@@ -166,13 +211,7 @@ class ChatMessage extends React.Component {
           />
         );
       }
-      return (
-        <div
-          key={i}
-          className="chat-md"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(seg.content) }}
-        />
-      );
+      return <MarkdownBlock key={i} text={seg.content} trailingCursor={i === lastMdIdx} />;
     });
   }
 
@@ -221,8 +260,8 @@ class ChatMessage extends React.Component {
       </div>
     );
 
-    const codePre = (text, color) => (
-      <pre className={styles.codePre} style={{ color: color || '#e5e7eb' }}>{text}</pre>
+    const codePre = (text) => (
+      <pre className={styles.codePre}>{text}</pre>
     );
 
     const onOpenFile = this.props.onOpenFile;
@@ -251,7 +290,7 @@ class ChatMessage extends React.Component {
               items={[{
                 key: '1',
                 label: <Text type="secondary" className={styles.bashCollapseLabel}>{t('ui.bashCommand')} ({lineCount} {t('ui.lines')})</Text>,
-                children: codePre(cmd, '#c9d1d9'),
+                children: codePre(cmd),
               }]}
               className={styles.collapseMargin}
             />
@@ -261,7 +300,7 @@ class ChatMessage extends React.Component {
 
       return box(
         <>Bash{desc ? <span className={styles.descSpan}> — {desc}</span> : ''}</>,
-        codePre(cmd, '#c9d1d9')
+        codePre(cmd)
       );
     }
 
@@ -283,12 +322,9 @@ class ChatMessage extends React.Component {
       const fp = inp.file_path || '';
       const content = inp.content || '';
       const lines = content.split('\n');
-      const preview = lines.length > 20
-        ? lines.slice(0, 20).join('\n') + `\n... (${lines.length} lines total)`
-        : content;
       return box(
         <>Write: {pathTag(fp)} <span className={styles.secondarySpan}>({lines.length} lines)</span></>,
-        codePre(preview, '#c9d1d9')
+        codePre(content)
       );
     }
 
@@ -343,7 +379,7 @@ class ChatMessage extends React.Component {
 
       const checkSvg = (
         <svg className={styles.askCheckSvg} width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M3 8.5L6.5 12L13 4" stroke="#2ea043" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M3 8.5L6.5 12L13 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       );
       return (
@@ -435,7 +471,7 @@ class ChatMessage extends React.Component {
       if (approval.status === 'approved' && approval.planContent) {
         return (
           <div key={tu.id} className={styles.bubblePlan}>
-            <div className="chat-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(approval.planContent) }} />
+            <MarkdownBlock text={approval.planContent} />
           </div>
         );
       }
@@ -452,22 +488,32 @@ class ChatMessage extends React.Component {
       const planOptions = (detectedPrompt?.options?.length) ? detectedPrompt.options : defaultPlanOptions;
       const statusClass = approval.status === 'approved' ? styles.planStatusApproved
         : approval.status === 'rejected' ? styles.planStatusRejected
+        : approval.status === 'ultraplan' ? styles.planStatusApproved
         : styles.planStatusPending;
       const statusIcon = approval.status === 'approved' ? '✓'
-        : approval.status === 'rejected' ? '✗' : '●';
+        : approval.status === 'rejected' ? '✗'
+        : approval.status === 'ultraplan' ? '⚡' : '●';
       const statusKey = approval.status === 'approved' ? 'ui.planApproved'
-        : approval.status === 'rejected' ? 'ui.planRejected' : 'ui.planPending';
+        : approval.status === 'rejected' ? 'ui.planRejected'
+        : approval.status === 'ultraplan' ? 'ui.planUltraplan' : 'ui.planPending';
       return (
         <div key={tu.id} className={`${styles.planModeBox} ${statusClass}`}>
+          {isInteractive && (
+            <svg className={`${styles.borderSvg} ${styles.borderSvgInset}`} preserveAspectRatio="none">
+              <rect x="0" y="0" width="100%" height="100%" rx="6" ry="6"
+                fill="none" stroke="var(--color-primary)" strokeWidth="1" strokeDasharray="6 4"
+                className={styles.borderRect} />
+            </svg>
+          )}
           <div className={styles.planModeHeader}>
-            <span className={styles.planModeLabel}>{t('ui.exitPlanMode')}</span>
+            <span className={styles.planModeLabel}>{isPending ? t('ui.exitPlanMode') : t('ui.exitPlanModeResolved')}</span>
             {!isInteractive && (
               <span className={`${styles.planStatusBadge} ${statusClass}`}>{statusIcon} {t(statusKey)}</span>
             )}
           </div>
           {isPending && planTextContent && (
             <div className={styles.planContentPreview}>
-              <div className="chat-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(planTextContent) }} />
+              <MarkdownBlock text={planTextContent} />
             </div>
           )}
           {prompts.length > 0 && (
@@ -552,6 +598,33 @@ class ChatMessage extends React.Component {
       );
     }
 
+    // SendMessage → render message content directly (no tool shell)
+    if (tu.name === 'SendMessage' && inp.message != null) {
+      const to = inp.to || '';
+      const msg = inp.message;
+      // JSON lifecycle signal → compact status bubble
+      if (typeof msg === 'object' && msg.type) {
+        const statusKey = `ui.teammate.${msg.type}`;
+        const statusText = t(statusKey, { name: to });
+        const display = statusText === statusKey ? `${to}: ${msg.type}` : statusText;
+        return (
+          <div key={tu.id} className={styles.teammateStatusRow}>
+            <span className={styles.teammateStatusBubble}>{display}</span>
+          </div>
+        );
+      }
+      // String message → direct markdown rendering with small header
+      if (typeof msg === 'string') {
+        const header = inp.summary ? `→ ${to} — ${inp.summary}` : `→ ${to}`;
+        return (
+          <div key={tu.id} className={styles.sendMessageBlock}>
+            <div className={styles.sendMessageHeader}>{header}</div>
+            <MarkdownBlock text={msg} />
+          </div>
+        );
+      }
+    }
+
     // Default: structured key-value display
     let toolLabel = tu.name;
     const keys = Object.keys(inp);
@@ -561,7 +634,7 @@ class ChatMessage extends React.Component {
     const items = keys.map(k => {
       const v = inp[k];
       const vs = typeof v === 'string' ? v : JSON.stringify(v);
-      const display = vs.length > 200 ? vs.substring(0, 200) + '...' : vs;
+      const display = (tu.name === 'Agent' || tu.name === 'TaskCreate' || tu.name === 'TaskUpdate' || tu.name === 'SendMessage' || vs.length <= 200) ? vs : vs.substring(0, 200) + '...';
       return (
         <div key={k} className={styles.kvItem}>
           <span className={styles.kvKey}>{k}: </span>
@@ -623,7 +696,7 @@ class ChatMessage extends React.Component {
         {(highlight === 'active' || highlight === 'fading') && (
           <svg className={`${styles.borderSvg}${highlight === 'fading' ? ' ' + styles.borderSvgFading : ''}`} preserveAspectRatio="none">
             <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="8" ry="8"
-              fill="none" stroke={isUser ? '#ffffff' : '#1668dc'} strokeWidth="1" strokeDasharray="6 4"
+              fill="none" stroke={isUser ? '#fff' : 'var(--color-primary)'} strokeWidth="1" strokeDasharray="6 4"
               className={styles.borderRect} />
           </svg>
         )}
@@ -687,7 +760,7 @@ class ChatMessage extends React.Component {
     // 匹配图片路径格式：
     // 1. [Image: source: /path/to/file.ext] 或 [Image #N]
     // 2. "引号包裹的 /tmp/cc-viewer-uploads/ 图片路径"（仅限上传目录，避免误伤正常文本）
-    const IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+    const IMAGE_EXTS = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|icns)$/i;
     const combinedPattern = /\[Image(?:\s*#\d+)?(?::?\s*source)?:\s*([^\]]+)\]|"(\/tmp\/cc-viewer-uploads\/[^"]+?)"/g;
     const parts = [];
     let lastIndex = 0;
@@ -729,17 +802,39 @@ class ChatMessage extends React.Component {
     const textBlocks = content.filter(b => b.type === 'text');
     const toolUseBlocks = content.filter(b => b.type === 'tool_use');
 
+    // 流式光标分发：有 text 时贴在最后一段 text 的末尾；否则贴在最后一个非空 thinking 末尾
+    const showTC = !!this.props.showTrailingCursor;
+    const hasTextWithContent = textBlocks.some(b => b.text && b.text.trim());
+    const lastThinkingIdxWithContent = showTC && !hasTextWithContent
+      ? thinkingBlocks.reduce((acc, b, i) => (b.thinking && b.thinking.trim() ? i : acc), -1)
+      : -1;
+    const lastTextIdxWithContent = showTC && hasTextWithContent
+      ? textBlocks.reduce((acc, b, i) => (b.text && b.text.trim() ? i : acc), -1)
+      : -1;
+    // 流式 thinking 展开策略：text 未开始则展开让用户看推理；text 开始后按用户偏好（通常折叠）。
+    // 走 antd Collapse controlled 模式（activeKey）+ 稳定 React key，activeKey 变化触发
+    // 内置 height transition 动画，避免流式结束切到正式 entry 时的瞬时高度跳变。
+    const streamThinkingExpanded = !hasTextWithContent || !!this.props.expandThinking;
+
     let innerContent = [];
 
     thinkingBlocks.forEach((tb, i) => {
       const thinkingText = tb.thinking || '';
       const isEmpty = !thinkingText.trim();
+      const isCursorTarget = i === lastThinkingIdxWithContent;
+      // 流式走 controlled activeKey（稳定 key + 变化 activeKey 触发 antd 高度 transition，
+      // 动画在流式内部 text 到达时跑完）。非流式走 uncontrolled defaultActiveKey，且 key 包含
+      // e/c 标识——用户切换 expandThinking 全局偏好时通过 key 变化重挂载让 Collapse 响应新 prop
+      // （defaultActiveKey 本身仅初始生效）。流式→正式 entry 切换期间父 ChatMessage 实例必然
+      // 重挂（不同 key），Collapse 跟随重挂载；高度跳变靠流式结束前已折叠 + 正式默认折叠实现。
+      const collapseProps = showTC
+        ? { key: `think-stream-${i}`, activeKey: streamThinkingExpanded ? ['1'] : [] }
+        : { key: `think-${i}-${this.props.expandThinking ? 'e' : 'c'}`, defaultActiveKey: this.props.expandThinking ? ['1'] : [] };
       innerContent.push(
         <Collapse
-          key={`think-${i}-${this.props.expandThinking ? 'e' : 'c'}`}
+          {...collapseProps}
           ghost
           size="small"
-          defaultActiveKey={this.props.expandThinking ? ['1'] : []}
           items={[{
             key: '1',
             label: <Text type="secondary" className={styles.thinkingLabel}>{t('ui.thinking')}</Text>,
@@ -756,7 +851,7 @@ class ChatMessage extends React.Component {
                       onClick={async (e) => {
                         e.stopPropagation();
                         try {
-                          const res = await fetch('/api/claude-settings', {
+                          const res = await fetch(apiUrl('/api/claude-settings'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ showThinkingSummaries: true }),
@@ -773,10 +868,10 @@ class ChatMessage extends React.Component {
                 )}
               </div>
             ) : (
-              <div className="chat-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(thinkingText) }} />
+              <MarkdownBlock text={thinkingText} trailingCursor={isCursorTarget} />
             ),
           }]}
-          className={styles.collapseMargin}
+          className={`${styles.collapseMargin}${showTC ? ' ' + styles.collapseStream : ''}`}
         />
       );
     });
@@ -784,14 +879,44 @@ class ChatMessage extends React.Component {
     textBlocks.forEach((tb, i) => {
       if (tb.text) {
         const { segments } = renderAssistantText(tb.text);
+        const isCursorTarget = i === lastTextIdxWithContent;
         innerContent.push(
-          <div key={`text-${i}`} className="chat-boxer">{this.renderSegments(segments)}</div>
+          <div key={`text-${i}`} className="chat-boxer">{this.renderSegments(segments, isCursorTarget)}</div>
         );
       }
     });
 
+    const simplify = !this.props.showFullToolContent;
+    let simplifiedLabelAdded = false;
     toolUseBlocks.forEach((tu, tuIdx) => {
-      innerContent.push(this.renderToolCall(tu));
+      const isFullDisplayTool = tu.name === 'Edit' || tu.name === 'Write' || tu.name === 'EnterPlanMode' || tu.name === 'ExitPlanMode' || tu.name === 'AskUserQuestion' || tu.name === 'Agent' || tu.name === 'TaskCreate' || tu.name === 'SendMessage';
+      if (simplify && !isFullDisplayTool) {
+        // 简化模式：首个标签前加 "使用工具: " 标签
+        if (!simplifiedLabelAdded) {
+          simplifiedLabelAdded = true;
+          innerContent.push(
+            <span key={`stag-label-${tuIdx}`} className={styles.simplifiedToolLabel}>{t('ui.toolsUsed')}</span>
+          );
+        }
+        // 简化模式：非 Edit/Write 工具只显示标签，hover/click 显示完整内容
+        // 移动端 zoom:0.6 导致 Popover 坐标偏移，需 getPopupContainer 渲染在缩放容器内
+        innerContent.push(
+          <Popover
+            key={`stag-${tu.id}`}
+            placement="top"
+            overlayClassName="simplifiedToolPopover"
+            overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: 0 }}
+            content={<div className={styles.simplifiedToolPopoverContent}>{this.renderToolCall(tu)}</div>}
+            mouseEnterDelay={0.3}
+            {...((isMobile && !isPad) ? { trigger: 'click', ...(!isIOS && { getPopupContainer: (node) => node.parentElement }) } : {})}
+          >
+            <span className={styles.simplifiedToolTag}>{tu.name}</span>
+          </Popover>
+        );
+      } else {
+        simplifiedLabelAdded = false; // 遇到完整展示工具后重置，下一组简化标签前重新显示 label
+        innerContent.push(this.renderToolCall(tu));
+      }
 
       const tr = toolResultMap[tu.id];
 
@@ -809,16 +934,38 @@ class ChatMessage extends React.Component {
         const approval = planApprovalMap[tu.id];
         if (tu.name === 'ExitPlanMode' && approval && approval.status === 'approved' && approval.planContent) {
           // skip tool result — plan content already shown
+        } else if (simplify) {
+          // 简化模式：仅显示权限拒绝，隐藏其他 tool_result
+          if (tr.isPermissionDenied) {
+            innerContent.push(
+              <React.Fragment key={`tr-denied-${tu.id}`}>
+                {tr.isUltraplan ? (
+                  <div className={styles.ultraplanBadge}>◇ UltraPlan</div>
+                ) : (
+                  <div className={`${styles.dangerApprovalBox} ${styles.dangerApprovalBoxDenied}`}>
+                    <span className={styles.dangerDeniedBadge}>✗ {t('ui.dangerDenied')}</span>
+                    {tr.resultText && (
+                      <div className={styles.dangerDeniedDetail}>{tr.resultText}</div>
+                    )}
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          }
         } else {
           if (tr.isPermissionDenied) {
             innerContent.push(
               <React.Fragment key={`tr-denied-${tu.id}`}>
-                <div className={`${styles.dangerApprovalBox} ${styles.dangerApprovalBoxDenied}`}>
-                  <span className={styles.dangerDeniedBadge}>✗ {t('ui.dangerDenied')}</span>
-                  {tr.resultText && (
-                    <div className={styles.dangerDeniedDetail}>{tr.resultText}</div>
-                  )}
-                </div>
+                {tr.isUltraplan ? (
+                  <div className={styles.ultraplanBadge}>◇ UltraPlan</div>
+                ) : (
+                  <div className={`${styles.dangerApprovalBox} ${styles.dangerApprovalBoxDenied}`}>
+                    <span className={styles.dangerDeniedBadge}>✗ {t('ui.dangerDenied')}</span>
+                    {tr.resultText && (
+                      <div className={styles.dangerDeniedDetail}>{tr.resultText}</div>
+                    )}
+                  </div>
+                )}
               </React.Fragment>
             );
           } else {
@@ -834,16 +981,21 @@ class ChatMessage extends React.Component {
   }
 
   renderAssistantMessage() {
-    const { content, toolResultMap = {}, modelInfo } = this.props;
+    const { content, toolResultMap = {}, modelInfo, timestamp, requestIndex, onViewRequest } = this.props;
     const innerContent = this.renderAssistantContent(content, toolResultMap);
 
     if (innerContent.length === 0) return null;
 
     return (
       <div className={styles.messageRow}>
-        {this.renderModelAvatar(modelInfo)}
+        <ModelAvatar modelInfo={modelInfo} />
         <div className={styles.contentCol}>
-          {this.renderLabel(modelInfo?.name || 'MainAgent')}
+          <AssistantLabel
+            name={modelInfo?.name || 'MainAgent'}
+            timeStr={this.formatTime(timestamp)}
+            requestIndex={requestIndex}
+            onViewRequest={onViewRequest}
+          />
           {this.renderHighlightBubble(styles.bubbleAssistant, innerContent)}
         </div>
       </div>
@@ -877,7 +1029,7 @@ class ChatMessage extends React.Component {
           {this.renderHighlightBubble(styles.bubbleAssistant, innerContent)}
         </div>
         {(() => { const ta = this.props.isTeammate ? getTeammateAvatar(label) : null; return (
-          <div className={styles.avatar} style={{ background: ta ? ta.color : 'rgba(255, 255, 255, 0.1)' }}
+          <div className={styles.avatar} style={{ background: ta ? ta.color : 'var(--bg-sub-avatar)' }}
             dangerouslySetInnerHTML={{ __html: ta ? ta.svg : getSvgAvatar(this._getSubAvatarType()) }}
           />
         ); })()}
@@ -890,7 +1042,7 @@ class ChatMessage extends React.Component {
     const tmAvatar = this.props.isTeammate ? getTeammateAvatar(label) : null;
     return (
       <div className={styles.messageRow}>
-        <div className={styles.avatar} style={{ background: tmAvatar ? tmAvatar.color : 'rgba(255, 255, 255, 0.1)' }}
+        <div className={styles.avatar} style={{ background: tmAvatar ? tmAvatar.color : 'var(--bg-sub-avatar)' }}
           dangerouslySetInnerHTML={{ __html: tmAvatar ? tmAvatar.svg : getSvgAvatar(this._getSubAvatarType()) }}
         />
         <div className={styles.contentCol}>
@@ -899,6 +1051,44 @@ class ChatMessage extends React.Component {
             <ToolResultView toolName={toolName} toolInput={toolInput} resultText={resultText} />
           </div>
         </div>
+      </div>
+    );
+  }
+
+  renderTeammateMessage() {
+    const { text, label, timestamp } = this.props;
+    const timeStr = this.formatTime(timestamp);
+    const ta = getTeammateAvatar(label);
+
+    return (
+      <div className={styles.messageRowEnd}>
+        <div className={styles.contentColLimited}>
+          <div className={styles.labelRowEnd}>
+            {timeStr && <Text className={styles.timeText}>{timeStr}</Text>}
+            {this.renderViewRequestBtn()}
+            <Text type="secondary" className={styles.labelTextRight}>{label || 'Teammate'}</Text>
+          </div>
+          {this.renderHighlightBubble(styles.bubbleAssistant, (
+            <MarkdownBlock text={text || ''} />
+          ))}
+        </div>
+        <div className={styles.avatar} style={{ background: ta ? ta.color : 'var(--bg-sub-avatar)' }}
+          dangerouslySetInnerHTML={{ __html: ta ? ta.svg : getSvgAvatar('sub') }}
+        />
+      </div>
+    );
+  }
+
+  renderTeammateStatus() {
+    const { label, toolName } = this.props;
+    const statusKey = `ui.teammate.${toolName}`;
+    const statusText = t(statusKey, { name: label || 'Teammate' });
+    const display = statusText === statusKey
+      ? `${label || 'Teammate'}: ${toolName}`
+      : statusText;
+    return (
+      <div className={styles.teammateStatusRowCenter}>
+        <span className={styles.teammateStatusBubble}>{display}</span>
       </div>
     );
   }
@@ -915,7 +1105,7 @@ class ChatMessage extends React.Component {
         <div className={styles.contentColLimited}>
           {this.renderLabel(modelInfo?.name || 'MainAgent', ' (Plan)')}
           <div className={styles.bubblePlan}>
-            <div className="chat-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(planContent) }} />
+            <MarkdownBlock text={planContent} />
           </div>
         </div>
       </div>
@@ -940,10 +1130,61 @@ class ChatMessage extends React.Component {
                   {timeStr && <Text className={`${styles.timeTextNoMargin} ${styles.skillTimeIndent}`}>{timeStr}</Text>}
                 </span>
               ),
-              children: <div className="chat-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />,
+              children: <MarkdownBlock text={text} />,
             }]}
             className={styles.collapseNoMargin}
           />
+        </div>
+      </div>
+    );
+  }
+
+  renderTaskNotification() {
+    const { taskNotification: tn, modelInfo } = this.props;
+    if (!tn) return null;
+    const isError = tn.status === 'error';
+    const statusIcon = isError ? '✗' : '✓';
+    const statusColor = isError ? '#ff4d4f' : '#52c41a';
+
+    const durationSec = tn.usage?.durationMs ? (tn.usage.durationMs / 1000).toFixed(1) : null;
+    const tokens = tn.usage?.totalTokens ? tn.usage.totalTokens.toLocaleString() : null;
+    const toolUses = tn.usage?.toolUses || null;
+
+    const innerContent = [];
+    // summary 作为标准文本
+    innerContent.push(
+      <div key="summary" className="chat-boxer">
+        <span style={{ color: statusColor, fontWeight: 'bold', marginRight: 6 }}>{statusIcon}</span>
+        {tn.summary || 'Background Task'}
+      </div>
+    );
+    // result 折叠展开
+    if (tn.result) {
+      innerContent.push(
+        <Collapse key="result" ghost size="small" items={[{
+          key: '1',
+          label: <Typography.Text type="secondary">{t('ui.taskNotification.result') || 'Result'}</Typography.Text>,
+          children: <MarkdownBlock text={tn.result} />,
+        }]} />
+      );
+    }
+    // usage 统计行
+    if (durationSec || tokens || toolUses) {
+      innerContent.push(
+        <div key="usage" className={styles.taskNotifUsage}>
+          {durationSec && <span>{durationSec}s</span>}
+          {tokens && <span>{tokens} tokens</span>}
+          {toolUses && <span>{toolUses} tool uses</span>}
+        </div>
+      );
+    }
+
+    return (
+      <div className={styles.messageRow}>
+        {this.renderModelAvatar(modelInfo)}
+        <div className={styles.contentCol}>
+          {this.renderLabel(modelInfo?.name || 'MainAgent')}
+          {this.renderHighlightBubble(styles.bubbleAssistant, innerContent)}
         </div>
       </div>
     );
@@ -955,6 +1196,9 @@ class ChatMessage extends React.Component {
     if (role === 'skill-loaded') return this.renderSkillLoadedMessage();
     if (role === 'plan-prompt') return this.renderPlanPromptMessage();
     if (role === 'assistant') return this.renderAssistantMessage();
+    if (role === 'task-notification') return this.renderTaskNotification();
+    if (role === 'teammate-message') return this.renderTeammateMessage();
+    if (role === 'teammate-status') return this.renderTeammateStatus();
     if (role === 'sub-agent-chat') return this.renderSubAgentChatMessage();
     if (role === 'sub-agent') return this.renderSubAgentMessage();
     return null;

@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { apiUrl } from '../utils/apiUrl';
 import { t } from '../i18n';
+import { isImageFile } from '../utils/commandValidator';
 import FullFileDiffView from './FullFileDiffView';
+import ImageLightbox from './ImageLightbox';
 import styles from './GitDiffView.module.css';
 
 function getFirstChangedLine(oldStr, newStr) {
@@ -12,11 +15,12 @@ function getFirstChangedLine(oldStr, newStr) {
   return 1;
 }
 
-export default function GitDiffView({ filePath, onClose, onOpenFile }) {
+export default function GitDiffView({ filePath, repoPath, onClose, onOpenFile }) {
   const [diffData, setDiffData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [closing, setClosing] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const mounted = useRef(true);
   const containerRef = useRef(null);
 
@@ -36,8 +40,10 @@ export default function GitDiffView({ filePath, onClose, onOpenFile }) {
     setLoading(true);
     setDiffData(null);
     setError(null);
+    setLightboxOpen(false);
 
-    fetch(`/api/git-diff?files=${encodeURIComponent(filePath)}`)
+    const repoParam = repoPath && repoPath !== '.' ? `&repo=${encodeURIComponent(repoPath)}` : '';
+    fetch(apiUrl(`/api/git-diff?files=${encodeURIComponent(filePath)}${repoParam}`))
       .then(r => {
         if (!r.ok) {
           return r.json().then(err => {
@@ -66,7 +72,9 @@ export default function GitDiffView({ filePath, onClose, onOpenFile }) {
       });
 
     return () => { mounted.current = false; };
-  }, [filePath]);
+  }, [filePath, repoPath]);
+
+  const resolvedPath = repoPath && repoPath !== '.' ? `${repoPath}/${filePath}` : filePath;
 
   return (
     <div ref={containerRef} className={`${styles.gitDiffView}${closing ? ` ${styles.closing}` : ''}`}>
@@ -93,7 +101,7 @@ export default function GitDiffView({ filePath, onClose, onOpenFile }) {
                 onOpenFile(filePath, line);
               }
             }}
-          >{filePath}</span>
+          >{resolvedPath}</span>
           <span className={styles.diffBadge}>DIFF</span>
         </div>
         <div className={styles.headerRight}>
@@ -115,6 +123,22 @@ export default function GitDiffView({ filePath, onClose, onOpenFile }) {
                 <p className={styles.fileSize}>
                   {t('ui.fileSize')}: {(diffData.size / (1024 * 1024)).toFixed(2)} MB
                 </p>
+              </div>
+            ) : isImageFile(filePath) && !diffData.is_deleted ? (
+              <div className={styles.imagePreviewWrap}>
+                <img
+                  className={styles.imagePreview}
+                  src={apiUrl(`/api/file-raw?path=${encodeURIComponent(resolvedPath)}`)}
+                  alt={resolvedPath}
+                  onClick={() => setLightboxOpen(true)}
+                />
+                {lightboxOpen && (
+                  <ImageLightbox
+                    src={apiUrl(`/api/file-raw?path=${encodeURIComponent(resolvedPath)}`)}
+                    alt={resolvedPath}
+                    onClose={() => setLightboxOpen(false)}
+                  />
+                )}
               </div>
             ) : diffData.is_binary ? (
               <div className={styles.binaryNotice}>{t('ui.binaryFileNotice')}</div>

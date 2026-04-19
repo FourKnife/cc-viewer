@@ -2,7 +2,31 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #0d0d0d;
+  background: var(--bg-base-alt);
+  border: 4px solid transparent;
+  transition: border-color 0.3s ease-out, box-shadow 0.3s ease-out;
+}
+
+.terminalPanelFocused {
+  border-color: var(--border-secondary);
+  box-shadow: 0 0 8px var(--color-primary-bg-light);
+  animation: terminalFocusIn 0.3s ease-out;
+}
+
+@keyframes terminalFocusIn {
+  from { border-color: transparent; box-shadow: none; }
+  to { border-color: var(--border-secondary); box-shadow: 0 0 8px var(--color-primary-bg-light); }
+}
+
+:global([data-theme="light"]) .terminalPanelFocused {
+  border-color: rgba(217, 119, 87, 0.15);
+  box-shadow: none;
+  animation-name: terminalFocusInLight;
+}
+
+@keyframes terminalFocusInLight {
+  from { border-color: transparent; box-shadow: none; }
+  to { border-color: rgba(217, 119, 87, 0.15); box-shadow: none; }
 }
 
 .terminalContainer {
@@ -18,6 +42,89 @@
   caret-color: #00000000 !important;
 }
 
+.pendingFileStrip {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.pendingFileTag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hover);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pendingFileName {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pendingFileClose {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  line-height: 1;
+}
+
+.pendingFileClose:hover {
+  color: var(--text-primary);
+}
+
+.pendingImageItem {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--border-hover);
+}
+
+.pendingImageThumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pendingImageRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  border: none;
+  font-size: 11px;
+  line-height: 12px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.pendingImageItem:hover .pendingImageRemove {
+  opacity: 1;
+}
+
 .terminalToolbar {
   height: 35px;
   flex-shrink: 0;
@@ -25,8 +132,8 @@
   align-items: center;
   padding: 0 8px;
   gap: 4px;
-  border-top: 1px solid #1e1e1e;
-  background: #0d0d0d;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-base-alt);
 }
 
 .toolbarBtn {
@@ -35,19 +142,19 @@
   gap: 4px;
   height: 26px;
   padding: 0 10px;
-  border: 1px solid #303030;
+  border: 1px solid var(--border-secondary);
   border-radius: 4px;
-  background: #1e1e1e;
-  color: #aaa;
+  background: var(--bg-elevated);
+  color: var(--text-light);
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .toolbarBtn:hover {
-  background: #2a2a2a;
-  color: #e5e5e5;
-  border-color: #555;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-color: var(--text-disabled);
 }
 
 .toolbarBtnDisabled {
@@ -55,9 +162,9 @@
   cursor: not-allowed;
 }
 .toolbarBtnDisabled:hover {
-  background: #1e1e1e;
-  color: #aaa;
-  border-color: #303030;
+  background: var(--bg-elevated);
+  color: var(--text-light);
+  border-color: var(--border-secondary);
 }
 
 .toolbarBtn svg {
@@ -69,8 +176,8 @@
   display: flex;
   gap: 6px;
   padding: 8px 10px;
-  background: #111;
-  border-top: 1px solid #1e1e1e;
+  background: var(--bg-container);
+  border-top: 1px solid var(--border-primary);
   overflow-x: auto;
   flex-shrink: 0;
   -webkit-overflow-scrolling: touch;
@@ -79,10 +186,10 @@
 .virtualKey {
   flex-shrink: 0;
   padding: 12px 20px;
-  border: 1px solid #303030;
+  border: 1px solid var(--border-secondary);
   border-radius: 8px;
-  background: #1e1e1e;
-  color: #ccc;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
   font-size: 15px;
   font-family: Menlo, Monaco, monospace;
   cursor: pointer;
@@ -97,9 +204,9 @@
 }
 
 .virtualKeyPressed {
-  background: #303030;
-  border-color: #555;
-  color: #fff;
+  background: var(--border-secondary);
+  border-color: var(--text-disabled);
+  color: var(--text-white);
 }
 
 /* 虚拟按键栏分隔符 */
@@ -108,7 +215,7 @@
   width: 1px;
   align-self: stretch;
   margin: 4px 2px;
-  background: #303030;
+  background: var(--border-secondary);
 }
 
 /* 操作按钮（上传、团队预设） */
@@ -134,7 +241,7 @@
 
 /* 团队预设按钮 */
 .vkTeamPreset {
-  border-color: #2a5a3a;
+  border-color: var(--color-green-border);
 }
 
 /* 禁用态操作按钮 */
@@ -145,8 +252,8 @@
 
 /* 预置快捷方式列表 */
 .presetList {
-  background: #0d0d0d;
-  border: 1px solid #303030;
+  background: var(--bg-base-alt);
+  border: 1px solid var(--border-secondary);
   border-radius: 6px;
   max-height: 260px;
   overflow-y: auto;
@@ -157,7 +264,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid #1e1e1e;
+  border-bottom: 1px solid var(--border-primary);
 }
 
 .presetRow:last-child {
@@ -169,13 +276,13 @@
 }
 
 .presetRowDragOver {
-  border-top: 2px solid #1668dc;
+  border-top: 2px solid var(--color-primary);
   padding-top: 6px;
 }
 
 .dragHandle {
   cursor: grab;
-  color: #444;
+  color: var(--border-light);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -184,7 +291,7 @@
 }
 
 .dragHandle:hover {
-  color: #888;
+  color: var(--text-tertiary);
 }
 
 .dragHandle:active {
@@ -194,7 +301,7 @@
 .presetText {
   flex: 1;
   font-size: 13px;
-  color: #e5e5e5;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -209,7 +316,7 @@
 .presetMenuItem {
   background: none;
   border: none;
-  color: #e5e5e5;
+  color: var(--text-primary);
   font-size: 13px;
   padding: 6px 12px;
   text-align: left;
@@ -222,25 +329,44 @@
 }
 
 .presetMenuItem:hover {
-  background: #303030;
+  background: var(--border-secondary);
+}
+
+.presetMenuItemMuted {
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border-light);
+  margin-bottom: 2px;
+}
+
+.presetMenuItemMuted:hover {
+  color: var(--text-primary);
+}
+
+.presetMenuItemMuted svg {
+  stroke: var(--text-tertiary);
+  transition: stroke 0.15s;
+}
+
+.presetMenuItemMuted:hover svg {
+  stroke: var(--text-primary);
 }
 
 .presetName {
   width: 100px;
   flex-shrink: 0;
   font-size: 13px;
-  color: #999;
+  color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .presetInput {
-  width: 600px;
-  background: #111;
-  border: 1px solid #303030;
+  width: min(600px, 80vw);
+  background: var(--bg-container);
+  border: 1px solid var(--border-secondary);
   border-radius: 6px;
-  color: #e5e5e5;
+  color: var(--text-primary);
   font-size: 13px;
   padding: 6px 12px;
   outline: none;
@@ -248,15 +374,15 @@
 }
 
 .presetInput:focus {
-  border-color: #1668dc;
+  border-color: var(--color-primary);
 }
 
 .presetTextarea {
-  width: 600px;
-  background: #111;
-  border: 1px solid #303030;
+  width: min(600px, 80vw);
+  background: var(--bg-container);
+  border: 1px solid var(--border-secondary);
   border-radius: 6px;
-  color: #e5e5e5;
+  color: var(--text-primary);
   font-size: 13px;
   padding: 8px 12px;
   resize: none;
@@ -265,7 +391,7 @@
 }
 
 .presetTextarea:focus {
-  border-color: #1668dc;
+  border-color: var(--color-primary);
 }
 
 .hiddenFileInput {
@@ -273,14 +399,14 @@
 }
 
 .popoverEmptyHint {
-  color: #666;
+  color: var(--text-muted);
   font-size: 13px;
   padding: 8px 12px;
   text-align: center;
 }
 
 .agentTeamDisabledTip {
-  color: #ccc;
+  color: var(--text-secondary);
   font-size: 13px;
   margin-bottom: 10px;
 }
@@ -296,11 +422,11 @@
 .presetSectionTitle {
   font-size: 14px;
   font-weight: 600;
-  color: #e5e5e5;
+  color: var(--text-primary);
 }
 
 .presetListEmptyHint {
-  color: #666;
+  color: var(--text-muted);
   font-size: 13px;
   padding: 12px 0;
   text-align: center;
@@ -318,7 +444,306 @@
 
 .presetFormLabel {
   font-size: 13px;
-  color: #aaa;
+  color: var(--text-light);
   display: block;
   margin-bottom: 4px;
+}
+
+/* ── ultraplan floating panel ── */
+.ultraplanPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.ultraplanHeader {
+  padding: 10px 14px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ultraplanHeaderTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ultraplanHeaderAddBtn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  padding: 0;
+}
+
+.ultraplanHeaderAddBtn:hover {
+  background: var(--bg-surface);
+  color: var(--color-primary);
+}
+
+.ultraplanCustomWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ultraplanCustomTitle {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ultraplanEditPencil {
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-primary);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.ultraplanCustomWrap:hover .ultraplanEditPencil {
+  opacity: 1;
+}
+
+.ultraplanEditPencil:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+@media (max-width: 768px) {
+  .ultraplanEditPencil { opacity: 1; }
+}
+
+.ultraplanVariantRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px 8px;
+  flex-wrap: wrap;
+}
+
+.ultraplanRoleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+  white-space: nowrap;
+}
+.ultraplanRoleBtn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.ultraplanRoleBtn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.ultraplanRoleBtnActive {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+.ultraplanRoleBtnActive:hover {
+  color: #fff;
+}
+
+.ultraplanContextWarning {
+  margin: 0 14px 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warning-text, #b45309);
+  background: var(--warning-bg, #fef3c7);
+  border: 1px solid var(--warning-border, #fde68a);
+  border-radius: 6px;
+}
+
+.ultraplanTextarea {
+  margin: 0 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-container);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  min-height: 100px;
+  max-height: 300px;
+}
+
+.ultraplanTextarea:focus {
+  border-color: var(--color-primary-pale);
+}
+
+.ultraplanTextarea::placeholder {
+  color: var(--text-disabled);
+}
+
+.ultraplanFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 10px;
+}
+
+.ultraplanSendBtn {
+  height: 26px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 4px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.ultraplanSendBtn:hover {
+  opacity: 0.85;
+}
+
+.ultraplanSendBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ultraplanUploadBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--text-light);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.ultraplanUploadBtn:hover {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-color: var(--text-disabled);
+}
+
+.ultraplanFileList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 14px 8px;
+}
+
+.ultraplanFileChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-container);
+  border: 1px solid var(--border-primary);
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-width: 180px;
+  white-space: nowrap;
+}
+
+.ultraplanFileChip svg {
+  flex-shrink: 0;
+}
+
+.ultraplanFileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ultraplanFileRemove {
+  flex-shrink: 0;
+  cursor: pointer;
+  color: var(--text-disabled);
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 2px;
+}
+
+.ultraplanFileRemove:hover {
+  color: var(--color-error);
+}
+
+.ultraplanImageItem {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+}
+
+.ultraplanImageThumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ultraplanImageRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border: none;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.ultraplanImageItem:hover .ultraplanImageRemove {
+  opacity: 1;
 }

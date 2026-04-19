@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Modal, Dropdown, message } from 'antd';
 import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { getFileIcon } from '../utils/fileIcons';
+import { fetchAllRepos } from '../utils/gitApi';
 import styles from './GitChanges.module.css';
 
 const STATUS_COLORS = {
@@ -19,31 +21,6 @@ const STATUS_LABELS = {
   '??': 'U',
 };
 
-const EXT_COLORS = {
-  js: '#e8d44d', jsx: '#61dafb', ts: '#3178c6', tsx: '#3178c6',
-  json: '#999', md: '#519aba', css: '#a86fd9', scss: '#cd6799',
-  html: '#e34c26', py: '#3572a5', go: '#00add8', rs: '#dea584',
-};
-
-function getFileIcon(name) {
-  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-  const color = EXT_COLORS[ext] || '#888';
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-    </svg>
-  );
-}
-
-function getFolderIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="#c09553" stroke="none">
-      <path d="M2 6c0-1.1.9-2 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z"/>
-    </svg>
-  );
-}
-
 // 将扁平的文件变更列表构建为目录树
 function buildTree(changes) {
   const root = { dirs: {}, files: [] };
@@ -59,7 +36,7 @@ function buildTree(changes) {
   return root;
 }
 
-function TreeDir({ name, node, depth, onFileClick, onOpenFile, onRestore, selectedFile }) {
+function TreeDir({ name, node, depth, repoPath, onFileClick, onOpenFile, onRestore, selectedFile, selectedRepo }) {
   const dirNames = Object.keys(node.dirs).sort();
   const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
   return (
@@ -71,12 +48,12 @@ function TreeDir({ name, node, depth, onFileClick, onOpenFile, onRestore, select
               <polyline points="9 6 15 12 9 18"/>
             </svg>
           </span>
-          <span className={styles.icon}>{getFolderIcon()}</span>
+          <span className={styles.icon}>{getFileIcon('', 'directory')}</span>
           <span className={styles.dirName}>{name}</span>
         </div>
       )}
       {dirNames.map(dir => (
-        <TreeDir key={dir} name={dir} node={node.dirs[dir]} depth={name ? depth + 1 : depth} onFileClick={onFileClick} onOpenFile={onOpenFile} onRestore={onRestore} selectedFile={selectedFile} />
+        <TreeDir key={dir} name={dir} node={node.dirs[dir]} depth={name ? depth + 1 : depth} repoPath={repoPath} onFileClick={onFileClick} onOpenFile={onOpenFile} onRestore={onRestore} selectedFile={selectedFile} selectedRepo={selectedRepo} />
       ))}
       {files.map(file => (
         <Dropdown key={file.fullPath} menu={{ items: [
@@ -84,27 +61,28 @@ function TreeDir({ name, node, depth, onFileClick, onOpenFile, onRestore, select
           { key: 'copyPath', label: t('ui.contextMenu.copyPath') },
           { key: 'copyRelPath', label: t('ui.contextMenu.copyRelativePath') },
         ], onClick: ({ key }) => {
+          const resolvedPath = repoPath && repoPath !== '.' ? `${repoPath}/${file.fullPath}` : file.fullPath;
           if (key === 'reveal') {
-            fetch(apiUrl('/api/reveal-file'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.fullPath }) }).catch(() => {});
+            fetch(apiUrl('/api/reveal-file'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: resolvedPath }) }).catch(() => {});
           } else if (key === 'copyPath') {
-            fetch(apiUrl('/api/resolve-path'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: file.fullPath }) })
+            fetch(apiUrl('/api/resolve-path'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: resolvedPath }) })
               .then(r => r.json()).then(data => { if (data.fullPath) navigator.clipboard.writeText(data.fullPath).then(() => message.success(t('ui.copied'))).catch(() => {}); }).catch(() => {});
           } else if (key === 'copyRelPath') {
-            navigator.clipboard.writeText(file.fullPath).then(() => message.success(t('ui.copied'))).catch(() => {});
+            navigator.clipboard.writeText(resolvedPath).then(() => message.success(t('ui.copied'))).catch(() => {});
           }
         }}} trigger={['contextMenu']}>
           <div
-            className={`${styles.changeItem} ${selectedFile === file.fullPath ? styles.changeItemSelected : ''}`}
+            className={`${styles.changeItem} ${selectedFile === file.fullPath && selectedRepo === repoPath ? styles.changeItemSelected : ''}`}
             style={{ paddingLeft: 8 + (name ? depth + 1 : depth) * 16 }}
-            onClick={() => onFileClick && onFileClick(file.fullPath)}
+            onClick={() => onFileClick && onFileClick(repoPath, file.fullPath)}
           >
             <span className={styles.icon}>{getFileIcon(file.name)}</span>
             <span className={styles.fileName}>{file.name}</span>
             <span className={styles.actions}>
-              <span title={t('ui.gitChanges.openFile')} onClick={e => { e.stopPropagation(); onOpenFile && onOpenFile(file.fullPath); }}>
+              <span title={t('ui.gitChanges.openFile')} onClick={e => { e.stopPropagation(); onOpenFile && onOpenFile(repoPath, file.fullPath); }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
               </span>
-              <span title={t('ui.gitChanges.restoreFile')} onClick={e => { e.stopPropagation(); onRestore && onRestore(file.fullPath, file.name); }}>
+              <span title={t('ui.gitChanges.restoreFile')} onClick={e => { e.stopPropagation(); onRestore && onRestore(repoPath, file.fullPath, file.name); }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
               </span>
             </span>
@@ -118,21 +96,22 @@ function TreeDir({ name, node, depth, onFileClick, onOpenFile, onRestore, select
   );
 }
 
-export default function GitChanges({ onClose, onFileClick, onOpenFile, refreshTrigger }) {
-  const [changes, setChanges] = useState(null);
+export default function GitChanges({ style, onClose, onFileClick, onOpenFile, refreshTrigger }) {
+  const [repos, setRepos] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedRepo, setSelectedRepo] = useState(null);
+  const [collapsedRepos, setCollapsedRepos] = useState(new Set());
   const mounted = useRef(true);
 
-  const refreshStatus = useCallback(() => {
-    fetch(apiUrl('/api/git-status'))
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => { if (mounted.current) setChanges(data.changes || []); })
+  const refreshAllRepos = useCallback(() => {
+    fetchAllRepos()
+      .then(results => { if (mounted.current) setRepos(results); })
       .catch(() => {});
   }, []);
 
-  const handleRestore = useCallback((filePath, fileName) => {
+  const handleRestore = useCallback((repoPath, filePath, fileName) => {
     Modal.confirm({
       title: t('ui.gitChanges.restoreConfirm', { name: fileName }),
       okType: 'danger',
@@ -140,21 +119,20 @@ export default function GitChanges({ onClose, onFileClick, onOpenFile, refreshTr
       onOk: () => fetch(apiUrl('/api/git-restore'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath }),
+        body: JSON.stringify({ path: filePath, repo: repoPath }),
       }).then(r => {
-        if (r.ok) refreshStatus();
+        if (r.ok) refreshAllRepos();
       }),
     });
-  }, [refreshStatus]);
+  }, [refreshAllRepos]);
 
   useEffect(() => {
     mounted.current = true;
     setLoading(true);
-    fetch(apiUrl('/api/git-status'))
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => {
+    fetchAllRepos()
+      .then(results => {
         if (mounted.current) {
-          setChanges(data.changes || []);
+          setRepos(results);
           setLoading(false);
         }
       })
@@ -169,18 +147,27 @@ export default function GitChanges({ onClose, onFileClick, onOpenFile, refreshTr
 
   // 工具触发的增量刷新
   useEffect(() => {
-    if (refreshTrigger > 0) {
-      fetch(apiUrl('/api/git-status'))
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(data => { if (mounted.current) setChanges(data.changes || []); })
-        .catch(() => {});
-    }
+    if (refreshTrigger > 0) refreshAllRepos();
   }, [refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const isSingleRepo = !repos || repos.length <= 1;
+
+  // Aggregate insertions/deletions across all repos
+  const totalInsertions = repos ? repos.reduce((sum, r) => sum + (r.insertions || 0), 0) : 0;
+  const totalDeletions = repos ? repos.reduce((sum, r) => sum + (r.deletions || 0), 0) : 0;
+
   return (
-    <div className={styles.gitChanges}>
+    <div className={styles.gitChanges} style={style}>
       <div className={styles.header}>
-        <span className={styles.headerTitle}>{t('ui.gitChanges')}</span>
+        <span className={styles.headerTitle}>
+          {t('ui.gitChanges')}
+          {(totalInsertions > 0 || totalDeletions > 0) && (
+            <>
+              {' '}<span className={`${styles.statBadge} ${styles.statInsert}`}>+{totalInsertions}</span>
+              {' '}<span className={`${styles.statBadge} ${styles.statDelete}`}>-{totalDeletions}</span>
+            </>
+          )}
+        </span>
         <button className={styles.collapseBtn} onClick={onClose} title="Close">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="11 17 6 12 11 7"/>
@@ -191,15 +178,53 @@ export default function GitChanges({ onClose, onFileClick, onOpenFile, refreshTr
       <div className={styles.changesContainer}>
         {loading && <div className={styles.loading}>Loading...</div>}
         {error && <div className={styles.error}>{error}</div>}
-        {!loading && !error && changes && changes.length === 0 && (
+        {!loading && !error && (!repos || repos.length === 0) && (
           <div className={styles.empty}>No changes</div>
         )}
-        {!loading && !error && changes && changes.length > 0 && (
-          <TreeDir name="" node={buildTree(changes)} depth={0} onFileClick={(filePath) => {
-            setSelectedFile(filePath);
-            onFileClick && onFileClick(filePath);
-          }} onOpenFile={onOpenFile} onRestore={handleRestore} selectedFile={selectedFile} />
-        )}
+        {!loading && !error && repos && repos.map(repo => {
+          const collapsed = collapsedRepos.has(repo.path);
+          return isSingleRepo ? (
+            <TreeDir key={repo.path} name="" node={buildTree(repo.changes)} depth={0} repoPath={repo.path} onFileClick={(rp, fp) => {
+              setSelectedFile(fp); setSelectedRepo(rp);
+              onFileClick && onFileClick(rp, fp);
+            }} onOpenFile={onOpenFile} onRestore={handleRestore} selectedFile={selectedFile} selectedRepo={selectedRepo} />
+          ) : (
+            <React.Fragment key={repo.path}>
+              <div
+                className={styles.repoHeader}
+                onClick={() => setCollapsedRepos(prev => {
+                  const next = new Set(prev);
+                  collapsed ? next.delete(repo.path) : next.add(repo.path);
+                  return next;
+                })}
+              >
+                <span className={`${styles.repoArrow} ${collapsed ? '' : styles.repoArrowExpanded}`}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 6 15 12 9 18"/>
+                  </svg>
+                </span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                  <path d="M18 9a9 9 0 0 1-9 9"/>
+                </svg>
+                <span className={styles.repoName}>{repo.name}</span>
+                {(repo.insertions > 0 || repo.deletions > 0) && (
+                  <>
+                    <span className={`${styles.statBadge} ${styles.statInsert}`}>+{repo.insertions}</span>
+                    <span className={`${styles.statBadge} ${styles.statDelete}`}>-{repo.deletions}</span>
+                  </>
+                )}
+                <span className={styles.repoBadge}>{repo.changes.length}</span>
+              </div>
+              {!collapsed && (
+                <TreeDir name="" node={buildTree(repo.changes)} depth={1} repoPath={repo.path} onFileClick={(rp, fp) => {
+                  setSelectedFile(fp); setSelectedRepo(rp);
+                  onFileClick && onFileClick(rp, fp);
+                }} onOpenFile={onOpenFile} onRestore={handleRestore} selectedFile={selectedFile} selectedRepo={selectedRepo} />
+              )}
+            </React.Fragment>
+          );
+        })}
       </div>
     </div>
   );

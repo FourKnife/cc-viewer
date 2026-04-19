@@ -27,10 +27,12 @@ function runBridge(stdin, env = {}) {
 }
 
 describe('ask-bridge.js', () => {
-  it('exits 1 when CCVIEWER_PORT is not set', async () => {
-    const { code, stderr } = await runBridge('{}', { CCVIEWER_PORT: '' });
-    assert.equal(code, 1);
-    assert.ok(stderr.includes('CCVIEWER_PORT'));
+  it('exits 0 silently when CCVIEWER_PORT is not set', async () => {
+    const { code, stdout } = await runBridge('{}', { CCVIEWER_PORT: '' });
+    assert.equal(code, 0);
+    const output = JSON.parse(stdout.trim());
+    assert.equal(output.continue, true);
+    assert.equal(output.suppressOutput, true);
   });
 
   it('exits 1 when stdin is invalid JSON', async () => {
@@ -50,14 +52,16 @@ describe('ask-bridge.js', () => {
     assert.equal(code, 1);
   });
 
-  it('exits 1 when server is unreachable', async () => {
+  it('falls back to terminal UI when server is unreachable', async () => {
     const input = JSON.stringify({
       tool_input: {
         questions: [{ question: 'Q?', header: 'H', options: [{ label: 'A' }], multiSelect: false }],
       },
     });
-    const { code, stderr } = await runBridge(input, { CCVIEWER_PORT: '19999' });
-    assert.equal(code, 1);
+    const { code, stdout, stderr } = await runBridge(input, { CCVIEWER_PORT: '19999' });
+    assert.equal(code, 0);
+    const output = JSON.parse(stdout.trim());
+    assert.equal(output.continue, true);
     assert.ok(stderr.includes('ask-bridge'));
   });
 
@@ -107,7 +111,7 @@ describe('ask-bridge.js', () => {
       assert.deepEqual(output.hookSpecificOutput.updatedInput.questions, questions);
     });
 
-    it('exits 1 when server returns non-200', async () => {
+    it('falls back to terminal UI when server returns non-200', async () => {
       server.on('request', (_req, res) => {
         res.writeHead(500);
         res.end('error');
@@ -118,11 +122,13 @@ describe('ask-bridge.js', () => {
           questions: [{ question: 'Q?', header: 'H', options: [{ label: 'A' }], multiSelect: false }],
         },
       });
-      const { code } = await runBridge(input, { CCVIEWER_PORT: String(port) });
-      assert.equal(code, 1);
+      const { code, stdout } = await runBridge(input, { CCVIEWER_PORT: String(port) });
+      assert.equal(code, 0);
+      const output = JSON.parse(stdout.trim());
+      assert.equal(output.continue, true);
     });
 
-    it('exits 1 when server returns no answers', async () => {
+    it('falls back to terminal UI when server returns no answers', async () => {
       server.on('request', (_req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ noAnswers: true }));
@@ -133,8 +139,10 @@ describe('ask-bridge.js', () => {
           questions: [{ question: 'Q?', header: 'H', options: [{ label: 'A' }], multiSelect: false }],
         },
       });
-      const { code } = await runBridge(input, { CCVIEWER_PORT: String(port) });
-      assert.equal(code, 1);
+      const { code, stdout } = await runBridge(input, { CCVIEWER_PORT: String(port) });
+      assert.equal(code, 0);
+      const output = JSON.parse(stdout.trim());
+      assert.equal(output.continue, true);
     });
   });
 });

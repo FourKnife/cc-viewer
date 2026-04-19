@@ -136,6 +136,24 @@ export function isSkillText(text) {
 /**
  * 判断文本是否为系统注入文本（不应作为用户消息展示）
  */
+/**
+ * Strip known system/command tags from a text block, returning only user-authored content.
+ * Used to extract user input embedded in system-reminder-wrapped blocks (e.g., /ultraplan).
+ */
+function stripSystemTags(text) {
+  if (!text) return '';
+  return text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '')
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, '')
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, '')
+    .replace(/<command-name>[\s\S]*?<\/command-name>/gi, '')
+    .replace(/<command-message>[\s\S]*?<\/command-message>/gi, '')
+    .replace(/<command-args>[\s\S]*?<\/command-args>/gi, '')
+    .replace(/<teammate-message[\s\S]*?<\/teammate-message>/gi, '')
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/gi, '')
+    .trim();
+}
+
 export function isSystemText(text) {
   if (!text) return true;
   const trimmed = text.trim();
@@ -154,13 +172,80 @@ export function isSystemText(text) {
 /**
  * 从 user message 的 content 数组中分类提取各类文本块。
  * @param {Array} content — message.content 数组
- * @returns {{ commands: string[], textBlocks: Array, skillBlocks: Array }}
- *   commands    — 提取到的 slash command 名称（如 "/clear"）
- *   textBlocks  — 过滤后的普通用户文本块（不含系统文本、command 块、skill 块）
- *   skillBlocks — skill 加载的文本块
+ * @returns {{ commands: string[], textBlocks: Array, skillBlocks: Array, teammateBlocks: Array, taskNotificationBlocks: Array }}
+ *   commands              — 提取到的 slash command 名称（如 "/clear"）
+ *   textBlocks            — 过滤后的普通用户文本块（不含系统文本、command 块、skill 块）
+ *   skillBlocks           — skill 加载的文本块
+ *   teammateBlocks        — teammate-message 解析块
+ *   taskNotificationBlocks — task-notification 解析块
  */
 export function classifyUserContent(content) {
-  if (!Array.isArray(content)) return { commands: [], textBlocks: [], skillBlocks: [] };
+  if (!Array.isArray(content)) return { commands: [], textBlocks: [], skillBlocks: [], teammateBlocks: [], taskNotificationBlocks: [] };
+
+  // Extract <teammate-message> blocks from user content
+  const teammateBlocks = [];
+  for (const b of content) {
+    if (b.type !== 'text') continue;
+    const text = b.text || '';
+    const re = /<teammate-message\s+([^>]*)>([\s\S]*?)<\/teammate-message>/gi;
+    let match;
+    while ((match = re.exec(text)) !== null) {
+      const attrs = match[1];
+      const body = match[2].trim();
+      const idMatch = attrs.match(/teammate_id="([^"]*)"/);
+      const colorMatch = attrs.match(/color="([^"]*)"/);
+      const summaryMatch = attrs.match(/summary="([^"]*)"/);
+      const tmId = idMatch ? idMatch[1] : 'teammate';
+      const tmColor = colorMatch ? colorMatch[1] : null;
+      // JSON lifecycle signals → compact status bubble
+      if (body.startsWith('{')) {
+        try {
+          const j = JSON.parse(body);
+          if (j && j.type) {
+            teammateBlocks.push({
+              id: tmId, color: tmColor, summary: null,
+              content: null, status: j.type, statusFrom: j.from || tmId,
+            });
+            continue;
+          }
+        } catch {}
+      }
+      teammateBlocks.push({
+        id: tmId, color: tmColor,
+        summary: summaryMatch ? summaryMatch[1] : null,
+        content: body, status: null,
+      });
+    }
+  }
+
+  // Extract <task-notification> blocks from user content (early exit if none)
+  const taskNotificationBlocks = [];
+  const hasTaskNotification = content.some(b => b.type === 'text' && /<task-notification>/i.test(b.text || ''));
+  if (hasTaskNotification) {
+    for (const b of content) {
+      if (b.type !== 'text') continue;
+      const text = b.text || '';
+      const tnRe = /<task-notification>([\s\S]*?)<\/task-notification>/gi;
+      let tnMatch;
+      while ((tnMatch = tnRe.exec(text)) !== null) {
+        const inner = tnMatch[1];
+        const field = (tag) => { const m = inner.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i')); return m ? m[1].trim() : null; };
+        const usageBlock = inner.match(/<usage>([\s\S]*?)<\/usage>/i);
+        let usage = null;
+        if (usageBlock) {
+          const uf = (tag) => { const m = usageBlock[1].match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i')); return m ? m[1].trim() : null; };
+          usage = { totalTokens: Number(uf('total_tokens') || 0), toolUses: Number(uf('tool_uses') || 0), durationMs: Number(uf('duration_ms') || 0) };
+        }
+        taskNotificationBlocks.push({
+          taskId: field('task-id'),
+          status: field('status'),
+          summary: field('summary'),
+          result: field('result'),
+          usage,
+        });
+      }
+    }
+  }
 
   const hasCommand = content.some(b => b.type === 'text' && /<command-message>/i.test(b.text || ''));
 
@@ -180,6 +265,16 @@ export function classifyUserContent(content) {
   // 过滤出非系统文本块
   let textBlocks = content.filter(b => b.type === 'text' && !isSystemText(b.text));
 
+  // 二次提取：从被过滤的系统块中提取嵌入的用户文本
+  // (e.g., /ultraplan 将 skill 指令和用户输入合并在同一 <system-reminder> 块中)
+  for (const b of content) {
+    if (b.type !== 'text' || !isSystemText(b.text)) continue;
+    const userText = stripSystemTags(b.text);
+    if (userText) {
+      textBlocks.push({ ...b, text: userText });
+    }
+  }
+
   // 过滤掉 command 相关块
   if (hasCommand) {
     textBlocks = textBlocks.filter(b => !/<command-message>/i.test(b.text || ''));
@@ -191,7 +286,7 @@ export function classifyUserContent(content) {
     textBlocks = textBlocks.filter(b => !isSkillText(b.text));
   }
 
-  return { commands, textBlocks, skillBlocks };
+  return { commands, textBlocks, skillBlocks, teammateBlocks, taskNotificationBlocks };
 }
 
 /**

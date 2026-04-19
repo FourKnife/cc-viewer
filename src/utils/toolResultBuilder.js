@@ -20,6 +20,8 @@ export function setToolResultCache(messages, state) {
 
 // --- State builder ---
 
+const MAX_EDIT_SNAPSHOTS = 300;
+
 export function createEmptyToolState() {
   return {
     toolUseMap: {},
@@ -30,6 +32,7 @@ export function createEmptyToolState() {
     planApprovalMap: {},
     latestPlanContent: null,
     _fileState: {},
+    _editOrder: [],
   };
 }
 
@@ -50,7 +53,7 @@ export function appendToolResultMap(state, messages, startIndex) {
           toolUseMap[parsed.id] = parsed;
           // Write → .claude/plans/ 文件内容追踪
           if (parsed.name === 'Write' && parsed.input?.file_path
-            && /\.claude\/plans\//i.test(parsed.input.file_path) && parsed.input.content) {
+            && /[/\\]\.claude[/\\]plans[/\\]/.test(parsed.input.file_path) && parsed.input.content) {
             state.latestPlanContent = parsed.input.content;
           }
           // Edit → editSnapshotMap + _fileState 更新
@@ -60,7 +63,15 @@ export function appendToolResultMap(state, messages, startIndex) {
             const newStr = parsed.input.new_string;
             if (fp && oldStr != null && newStr != null && _fileState[fp]) {
               const entry = _fileState[fp];
-              editSnapshotMap[parsed.id] = { plainText: entry.plainText, lineNums: entry.lineNums.slice() };
+              // 淘汰时留 null 占位：rebuild 时 key 已存在则跳过，避免重建已淘汰条目
+              if (!(parsed.id in editSnapshotMap)) {
+                editSnapshotMap[parsed.id] = { plainText: entry.plainText, lineNums: entry.lineNums.slice() };
+                state._editOrder.push(parsed.id);
+                if (state._editOrder.length > MAX_EDIT_SNAPSHOTS) {
+                  const evictId = state._editOrder.shift();
+                  editSnapshotMap[evictId] = null;
+                }
+              }
               const idx = entry.plainText.indexOf(oldStr);
               if (idx >= 0) {
                 const before = entry.plainText.substring(0, idx);
@@ -80,6 +91,10 @@ export function appendToolResultMap(state, messages, startIndex) {
                     ...newNums,
                     ...entry.lineNums.slice(lineOffset + oldLineCount).map(n => n + lineDelta),
                   ];
+                }
+                // Edit plan 文件时同步 latestPlanContent（Write 只追踪全量写入，Edit 追踪增量编辑后的完整内容）
+                if (/[/\\]\.claude[/\\]plans[/\\]/.test(fp)) {
+                  state.latestPlanContent = entry.plainText;
                 }
               }
             }
@@ -106,8 +121,9 @@ export function appendToolResultMap(state, messages, startIndex) {
           }
           const resultText = extractToolResultText(block);
           const isError = !!block.is_error;
-          const isPermissionDenied = isError && /doesn't want to proceed|Permission.*denied|rejected.*tool use|interrupted by user for tool use/i.test(resultText);
-          toolResultMap[block.tool_use_id] = { label, toolName, toolInput, resultText, isError, isPermissionDenied };
+          const isPermissionDenied = isError && resultText && /doesn't want to proceed|Permission.*denied|rejected.*tool use|interrupted by user for tool use/i.test(resultText);
+          const isUltraplan = isPermissionDenied && resultText && /ultraplan/i.test(resultText);
+          toolResultMap[block.tool_use_id] = { label, toolName, toolInput, resultText, isError, isPermissionDenied, isUltraplan };
           if (matchedTool && matchedTool.name === 'Read' && matchedTool.input?.file_path) {
             readContentMap[matchedTool.input.file_path] = resultText;
             // _fileState 更新（行号解析）
@@ -150,9 +166,19 @@ export function appendToolResultMap(state, messages, startIndex) {
             } else {
               askAnswerMap[block.tool_use_id] = parsed;
             }
+            state._askDirty = (state._askDirty || 0) + 1;
           }
           if (matchedTool && matchedTool.name === 'ExitPlanMode') {
-            planApprovalMap[block.tool_use_id] = parsePlanApproval(resultText);
+            if (isPermissionDenied) {
+              const userSaid = resultText.match(/the user said:\s*([\s\S]*)/i);
+              planApprovalMap[block.tool_use_id] = {
+                status: isUltraplan ? 'ultraplan' : 'rejected',
+                feedback: userSaid ? userSaid[1].trim() : '',
+              };
+            } else {
+              planApprovalMap[block.tool_use_id] = parsePlanApproval(resultText);
+            }
+            state._planDirty = (state._planDirty || 0) + 1;
             // Plan 审批完成（approved/rejected）后重置 latestPlanContent，
             // 防止下一个 plan 周期显示旧内容
             state.latestPlanContent = null;

@@ -2,44 +2,22 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { Dropdown, Modal, Input, message } from 'antd';
 import { t } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { getFileIcon } from '../utils/fileIcons';
 import OpenFolderIcon from './OpenFolderIcon';
 import styles from './FileExplorer.module.css';
 
-const EXT_COLORS = {
-  js: '#e8d44d', jsx: '#61dafb', ts: '#3178c6', tsx: '#3178c6',
-  json: '#999', md: '#519aba', css: '#a86fd9', scss: '#cd6799', less: '#a86fd9',
-  html: '#e34c26', htm: '#e34c26', xml: '#e34c26',
-  py: '#3572a5', go: '#00add8', rs: '#dea584', rb: '#cc342d',
-  java: '#b07219', c: '#555', cpp: '#f34b7d', h: '#555',
-  sh: '#4eaa25', bash: '#4eaa25', zsh: '#4eaa25',
-  yml: '#cb171e', yaml: '#cb171e', toml: '#999',
-  svg: '#e34c26', png: '#a86fd9', jpg: '#a86fd9', jpeg: '#a86fd9', gif: '#a86fd9', ico: '#a86fd9', webp: '#a86fd9',
-};
-
-function getFileIcon(name, type) {
-  if (type === 'directory') {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="#c09553" stroke="none">
-        <path d="M2 6c0-1.1.9-2 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z"/>
-      </svg>
-    );
-  }
-  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-  const color = EXT_COLORS[ext] || '#888';
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-    </svg>
-  );
+function isExternalFileDrag(e) {
+  return e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes('text/x-internal-move');
 }
 
-function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile, onFileRenamed, refreshTrigger }) {
+function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpand, currentFile, onFileRenamed, refreshTrigger, onHtmlPreview, onAttachToChat, onInsertPathToChat, onImportFiles }) {
   const [children, setChildren] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
   const submittingRef = useRef(false);
   const itemRef = useRef(null);
@@ -79,7 +57,13 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
 
   const toggle = useCallback(async () => {
     if (item.type !== 'directory') {
-      // 点击文件，触发回调
+      const ext = (childPath || '').split('.').pop().toLowerCase();
+      // .html/.htm 文件在弹窗 iframe 中预览
+      if (ext === 'html' || ext === 'htm') {
+        if (onHtmlPreview) onHtmlPreview(childPath);
+        return;
+      }
+      // 点击文件，触发回调（Office 文件由上层 onFileClick 回调统一拦截）
       if (onFileClick) onFileClick(childPath);
       return;
     }
@@ -91,7 +75,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
       await fetchChildren();
     }
     onToggleExpand(childPath);
-  }, [expanded, children, childPath, item, onFileClick, onToggleExpand, fetchChildren]);
+  }, [expanded, children, childPath, item, onFileClick, onToggleExpand, fetchChildren, onHtmlPreview]);
 
   const isDir = item.type === 'directory';
   const isSelected = currentFile && currentFile === childPath;
@@ -197,6 +181,84 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
     toggle();
   }, [editing, toggle]);
 
+  // 拖拽事件处理
+  const handleDragStart = useCallback((e) => {
+    if (editing) { e.preventDefault(); return; }
+    e.dataTransfer.setData('text/plain', childPath);
+    e.dataTransfer.setData('text/x-internal-move', '1');
+    e.dataTransfer.effectAllowed = 'move';
+    setDragging(true);
+  }, [childPath, editing]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragging(false);
+  }, []);
+
+  const autoExpandTimer = useRef(null);
+  const handleDragOver = useCallback((e) => {
+    const isExternal = isExternalFileDrag(e);
+    const isInternal = e.dataTransfer.types.includes('text/x-internal-move');
+    // 内部移动只接受目录；外部导入接受任意节点（文件节点→导入到父目录）
+    if (isInternal && !isDir) return;
+    if (!isExternal && !isInternal) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = isExternal ? 'copy' : 'move';
+    setDragOver(true);
+    // hover 在折叠目录上 500ms → 自动展开（外部导入和内部移动都支持）
+    if (isDir && !expanded && !autoExpandTimer.current) {
+      autoExpandTimer.current = setTimeout(() => {
+        onToggleExpand(childPath);
+        autoExpandTimer.current = null;
+      }, 500);
+    }
+  }, [isDir, expanded, childPath, onToggleExpand]);
+
+  const handleDragLeave = useCallback((e) => {
+    // 只在真正离开此节点时才移除高亮（忽略子元素事件冒泡）
+    if (itemRef.current && !itemRef.current.contains(e.relatedTarget)) {
+      setDragOver(false);
+      if (autoExpandTimer.current) { clearTimeout(autoExpandTimer.current); autoExpandTimer.current = null; }
+    }
+  }, []);
+
+  const handleDrop = useCallback(async (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    // External file drop — 目录节点导入到该目录，文件节点导入到其父目录
+    if (isExternalFileDrag(e) && e.dataTransfer.files.length > 0) {
+      e.stopPropagation();
+      const files = Array.from(e.dataTransfer.files);
+      const targetDir = isDir ? childPath : (childPath.includes('/') ? childPath.substring(0, childPath.lastIndexOf('/')) : '');
+      if (onImportFiles) onImportFiles(files, targetDir);
+      return;
+    }
+    // Internal move
+    const fromPath = e.dataTransfer.getData('text/plain');
+    if (!fromPath || !isDir) return;
+    // 不能拖到自身
+    if (fromPath === childPath) return;
+    // 不能拖到自身子目录
+    if (childPath.startsWith(fromPath + '/')) return;
+    // 不能拖到当前所在的同目录（无意义移动）
+    const fromDir = fromPath.includes('/') ? fromPath.substring(0, fromPath.lastIndexOf('/')) : '';
+    if (fromDir === childPath) return;
+    try {
+      const res = await fetch(apiUrl('/api/move-file'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromPath, toDir: childPath }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        message.error(data.error || 'Move failed');
+        return;
+      }
+      if (onFileRenamed) onFileRenamed(fromPath, data.newPath);
+    } catch (err) {
+      message.error(err.message || 'Move failed');
+    }
+  }, [childPath, isDir, onFileRenamed, onImportFiles]);
+
   // 右键菜单项
   const contextMenuItems = useMemo(() => {
     if (isDir) return [
@@ -215,6 +277,8 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
       { key: 'reveal', label: t('ui.contextMenu.revealInExplorer') },
       { key: 'copyPath', label: t('ui.contextMenu.copyPath') },
       { key: 'copyRelPath', label: t('ui.contextMenu.copyRelativePath') },
+      { key: 'attachToChat', label: t('ui.contextMenu.attachToChat') },
+      { key: 'insertPathToChat', label: t('ui.contextMenu.insertPathToChat') },
       { type: 'divider' },
       { key: 'rename', label: t('ui.contextMenu.rename') },
       { key: 'delete', label: t('ui.contextMenu.delete'), danger: true },
@@ -254,6 +318,12 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
       case 'copyRelPath':
         navigator.clipboard.writeText(childPath).then(() => message.success(t('ui.copied'))).catch(() => {});
         break;
+      case 'attachToChat':
+        onAttachToChat?.(childPath);
+        break;
+      case 'insertPathToChat':
+        onInsertPathToChat?.(childPath);
+        break;
       case 'rename':
         startEditing();
         break;
@@ -261,7 +331,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         const inputId = `ccv-newfile-${Date.now()}`;
         Modal.confirm({
           title: t('ui.contextMenu.newFile'),
-          content: <Input id={inputId} autoFocus placeholder="filename.ext" style={{ background: '#141414', borderColor: '#2a2a2a', color: '#ccc', caretColor: '#ccc' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
+          content: <Input id={inputId} autoFocus placeholder="filename.ext" style={{ background: 'var(--bg-container)', borderColor: 'var(--border-primary)', color: 'var(--text-secondary)', caretColor: 'var(--text-secondary)' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
           okText: t('ui.contextMenu.newFile'),
           onOk: () => {
             const input = document.getElementById(inputId);
@@ -282,7 +352,7 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         const inputId = `ccv-newdir-${Date.now()}`;
         Modal.confirm({
           title: t('ui.contextMenu.newDir'),
-          content: <Input id={inputId} autoFocus placeholder="folder-name" style={{ background: '#141414', borderColor: '#2a2a2a', color: '#ccc', caretColor: '#ccc' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
+          content: <Input id={inputId} autoFocus placeholder="folder-name" style={{ background: 'var(--bg-container)', borderColor: 'var(--border-primary)', color: 'var(--text-secondary)', caretColor: 'var(--text-secondary)' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
           okText: t('ui.contextMenu.newDir'),
           onOk: () => {
             const input = document.getElementById(inputId);
@@ -314,17 +384,23 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         });
         break;
     }
-  }, [childPath, item.name, isDir, startEditing, onFileRenamed]);
+  }, [childPath, item.name, isDir, startEditing, onFileRenamed, onAttachToChat, onInsertPathToChat]);
 
   const treeItemDiv = (
     <div
       ref={itemRef}
-      className={`${styles.treeItem}${isSelected ? ' ' + styles.treeItemSelected : ''}${isGitIgnored ? ' ' + styles.treeItemGitIgnored : ''}`}
+      className={`${styles.treeItem}${isSelected ? ' ' + styles.treeItemSelected : ''}${isGitIgnored ? ' ' + styles.treeItemGitIgnored : ''}${dragging ? ' ' + styles.treeItemDragging : ''}${dragOver ? ' ' + styles.treeItemDragOver : ''}`}
       style={{ paddingLeft: 8 + depth * 16 }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
       tabIndex={0}
+      draggable={!editing}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <span className={styles.arrow}>
         {isDir ? (
@@ -362,16 +438,19 @@ function TreeNode({ item, path, depth, onFileClick, expandedPaths, onToggleExpan
         <div className={styles.error} style={{ paddingLeft: 24 + depth * 16 }}>{error}</div>
       )}
       {expanded && children && children.map(child => (
-        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} />
+        <TreeNode key={child.name} item={child} path={childPath} depth={depth + 1} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} onHtmlPreview={onHtmlPreview} onAttachToChat={onAttachToChat} onInsertPathToChat={onInsertPathToChat} onImportFiles={onImportFiles} />
       ))}
     </>
   );
 }
 
-export default function FileExplorer({ onClose, onFileClick, expandedPaths, onToggleExpand, currentFile, refreshTrigger, onFileRenamed }) {
+export default function FileExplorer({ style, onClose, onFileClick, expandedPaths, onToggleExpand, currentFile, refreshTrigger, onFileRenamed, onAttachToChat, onInsertPathToChat }) {
   const [items, setItems] = useState(null);
   const [error, setError] = useState(null);
+  const [htmlPreviewPath, setHtmlPreviewPath] = useState(null);
+  const [externalDragOver, setExternalDragOver] = useState(false);
   const mounted = useRef(true);
+  const containerRef = useRef(null);
 
   // 重新加载根目录
   const refreshRoot = useCallback(() => {
@@ -427,7 +506,7 @@ export default function FileExplorer({ onClose, onFileClick, expandedPaths, onTo
         const inputId = `ccv-newfile-root-${Date.now()}`;
         Modal.confirm({
           title: t('ui.contextMenu.newFile'),
-          content: <Input id={inputId} autoFocus placeholder="filename.ext" style={{ background: '#141414', borderColor: '#2a2a2a', color: '#ccc', caretColor: '#ccc' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
+          content: <Input id={inputId} autoFocus placeholder="filename.ext" style={{ background: 'var(--bg-container)', borderColor: 'var(--border-primary)', color: 'var(--text-secondary)', caretColor: 'var(--text-secondary)' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
           okText: t('ui.contextMenu.newFile'),
           onOk: () => {
             const input = document.getElementById(inputId);
@@ -448,7 +527,7 @@ export default function FileExplorer({ onClose, onFileClick, expandedPaths, onTo
         const inputId = `ccv-newdir-root-${Date.now()}`;
         Modal.confirm({
           title: t('ui.contextMenu.newDir'),
-          content: <Input id={inputId} autoFocus placeholder="folder-name" style={{ background: '#141414', borderColor: '#2a2a2a', color: '#ccc', caretColor: '#ccc' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
+          content: <Input id={inputId} autoFocus placeholder="folder-name" style={{ background: 'var(--bg-container)', borderColor: 'var(--border-primary)', color: 'var(--text-secondary)', caretColor: 'var(--text-secondary)' }} onPressEnter={() => { document.querySelector('.ant-modal-confirm-btns .ant-btn-primary')?.click(); }} />,
           okText: t('ui.contextMenu.newDir'),
           onOk: () => {
             const input = document.getElementById(inputId);
@@ -480,8 +559,75 @@ export default function FileExplorer({ onClose, onFileClick, expandedPaths, onTo
     }
   }, [onFileRenamed]);
 
+  // Import external files to project directory
+  const importFiles = useCallback(async (files, targetDir) => {
+    const results = await Promise.all(
+      files.map(async (file) => {
+        const form = new FormData();
+        form.append('file', file);
+        try {
+          const res = await fetch(apiUrl(`/api/import-file?dir=${encodeURIComponent(targetDir)}`), { method: 'POST', body: form });
+          const data = await res.json();
+          if (!res.ok) { message.error(`${file.name}: ${data.error || 'Import failed'}`); return null; }
+          return data;
+        } catch (err) { message.error(`${file.name}: ${err.message}`); return null; }
+      })
+    );
+    const ok = results.filter(Boolean);
+    if (ok.length > 0) {
+      if (ok.length === 1) {
+        message.success(t('ui.fileImported', { name: ok[0].relPath }));
+      } else {
+        message.success(t('ui.filesImported', { count: ok.length }));
+      }
+      if (onFileRenamed) onFileRenamed(null, ok[0].relPath);
+    }
+  }, [onFileRenamed]);
+
+  // Container-level drag events for external files
+  // dragover 定时器模式：持续收到 dragover 时保持高亮，300ms 无 dragover 则认为拖拽结束
+  const dragTimerRef = useRef(null);
+
+  const resetDragState = useCallback(() => {
+    if (dragTimerRef.current) { clearTimeout(dragTimerRef.current); dragTimerRef.current = null; }
+    setExternalDragOver(false);
+  }, []);
+
+  // 全局 drop/dragend 兜底：确保任何情况下状态都能重置
+  useEffect(() => {
+    const handler = () => resetDragState();
+    document.addEventListener('drop', handler);
+    document.addEventListener('dragend', handler);
+    return () => {
+      document.removeEventListener('drop', handler);
+      document.removeEventListener('dragend', handler);
+    };
+  }, [resetDragState]);
+
+  const handleContainerDragOver = useCallback((e) => {
+    if (!isExternalFileDrag(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!externalDragOver) setExternalDragOver(true);
+    // 每次 dragover 重置定时器，300ms 内无新 dragover 则清除状态
+    if (dragTimerRef.current) clearTimeout(dragTimerRef.current);
+    dragTimerRef.current = setTimeout(() => {
+      setExternalDragOver(false);
+      dragTimerRef.current = null;
+    }, 300);
+  }, [externalDragOver]);
+
+  const handleContainerDrop = useCallback((e) => {
+    resetDragState();
+    if (!isExternalFileDrag(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) importFiles(files, '');
+  }, [importFiles, resetDragState]);
+
   return (
-    <div className={styles.fileExplorer}>
+    <div ref={containerRef} className={styles.fileExplorer} style={style} data-file-explorer onDragOver={handleContainerDragOver} onDrop={handleContainerDrop}>
       <div className={styles.header}>
         <Dropdown menu={{ items: headerMenuItems, onClick: handleHeaderMenuClick }} trigger={['contextMenu']}>
           <span className={styles.headerTitle}>
@@ -500,9 +646,35 @@ export default function FileExplorer({ onClose, onFileClick, expandedPaths, onTo
         {error && <div className={styles.error}>{error}</div>}
         {!items && !error && <div className={styles.loading}>Loading...</div>}
         {items && items.map(item => (
-          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} />
+          <TreeNode key={item.name} item={item} path="" depth={0} onFileClick={onFileClick} expandedPaths={expandedPaths} onToggleExpand={onToggleExpand} currentFile={currentFile} onFileRenamed={onFileRenamed} refreshTrigger={refreshTrigger} onHtmlPreview={setHtmlPreviewPath} onAttachToChat={onAttachToChat} onInsertPathToChat={onInsertPathToChat} onImportFiles={importFiles} />
         ))}
       </div>
+      {htmlPreviewPath && (
+        <Modal
+          open
+          onCancel={() => setHtmlPreviewPath(null)}
+          footer={null}
+          closable
+          maskClosable
+          zIndex={1100}
+          width="calc(100vw - 80px)"
+          title={<span style={{ color: 'var(--text-primary)', fontSize: 14 }}>{htmlPreviewPath.split('/').pop() || 'Preview'}</span>}
+          styles={{
+            header: { background: 'var(--bg-container)', borderBottom: '1px solid var(--border-primary)', padding: '12px 20px' },
+            body: { background: '#fff', height: 'calc(100vh - 160px)', overflow: 'hidden', padding: 0 },
+            mask: { background: 'rgba(0,0,0,0.7)' },
+            content: { background: 'var(--bg-container)', border: '1px solid var(--border-primary)', borderRadius: 8, padding: 0 },
+          }}
+          centered
+        >
+          <iframe
+            src={apiUrl(`/api/file-raw?path=${encodeURIComponent(htmlPreviewPath)}`)}
+            style={{ width: '100%', height: '100%', border: 'none' }}
+            title={htmlPreviewPath}
+            sandbox="allow-scripts allow-popups allow-forms"
+          />
+        </Modal>
+      )}
     </div>
   );
 }

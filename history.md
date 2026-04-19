@@ -1,5 +1,546 @@
 # Changelog
 
+## 1.6.167 (2026-04-18)
+
+- Fix: `ccv -logger` mode selection no longer depends on the `realpath(which claude).includes('node_modules')` heuristic. That check was designed for the 1.x era when `node_modules` meant "npm JS install" — but Claude Code 2.x native binaries also live under `node_modules`, so the check misfired (`prefersNative = false` for 2.x, the opposite of what it should be). Under 1.6.166 the bug was masked by `hasNpm=false` forcing fallthrough to `native`, but a user with both a 2.x install AND a stale cli.js elsewhere would have been wrongly pushed into npm-injection mode. The `prefersNative` loop is deleted; mode is now decided purely by `hasNpm ? 'npm' : (nativePath ? 'native' : 'unknown')` — one fact, one decision
+- Fix: Legacy npm-mode shell hooks self-heal on Claude Code 2.x upgrade. Pre-2.x users have a `~/.zshrc` hook that loops over `@anthropic-ai/claude-code/cli.js` candidates; on 2.x those paths don't exist, the loop leaves `cli_js=""`, and the hook silently falls through to `command claude "$@"` — cc-viewer is never triggered. The npm hook template now includes an `if [ -z "$cli_js" ]` branch that, on detecting the 2.x layout, backgrounds `ccv -logger &` to rewrite `~/.zshrc` with the native hook AND routes the current invocation through `ccv run -- claude --ccv-internal "$@"` so this very command gets proxied instead of running bare. Next shell reads the native hook directly; no user intervention needed. Also adds a `case "$1" in --ccv-internal)` recursion guard at the top of the npm hook (previously only in the native hook)
+- Feat: `cli.claude2x.binaryMissing` + `cli.claude2x.reinstallHint` + `cli.notFound.nativeHint` i18n keys (18 languages each). The "claude not found" error path (`runCliMode`, `runProxyCommand`, `ccv -logger` mode=unknown) now routes through a unified `reportClaudeNotFound()` helper that distinguishes "Claude Code 2.x wrapper installed but postinstall didn't run / `--omit=optional`" (prints the exact `node install.cjs` path to run) from "claude not installed at all" (generic hint). New `hasClaude2xWrapper(nodeModulesRoot)` export in `findcc.js` detects the 2.x layout by `install.cjs` presence
+- Tests: +4 for `hasClaude2xWrapper` (null, missing, present in 2.x, absent in 1.x). +4 source-grep invariant tests in `test/cli.test.js` guarding the `if [ -z "$cli_js" ]` self-heal branch, the `ccv run -- claude --ccv-internal` routing, the repeated-repair path for missing CC-Viewer marker, and a regression guard that the deleted `prefersNative` loop can't come back. 964 tests total (+8)
+
+## 1.6.166 (2026-04-18)
+
+- Fix: `ccv` on Claude Code 2.x still failed with `Error: claude native binary not installed` whenever the wrapper package's `postinstall` didn't run (`--ignore-scripts`, some pnpm configs, `--omit=optional`). 1.6.165 correctly located `@anthropic-ai/claude-code/bin/claude.exe`, but that file is a placeholder stub — the real native binary is copied over it by `install.cjs` only after postinstall completes. If postinstall was skipped, exec'ing the stub prints the install-instructions error and exits code 1. `resolveNativePath` now probes the platform-specific optional dependency first (e.g. `@anthropic-ai/claude-code-darwin-arm64/claude`), which is the authoritative source of the native binary regardless of postinstall state — both the hoisted (flat under global node_modules) and nested (under the wrapper package's own node_modules) layouts are checked. Only falls back to `which claude` / `NATIVE_CANDIDATES` / the wrapper's `bin/claude.exe` if the platform-specific package is missing entirely (e.g. user really did `--omit=optional`). New exports `detectPlatformKey()` (darwin/linux/win32 + arch, with Rosetta 2 + musl detection mirroring upstream `install.cjs`) and `findPlatformBinary(nodeModulesRoot)` — +5 unit tests covering platform key shape, null/missing-root guards, flat layout, nested layout. Also updated the subprocess-driven `resolveNativePath` tests to set `NPM_CONFIG_PREFIX` to a nonexistent path so step 1 misses and step 2 (`which`) is what's being exercised, preventing cross-test contamination from the host machine's real npm root
+
+## 1.6.165 (2026-04-18)
+
+- Fix: `ccv` no longer exits with "claude not found" on Claude Code 2.x — the upstream `@anthropic-ai/claude-code@2.x` package dropped `cli.js` and now ships a native binary at `bin/claude.exe` *inside* the npm package. The previous `findcc.js::resolveNativePath` deliberately rejected any `which claude` result whose realpath lived under `node_modules` (a rule that used to skip the legacy JS cli wrapper) — with 2.x this rule misfired and both resolvers returned null. The rejection is now narrowed to realpaths ending in `.js` (true JS wrappers), so 2.x native binaries in `node_modules` are accepted. A 3rd fallback scans `{globalRoot}/{pkg}/bin/claude(.exe)` directly, so discovery works even when `claude` is not on `PATH`. New exported `findPackagedBinary(nodeModulesRoot)` helper for testability. +7 tests: 5 for `findPackagedBinary` (null root, empty pkg, `.exe` 2.x layout, unix `claude` name, package priority) and 2 subprocess-driven tests that actually exercise the rejection rule (accepts non-`.js` binary under `node_modules`, still rejects `.js` shim under `node_modules`) so a regression to the old `node_modules`-wide rejection would be caught
+- Feat: Custom UltraPlan experts — users can now author their own named role templates alongside the built-in 代码专家/调研专家. New "+" button in the UltraPlan popover header (both `UltraPlanModal.jsx` mobile entry and `TerminalPanel.jsx` desktop popover) opens a lightweight `CustomUltraplanEditModal` for title + body; saved entries render as clickable role buttons in the variant row with a hover pencil for edit/delete. At send-time the stored body is auto-wrapped in `<system-reminder>[SCOPED INSTRUCTION]…</system-reminder>` using the same preamble as the two built-ins. Persistence piggybacks on `/api/preferences` (new `customUltraplanExperts` key, generic `Object.assign` merge on the server side — no new route). Cross-component sync: both `persist*` methods dispatch the existing `ccv-presets-changed` event, both loaders re-read the list and reset `ultraplanVariant` to `codeExpert` if the currently-selected custom id was removed remotely, so creating/editing/deleting in one entry point is immediately visible in the other. i18n: 9 new `ui.ultraplan.custom*` keys × 18 languages
+- Docs: `concepts/{zh,en}/UltraPlan.md` now carry a "原文" section with the two raw `<system-reminder>` prompt templates (codeExpert + researchExpert) in `<textarea readonly>` blocks, matching the format already used by `Tool-Bash.md`. Makes the actual text that UltraPlan sends to Claude Code inspectable from the ConceptHelp modal, so users can see exactly what the role instruction does before invoking it
+- Fix: `TerminalPanel.handleUltraplanSend` now guards `if (!assembled) return` **before** clearing `ultraplanPrompt/Files` state. With the new custom variant, an expert whose body somehow became empty would previously wipe the user's typed prompt silently; now the prompt is preserved. Aligns with the order `ChatView._handleUltraplanSend` already used
+- a11y: `.editPencil` / `.ultraplanEditPencil` use `inset-inline-end: -4px` instead of `right: -4px` so the pencil affordance lands correctly on the button's trailing edge in RTL locales (ar, etc.) instead of clipping the icon
+
+## 1.6.164 (2026-04-18)
+
+- UI: Redesigned the QR-code toolbar icon in `AppHeader.jsx` as a single `<path fill-rule="evenodd">` (three 10×10 finder patterns with hollow ring + center dot, plus a symmetric 5-dot X-shaped data pattern in the bottom-right). Removes 2 dead `fill="none"` rects from the old inline SVG, all features ≥ 3 SVG units so the 18px render no longer sub-pixel blurs, path length −57% (637 → 272 chars)
+- Sec: `countUntrackedLines` (lib/git-diff.js) now refuses symlinks and paths that resolve outside `cwd`. Without this guard a user symlinking e.g. `/etc/passwd` into a repo would cause `/api/git-status` to read the target and add its line count to `insertions`, leaking the file's existence and rough size. Matches git's own numstat behavior (does not follow symlinks for untracked paths). +3 security test cases
+- Perf: `/api/git-status` caps untracked-file processing at `MAX_UNTRACKED = 1000` to keep the event loop responsive on repos that forget to gitignore large directories (node_modules etc.)
+- Fix: Mount profiling no longer double-counts parse time — `MarkdownBlock.jsx` moves `mountStartRef.current = performance.now()` to after the `useMemo(renderMarkdown)` call, so `md-parse` and `md-mount` measures are now disjoint. Without this fix the P1 decision matrix in `docs/profile-baseline.md` would have been fed a mount number that included parse.
+- Chore: Rename `__DEV_PROFILER__` → `DEV_PROFILER_ENABLED` (markdownProfiler.js + callers) to match the project's existing constant style (`_MD_CACHE_MAX`, not double-underscored macros)
+- Chore: `test/markdown-profiler.test.js` now imports `percentile` and `createStats` directly from `src/utils/markdownProfiler.js` instead of keeping inlined copies; the module's DEV check short-circuits to false under `node --test` so no side effects fire. Eliminates the source-vs-test drift risk flagged in the review
+- Fix: Git Changes aggregate `+N -M` badge now includes untracked files — `server.js` `/api/git-status` handler previously summed only `git diff --numstat` and `git diff --cached --numstat`, neither of which covers untracked (`??`) files, so the panel header could report `+22 -2` while the file list showed additional untracked entries with their own `+182`-style counts coming from the separate `/api/git-diff` pipeline. New helper `countUntrackedLines(cwd, file)` in `lib/git-diff.js` reads each untracked file and counts lines with `git diff --numstat` semantics (skip binary via null-byte probe in first 8KB, skip >5MB, count trailing unterminated line). Server adds these counts into `insertions` after the numstat pass. +14 unit tests including a semantic-equivalence check against `git diff --numstat` output for a typical JS source file
+- Test: Markdown render regression suite — `test/markdown-render.test.js` (basic elements, cache FIFO eviction, escapeHtml fallback), `test/markdown-stream.test.js` (unclosed fenced code blocks, Go struct-tag backtick backtracking guard mirroring Streamdown issue #357, list stability across streaming prefixes, incomplete table rows, nested lists, unclosed inline tokens; 1000-line parse budget tightened to 50ms), and `test/markdown-profiler.test.js` (percentile boundaries, bounded-array eviction, parse/mount isolation, summary immutability, reset). +43 assertions, all green. Closes prior test coverage gap that blocked any future engine swap
+- Perf/Dev: `src/utils/markdownProfiler.js` — dev-only instrumentation gated on `import.meta.env.DEV`, exposes `window.__mdStats.summary()` (P50/P95 of parse and mount) and emits Chrome DevTools Performance `md-parse` / `md-mount` measures for attributing SSE chunk cost between marked+DOMPurify parse vs. React update + innerHTML DOM replace. Auto-prunes `performance.clearMeasures` every 500 samples so long dev sessions do not accumulate DevTools entries. Production build dead-code-eliminates every export (verified — no profiler symbols in dist/assets/*.js)
+- Docs: `docs/profile-baseline.md` — data-collection protocol + decision matrix so the P1 engine-swap branch (markdown-it vs. block-level React.memo vs. no-op) is picked from numbers, not guesses. `docs/streamdown-watchlist.md` — 8 upstream conditions tracking when to reevaluate Vercel Streamdown (Shiki CSP fix, mermaid peer dep, error boundary, Go backtick fix, lodash vuln, benchmark, API stability, non-Tailwind path)
+- Chore: `src/utils/markdown.js` wraps the DOMPurify+marked call in `measureParse()`; `src/components/MarkdownBlock.jsx` uses a ref-based mount measurement (`recordMountSample`) so a discarded render under React 18 concurrent mode simply gets overwritten by the next render's timestamp without leaking state. Both branches compile to the original code path in production
+
+## 1.6.163 (2026-04-18)
+
+- Fix: proxy-prefixed Claude-compatible endpoints now captured in logger mode — `lib/interceptor-core.js::isAnthropicApiPath` removes the leading `^` anchor from the `/v1/messages` regex so paths like `/proxy/group_xxx:8100/v1/messages` match. Trailing `$` kept to still reject invalid suffixes (e.g. `/v1/messages/unknown`); `/api/eval/sdk-` anchor left untouched. Adds 2 test cases for proxy-prefixed URLs
+
+## 1.6.162 (2026-04-17)
+
+- Perf: SSE smooth sticky follow — `ChatView.jsx` replaces per-chunk instant `scrollTop = scrollHeight` with rAF easeOut loop (each frame consumes ~35% of gap, clamped 1~120px); eliminates visible viewport jump on newline, dramatically smoother typewriter effect
+- Perf: `.streamingTail` stabilization — adds `contain: layout style` and `min-height` on common streaming leaf elements; reduces reflow chain when marked re-parses partial markdown
+- Perf: streaming thinking auto-collapse softened — `.collapseStream` scoped CSS overrides antd Collapse transition to 600ms easeOutCubic with body opacity fade-out; non-streaming Collapse keeps default 200ms response unchanged
+- Perf: cursor fade-in — `cursorEnter` 40ms ease-out animation smooths `::after` cursor hard-appear at block-structure transitions
+- Perf: AppHeader `renderTokenStats` lazy via Popover function content — `<Popover content={() => this.renderTokenStats()}>` only invokes on open; previously ran on every AppHeader re-render. Eliminates the 3x O(N) aggregations (token / tool / skill stats) and large JSX subtree construction when popover is closed
+- Perf: AppHeader `renderTokenStats` instance-level memoization — `===` compare on `requests` / `cacheHighlightIdx` / `cacheHighlightFading` returns cached JSX on hit; perf trace confirms ~98% reduction in stack samples when popover stays open across many re-renders
+- Perf: AppHeader countdown loop — `requestAnimationFrame` recursion at 60fps replaced by `setTimeout` aligned to next-second boundary (`1000 - now % 1000`); eliminates ~1900 profiler samples and frees up rAF queue for actual animations
+- Perf: ChatMessage avatar / label memo extraction — new `ModelAvatar` and `AssistantLabel` `React.memo` components with stable props (`modelInfo` / `name` / `timeStr` / `requestIndex` / `onViewRequest`) bail out during SSE chunks when only content changes
+- Refactor: `_teardownTransientLiveState` helper in `AppBase.jsx` consolidates transient live-state cleanup (`_pendingEntries` / `_flushRafId` / `_streamingOffTimer` / `_loadingCountRafId` / `_chunkedEntries` / `_chunkedTotal` / `_isIncremental` / `_sseSlimmer` / `_sseReconstructor`); called from `workspace_stopped` / `handleReturnToWorkspaces` / `_reconnectSSE` to prevent old-workspace entries from flushing into new state. Does NOT close EventSource — connection is session-level singleton reused across workspaces
+
+## 1.6.161 (2026-04-17)
+
+- Feat: SSE live typewriter effect for latest assistant message in PTY mode — `lib/interceptor-core.js` exports `createStreamAssembler` for incremental SSE parsing; `interceptor.js` adds throttled HTTP POST (100ms / 16KB / content_block_stop) to new `/api/stream-chunk` endpoint; `server.js` broadcasts via dedicated `stream-progress` named SSE event; `AppBase.jsx` adds `streamingLatest` state; `ChatView.jsx` renders live overlay that occupies Last Response position (scheme C) with pendingBubble above it; mainAgent only, Teammate / sub-agent / SDK mode unchanged
+- Feat: inline streaming cursor `▌` — `MarkdownBlock.jsx` accepts `trailingCursor` prop; CSS `::after` multi-selector covers last leaf element of paragraph / list / code block / blockquote / table in `.streamingTail` container
+- Feat: streaming thinking auto-collapse — `ChatMessage.jsx` switches `Collapse` to controlled `activeKey` during streaming so the panel collapses with ~250ms antd transition when the first text token arrives, eliminating the height jump when overlay hands off to finalized Last Response
+- Feat: SSE overlay sticks to bottom during streaming — `ChatView.jsx` double-rAF compensates for Virtuoso ResizeObserver async measurement; works on all layouts (desktop / iOS / iPad non-Virtuoso)
+- Feat: loading spinner auto-hides while SSE overlay is active to avoid duplicate "in-progress" indicators
+- Fix: SSE overlay was disappearing mid-stream under long thinking pauses / network jitter / tab switches — removed aggressive 10s timeout and `onerror` immediate clear; streamingLatest lifecycle now ends only via atomic clear on final entry arrival (normal) or `_reconnectSSE` (connection death)
+- Fix: `process.env.CCVIEWER_PORT` no longer polluted on main process — `setLivePort(port)` module-level setter in `interceptor.js` replaces env write, preventing leak to Bash / MCP / Electron tab-worker child processes
+- Fix: `/api/stream-chunk` now enforces loopback-only + `x-cc-viewer-internal: 1` header to prevent same-machine injection into SSE broadcast
+- Fix: stream-chunk POST payload slimmed to 4 fields (`timestamp` / `url` / `content` / `model`) instead of cloning full requestEntry, eliminating O(N²) accumulated copy cost on long responses
+- Fix: skeleton POST first frame now has `onDone` callback for 413 circuit-breaking
+- Fix: roleFilter with assistant deselected now also skips streamingLiveItem to honor filter semantics
+- Fix: scrollToTimestamp targeting Last Response during streaming now attaches `_scrollTargetRef` to streamingLiveItem as fallback
+- Fix: `workspace_stopped` / `project_selected` / `handleReturnToWorkspaces` now clear streamingLatest to prevent zombie overlay on project switch
+
+## 1.6.160 (2026-04-16)
+
+- Fix: permission hook concurrency — `pendingPermHook` single variable → `pendingPermHooks` Map, supports concurrent sub-agent/teammate approval requests without superseding
+- Fix: SDK mode answer routing — use `resolveApproval()` return value to prevent hook-based responses from being silently swallowed
+- Feat: permission queue — multiple concurrent approval requests are queued in UI, shown one at a time with `+N queued` badge
+- Feat: "Clear Context" shortcut button in + menu — sends `/clear` with Modal.confirm safety dialog
+- Feat: Git diff stats — `+N -M` insertion/deletion badges in Git Changes panel header and per-repo rows
+- Fix: perm-bridge.js — defensive 409 handling for legacy server compatibility
+
+## 1.6.159 (2026-04-15)
+
+- Feat: custom user name and avatar via CLI — `--user-name <name>` and `--user-avatar <path|url>` override macOS system identity in chat UI
+- Feat: avatar supports online URLs (http/https) and local image files (png/jpg/jpeg/gif/webp, ≤2MB)
+- Feat: i18n — `cli.userNameRequired`, `cli.userAvatarRequired` with 18 languages; help text updated
+- Fix: UltraPlan send — simplify by reusing input textarea + handleInputSend instead of direct WebSocket with retry
+
+## 1.6.158 (2026-04-15)
+
+- Feat: responsive mode switching — PC width <600px prompts sidebar mode, iPad width >1400px prompts full view mode (matchMedia, zero perf cost)
+- Feat: auto narrow detection — PC browser width <750px at startup auto-switches to iPad mode
+- Feat: env.js localStorage view mode preference with URL param override priority
+- Feat: iPad header blood bar — context window usage progress bar matching PC AppHeader
+- Feat: FileExplorer right-click "Insert path to chat" — writes quoted relative path to terminal or chat input
+- Feat: MobileGitDiff close button (X) in header
+- Fix: UltraPlan send — retry 3x on WebSocket failure, keep modal open on error, unmounted guard
+- Fix: scroll stick-to-bottom — direct scrollTop=scrollHeight for all platforms, scrollToTimestamp guard
+- Fix: useVirtuoso excludes pad mode — prevents PC users in sidebar mode from incorrect Virtuoso path
+- Fix: UltraPlan iPad modal zoom — pad-mode backdrop zoom:1 override
+- Style: loading spinner — pure CSS spinner replaces antd Spin for load-more buttons
+
+## 1.6.157 (2026-04-15)
+
+- Feat: mobile hamburger menu — "Project Folder" entry opens file explorer overlay
+- Feat: mobile file explorer — top-bottom split layout (file tree + PC FileContentView/ImageViewer)
+- Feat: chat file path click — tapping file paths in mobile chat opens file explorer and navigates to file
+- Feat: i18n — `ui.projectFolder`, `ui.mobileFileExplorerHint` with 18 languages
+- Fix: overlay mutual exclusion — all setState calls include `mobileFileExplorerVisible`
+- Fix: Git Diff / Terminal header toggles missing `mobilePromptVisible: false`
+- Style: responsive file list height `min(300px, 45vh)` for small screens
+- Style: iOS zoom/transform and iPad pad-mode overrides for file explorer overlay
+
+## 1.6.156 (2026-04-15)
+
+- Feat: UltraPlan mobile entry — "+" menu item opens modal with role selector, file upload, image paste
+- Feat: markdown action bar — hover dropdown "Save As" with Markdown file / Save as Image / Save to Project
+- Feat: "Save to Project" writes markdown content to project directory via `/api/file-content`
+- Style: UltraPlan modal with mobile zoom compensation, backdrop blocks background interaction
+- Fix: UltraPlan upload/paste failure shows user-visible error toast
+
+## 1.6.155 (2026-04-14)
+
+- Feat: multi-repo git support — scan project root + first-level subdirs for git repos
+- Feat: `/api/git-repos` endpoint discovers all git repos with `resolveRepoCwd` security validation
+- Feat: git changes list shows collapsible repo sections (name + change count badge)
+- Feat: single-repo projects retain original flat layout (backward compatible)
+- Feat: iPad drag-drop routes to terminal or dialog based on active panel
+- Fix: GitDiffView image preview and header display use repo-resolved paths
+- Fix: git detection falls back to `/api/git-status` for older servers
+- Refactor: extract `fetchAllRepos()` to shared `src/utils/gitApi.js`
+
+## 1.6.154 (2026-04-14)
+
+- Feat: iPad drag-and-drop file upload support (mirrors desktop pattern)
+- Feat: iPad terminal panel image paste — images stay on terminal with preview strip
+- Fix: iPad approval panel uses `position: fixed` globally, visible in both dialog and terminal mode
+- Fix: iPad file explorer sidebar defaults to collapsed, respects user preference via localStorage
+- Refactor: extract terminal pending-image callbacks to stable class methods
+
+## 1.6.153 (2026-04-14)
+
+- Feat: markdown save-as-image — capture rendered bubble as PNG via html2canvas
+- Feat: action bar now has 3 buttons: copy, download .md, save as image
+- Fix: action bar excluded from screenshot via `data-html2canvas-ignore`
+- Fix: concurrent click guard prevents multiple canvas allocations
+- Style: use Ant Design `CameraOutlined` icon for consistent styling
+
+## 1.6.152 (2026-04-14)
+
+- Feat: `--log-dir <path>` CLI option — specify custom JSONL log storage directory at startup (alternative to CCV_LOG_DIR env)
+- Feat: `--no-open` CLI option — prevent auto-opening browser on startup, server still runs normally
+- Feat: UltraPlan role selector — replace toggle with "代码专家" / "调研专家" pill buttons
+- Feat: add scoped instruction to UltraPlan templates to limit influence on subsequent interactions
+- Feat: update UltraPlan concept docs across all 18 locales
+- Style: pill buttons with SVG icons, auto-width, focus-visible accessibility
+- Chore: remove unused simple/visual/auto template variants
+
+## 1.6.151 (2026-04-14)
+
+- Feat: UltraPlan "强制执行" toggle default to ON
+
+## 1.6.150 (2026-04-13)
+
+- Feat: iPad/tablet mode (`?ipad=1`) — Mobile layout with PC-level text scaling and interactions
+- Feat: iPad mode enables hover, desktop terminal font/scrollback, file explorer, ResizeObserver
+- Fix: notarize timeout reduced to 45min (within CI 60min step limit)
+
+## 1.6.149 (2026-04-13)
+
+- Fix: ImageLightbox auto-fit — small images now scale up to fill viewport on open
+- Fix: ImageLightbox double-click toggles between fit-to-screen and natural size
+- Fix: notarize timeout reduced to 45min (within CI's 60min step limit)
+
+## 1.6.148 (2026-04-13)
+
+- Feat: Markdown hover action buttons — copy to clipboard & save as .md file (with native OS save dialog)
+- Feat: mobile git entry hidden when project has no git (consistent with PC)
+- Feat: auto-approve toggle now also approves the current pending permission request
+- Fix: PC header QR code icon replaced (phone → QR code SVG), alignment fixed
+- Fix: Ant Design Tooltip text color in light theme
+- Fix: removed unused `.svgIcon` CSS class
+
+## 1.6.147 (2026-04-13)
+
+- Chore: remove signing guide docs
+- Fix: notarization timeout protection (6h) — skip notarization on timeout instead of blocking CI
+- Fix: macOS CI build step timeout set to 60 minutes
+
+## 1.6.145 (2026-04-12)
+
+- Feat: UltraPlan Route C template upgrade — webSearch pre-research, up to 5 agents, post-execution TeamCreate Code Review loop
+- Feat: UltraPlan send button now directly submits (no manual Enter needed)
+- Feat: UltraPlan (?) help icon with concept docs in 18 languages
+- Feat: context window warning in UltraPlan panel for non-1M models
+- Feat: render `<task-notification>` as structured MainAgent card (summary + collapsible result + usage stats)
+- Fix: UltraPlan panel Switch position moved before label text
+
+## 1.6.144 (2026-04-12)
+
+- Fix: iOS Safari mobile font-size clamping — WebKit minimumLogicalFontSize (9px) broke font hierarchy under zoom:0.6; iOS now uses transform:scale(0.6) with non-virtualized rendering to bypass the clamp
+
+## 1.6.143 (2026-04-12)
+
+- Fix: ToolApprovalPanel no longer steals focus when auto-approve countdown is enabled, avoiding interruption of user input in other fields
+
+## 1.6.142 (2026-04-12)
+
+- Feat: macOS code signing / notarization infrastructure (entitlements, notarize script, mac-sign.sh, SIGNING_GUIDE)
+- Fix: Electron process cleanup and system text filtering
+
+## 1.6.141 (2026-04-12)
+
+- Feat: sidebar nav adds user avatar button with hover popover showing all user prompts for quick navigation
+
+## 1.6.136 (2026-04-10)
+
+- Feat: Ultraplan button in terminal toolbar — wraps user prompt with ultraplan instructions (AutoModel/level-1/level-2/◇level-3) and sends directly via bracket paste mode; supports file upload
+
+## 1.6.134 (2026-04-10)
+
+- Feat: auto-approve default countdown varies by model family (Claude/OpenAI 3s, Gemini/DeepSeek/Qwen 5s, GLM/Kimi/MiniMax 10s, unknown 10s)
+
+## 1.6.131 (2026-04-09)
+
+- Feat: terminal panel focus border animation (4px + box-shadow glow, 0.3s ease-out)
+- Feat: QR code theme-aware colors (white/black for light, dark/gray for dark)
+- Feat: Claude Code missing detection with install guide banner (npm + native)
+- Feat: footer version display with [NEW] badge and update modal (npm + Electron steps)
+- Feat: language settings added to preferences drawer
+- Feat: file explorer drag auto-expand folders on 500ms hover (internal move + external import)
+- Fix: external file import to subdirectories (server dir parameter parsing from req.url)
+- Fix: file explorer external drag state cleanup (dragover timer + document-level fallback)
+- Fix: network packets detail panel defaults to Context tab
+- Docs: QRCode help docs add "same router/network name" note (18 languages)
+
+## 1.6.130 (2026-04-09)
+
+- Fix: hide git changes button when project has no git repository
+- Fix: hide country flag module for CN region
+- Fix: i18n trim "查看" prefix from network packets label (zh/zh-TW/ko)
+
+## 1.6.129 (2026-04-09)
+
+- Feat: theme switch (雪山白/曜石黑) in AppHeader toolbar for quick theme toggle
+- Feat: theme sync to Claude Code CLI via /theme command with output verification and retry
+- Feat: terminal auto-focus on theme switch for visual feedback
+- Fix: Electron window close (× button) now shows quit confirmation when projects are open
+- Fix: theme sync PTY output buffer capped at 4KB to prevent memory accumulation
+- Fix: terminal focus only triggers when terminal panel is visible
+
+## 1.6.128 (2026-04-09)
+
+- UI: request list active/hover border styling with blue border and faint background
+- UI: context tab (history sessions) active state with blue border and rounded corners
+
+## 1.6.127 (2026-04-09)
+
+- Feat: auto-approve tool permissions with configurable countdown (off/3s/5s/10s/15s/20s/30s/60s)
+- Feat: import external files by dragging from OS into FileExplorer panel
+- Feat: new POST /api/import-file endpoint for direct project directory import
+- Fix: auto-approve countdown useEffect dependency array completeness
+- Fix: server error messages use generic text instead of leaking internal paths
+
+## 1.6.126 (2026-04-09)
+
+- Feat: file explorer drag-and-drop to move files/folders between directories
+- Feat: Electron quit confirmation dialog when projects are open (i18n 17 languages)
+- Feat: image format support for bmp, icns, avif across all viewers
+- Feat: Mermaid chart theme-aware re-rendering on theme switch
+- Feat: extract file icons and system-open logic into shared modules (fileIcons.jsx, fileOpen.js)
+- Fix: terminal file upload uses two-step Enter (inject path first, confirm send second)
+- Fix: path injection uses single-quote escaping to prevent shell expansion
+- Fix: move-file API EXDEV cross-filesystem fallback (copy + delete)
+- Fix: move-file API returns generic error messages (no path leakage)
+- Fix: Electron quit dialog checks mainWindow.isDestroyed() before showing
+- Fix: SubAgent avatar background color contrast improved (new --bg-sub-avatar variable)
+- Chore: app icon updated
+
+## 1.6.122 (2026-04-08)
+
+- Perf: batch slimmer covers all 9 data loading paths — SSE load, cache restore, partial restore, loadMoreHistory, full\_reload, loadSession, file import
+- Refactor: extract \_batchSlim() helper, remove \_sseSlimEnabled opt-out flag (slimmer always on)
+
+## 1.6.121 (2026-04-08)
+
+- Feat: upload file size limit raised from 50MB to 100MB (server + client)
+
+## 1.6.120 (2026-04-08)
+
+- Perf: SSE entry slimmer enabled on all platforms (previously desktop-only) — reduces within-session memory from O(n²) to O(n)
+- Perf: un-slim entries before hot/cold splitHotCold to preserve IndexedDB data integrity
+- Fix: restoreSlimmedEntry clears \_slimmed/\_fullEntryIndex flags to prevent stale index corruption after array reorganization
+- Fix: iPadOS 13+ detection via maxTouchPoints — iPad now correctly treated as mobile (hot/cold + Virtuoso + memory limits)
+- Fix: Team panel restoreSlimmedEntry protection for findToolResult, strategy-2 user message extraction, and teammate message extraction
+
+## 1.6.119 (2026-04-08)
+
+- Perf: renderMarkdown LRU cache (1024) — eliminates 5000+ redundant DOMPurify.sanitize calls per render cycle
+- Perf: highlight() LRU cache (512) — code syntax highlighting result caching
+- Perf: renderAssistantText() LRU cache (512) — system tag parsing result caching
+- Perf: session-level incremental buildAllItems — skips unchanged sessions, renders only new messages
+- Perf: editSnapshotMap eviction (300 cap with null tombstone) — prevents unbounded snapshot growth
+- Fix: TerminalPanel ghost WebSocket reconnect loop — tracked timer + onclose nulled before close
+- Fix: AppHeader missing clearTimeout for 3 cache scroll timers in componentWillUnmount
+
+## 1.6.118 (2026-04-08)
+
+- Feat: Electron multi-tab architecture — each tab is an isolated fork() child process with its own proxy/server/PTY
+- Feat: BaseWindow + WebContentsView tab bar with project tabs, "+" button, close with confirmation
+- Feat: workspace selector as landing page, tab-worker.js for per-project process isolation
+- Feat: keyboard shortcuts — Cmd+T (new tab), Cmd+W (close tab), Cmd+1-9 (switch), Cmd+Shift+[/] (cycle)
+- Feat: macOS hiddenInset title bar with traffic light padding
+- Feat: launch buttons renamed to "常规启动" / "免审启动" with blue/yellow colors
+- Feat: server.js supports CCV_ELECTRON_MULTITAB mode — management server delegates launch to tab-worker
+- Feat: server.js port range configurable via CCV_START_PORT/CCV_MAX_PORT env vars
+- Fix: Electron process isolation — child env cleaned of ANTHROPIC_BASE_URL/CCV_PROXY_PORT to prevent proxy crosstalk
+- Fix: pty-manager.js resolves real node path in Electron (process.versions.electron detection)
+- Fix: interceptor.js initForWorkspace supports forceNew option for Electron log isolation
+- Refactor: ensureHooks() extracted from cli.js to lib/ensure-hooks.js (shared with Electron)
+- i18n: added ui.workspaces.normalLaunch / ui.workspaces.skipPermLaunch keys (18 languages)
+
+## 1.6.117 (2026-04-07)
+
+- Feat: Electron desktop app support — workspace mode with dual launch buttons (ccv / ccv --d)
+- Feat: workspace launch auto-adds `-c` flag when project has existing logs
+- Feat: server `/api/workspaces/launch` accepts `extraArgs` for Claude CLI flags
+- Feat: loading pet animation (pixel art gif) on sticky-bottom button when streaming
+- Fix: workspace mode uses themeConfig (supports 耀石黑/雪山白) instead of hardcoded dark
+- Fix: workspace terminal panel hidden by default after launch
+- Fix: FileExplorer header and RoleFilterBar height aligned to 38px
+- Fix: RoleFilterBar background → var(--bg-base-pure) for light mode
+- Fix: WorkspaceList DirBrowser hardcoded colors → CSS variables
+- Fix: gantt chart idle opacity 0.15 → 0.25, agent bar color → var(--text-tertiary)
+- Fix: useCallback dependency array: added onAttachToChat in FileExplorer
+- Fix: SendMessage/TaskUpdate tool detail no longer truncated at 200 chars
+- UI: theme names updated to 耀石黑/雪山白 in all 18 languages
+- Chore: removed orphaned i18n key ui.workspaces.open
+
+## 1.6.116 (2026-04-07)
+
+- Feat: file explorer right-click "Attach to chat" — add file as attachment to chat input
+- Fix: image attachment remove button (×) always white on both ChatInputBar and TerminalPanel
+- Fix: terminal pending file chip background hardcoded → var(--bg-surface)
+- Fix: live tag (context progress bar) background → var(--bg-base-pure) for clean light mode
+- Fix: light theme folder icon color → #CB7C5E
+- UI: theme names renamed — 耀石黑 (Obsidian Dark) / 雪山白 (Snow White)
+
+## 1.6.115 (2026-04-07)
+
+- Fix: stats panel cache rebuild card and teammate card spacing when no SubAgent stats
+- Fix: image viewer checkerboard pattern too harsh — use rgba(0,0,0,0.08) for both themes
+- Fix: teammate SVG avatars always white (color: #fff) on colored backgrounds in both themes
+- Feat: mobile git diff image preview — inline preview with click-to-zoom lightbox
+- Fix: log management preview popover hardcoded dark background → var(--bg-elevated)
+- Fix: user bubble dashed animation border uses fixed #fff instead of var(--text-white)
+
+## 1.6.114 (2026-04-07)
+
+- Fix: model avatar background hardcoded #000 → var(--bg-model-avatar), light theme uses #e8e8e8
+- Fix: ToolApprovalPanel shadow too heavy in light mode — extracted to CSS variables
+- Fix: approval panel dashed border and label color now use CSS variables, black in light mode
+- Fix: chat input bar background dark overlay in light mode → white
+- Fix: Write/Bash tool detail text hardcoded #c9d1d9 → var(--text-primary)
+- Fix: sticky bottom button background dark in light mode → white translucent
+- Fix: chat-boxer hover gradient too dark in light mode — lighter values + direction flipped
+- UI: .chat-md inline code color uses blue (#0969DA) in light mode
+
+## 1.6.113 (2026-04-07)
+
+- Feat: light theme (Standard White) — full CSS variable system with `[data-theme]` switching
+- Feat: all 31 component CSS modules converted to CSS variables (backgrounds, borders, text colors)
+- Feat: Ant Design ConfigProvider switches between darkAlgorithm / defaultAlgorithm based on theme
+- Feat: CodeMirror light theme with custom HighlightStyle for file content viewer
+- Feat: xterm terminal light theme with ANSI 16-color palette
+- Feat: react-json-view-lite conditionally uses lightStyles / darkStyles
+- Feat: teammate SVGs adapted for both dark and light backgrounds
+- Feat: global.css root CSS variables define ~50 semantic color tokens for dark/light themes
+- UI: all inline styles in JSX converted to CSS variable references
+
+## 1.6.112 (2026-04-06)
+
+- Fix: ExitPlanMode approval status not updating after permission denial — status stayed "pending" with buttons visible
+- Fix: Ultraplan scenario properly detected — shows "Ultraplan Executing" status with lightning icon instead of stuck "pending"
+- UI: plan header text now dynamic — "计划就绪，等待审批" when pending, "计划审批" when resolved
+- i18n: added ui.planUltraplan / ui.exitPlanModeResolved keys (18 languages)
+
+## 1.6.111 (2026-04-06)
+
+- Feat: theme color selector in preferences — dropdown with "Standard Dark" / "Standard Light", persisted via /api/preferences
+- Feat: mobile settings panel also supports theme color selection
+- Fix: ExitPlanMode approval not updating without page refresh — added _planDirty counter for planApprovalMap cache invalidation (same pattern as _askDirty)
+- i18n: added ui.themeColor / ui.themeColor.dark / ui.themeColor.light keys (18 languages)
+
+## 1.6.110 (2026-04-06)
+
+- Feat: git diff image preview — image files show inline preview with click-to-zoom lightbox
+- UI: dropdown menu and submenu border (1px solid #3a3a3a) with 4px border-radius
+- UI: footer background #000 → #1e1e1e, border-top color adjusted
+- UI: sticky bottom button moved to right side on desktop, stays left on mobile
+
+## 1.6.109 (2026-04-06)
+
+- Fix: AskUserQuestion "Other" submit stuck — localAskAnswers state change now triggers Last Response rebuild
+- Fix: align transient filter condition between AppBase timestamp accumulation and sessionMerge
+- Fix: tighten plan file regex to prevent false positives on unrelated paths containing "plans"
+- Fix: mergedAskAnswerMap cache invalidation — added dirty counter for incremental AskUserQuestion updates
+- Test: added 4 boundary edge cases for incremental merge (empty messages, exact-length, threshold boundary, null timestamp)
+
+## 1.6.108 (2026-04-06)
+
+- Perf: incremental chat rendering — session.messages uses push instead of full array replacement, keeping WeakMap cache stable
+- Perf: ChatView smart reset — only resets incremental state when session objects actually change, not on every shallow copy
+- Perf: targeted lastPendingAskId/PlanId delivery — only the matching ChatMessage receives the ID, eliminating cascade re-renders
+- Perf: cached mergedAskAnswerMap reference — avoids new object creation per render cycle
+- Fix: historical log timestamps — added transient protection in batch loading to prevent timestamps[] reset by short intermediate entries
+- Fix: plan preview missing when plan file updated via Edit tool (was only tracked for Write)
+- Fix: ipinfo geolocation — added 5s timeout, fail/timeout hides flag instead of showing default
+
+## 1.6.107 (2026-04-06)
+
+- Feat: ToolApprovalPanel exit animation (slideDown on dismiss)
+
+## 1.6.106 (2026-04-05)
+
+- Feat: unified mobile layout — Android now matches iOS with chat as main panel, terminal as overlay
+- Fix: iOS diff view font size inconsistency caused by Safari text auto-sizing under zoom
+
+## 1.6.105 (2026-04-05)
+
+- Feat: custom shortcuts entry in Agent Team popover and mobile `+` menu, opens preset management modal
+- Feat: PresetModal standalone component for mobile preset management with full CRUD and drag-drop
+- Feat: preset state sync via `ccv-presets-changed` event between PresetModal, TerminalPanel, and ChatView
+- Fix: mobile sticky-bottom scroll broken when Last Response appears/disappears (Virtuoso footer height change)
+- Fix: mobile ToolApprovalPanel full border-radius with 16px bottom spacing (was half-round flush to bottom)
+- Fix: preset input/textarea responsive width `min(600px, 80vw)` for mobile
+- Fix: mobile ChatInputBar background transparent to match chat area
+- Style: ChatMessage simplified tool popover refactored from global CSS to inline + scoped styles
+- Chore: removed footer contact link and orphaned i18n key
+
+## 1.6.104 (2026-04-05)
+
+- Feat: animated dashed border on ToolApprovalPanel (yellow), AskUserQuestion (blue), Plan approval (blue)
+- Feat: ToolApprovalPanel keyboard support — auto-focus Allow button, Tab/Shift+Tab cycle, Escape to deny
+- Feat: focus restore — approval panel returns focus to previous element on close
+- Style: focus-visible outline for approval buttons, optionDesc color in interactive questions
+
+## 1.6.103 (2026-04-05)
+
+- Feat: terminal pending file tag strip — uploaded files shown as tags/thumbnails above toolbar, multi-device sync
+- Feat: terminal Enter key auto-injects pending file paths into PTY, skips alternate screen (vim/less)
+- Fix: git restore untracked files — use `git clean -fd` instead of `git checkout` for `??` status files
+- Fix: git status path decoding — handle octal escapes and quoted paths for non-ASCII filenames
+- Fix: terminal scroll position reset — save/restore viewport scroll around `fitAddon.fit()` with proportional ratio
+- Fix: perm-bridge bypass mode hook error — use explicit `allow` + `exit(0)` instead of `exit(1)` fallback
+- Style: DetailPanel remove hardcoded background, JsonViewer background unified to `#111`
+
+## 1.6.99 (2026-04-05)
+
+- Fix: git commit/push and npm publish force Web UI approval even in `--d` (bypass permissions) mode
+
+## 1.6.98 (2026-04-05)
+
+- Feat: global settings log directory config — runtime `setLogDir()` with preferences UI, dynamic `getPrefsFile()`/`getPluginsDir()`/`getWorkspacesFile()`
+- Feat: GlobalSettings concept doc (?) — 13-section configuration reference in 18 languages
+- Feat: perm-bridge merge git/npm guard — eliminate Bash matcher hook conflict, `ensureHooks()` auto-cleanup
+- Feat: WebFetch/WebSearch added to APPROVAL_TOOLS — external access tools now require Web UI approval
+- Feat: explicit allow for non-APPROVAL_TOOLS — prevent Claude Code terminal fallback for safe tools
+- Feat: approval panel positioned inside chat area — `position: absolute` relative to `messageListWrap`, dynamic width
+- Fix: 7 `apiUrl()` omissions fixed — FileExplorer, ChatView, ChatMessage, FileContentView, GitDiffView, ConceptHelp
+- Fix: `setLogDir()` path traversal protection — restrict to `homedir()` or `/tmp/`
+- Fix: ES module live binding — `workspace-registry.js` and `plugin-loader.js` use getter functions for `LOG_DIR`-derived paths
+- Test: 7 git guard tests (3 deny + 4 pass-through), plugin-loader test updated for `getPluginsDir()`
+
+## 1.6.97 (2026-04-04)
+
+- Feat: terminal-chat image awareness bridge — `pendingImages` state with preview strip (thumbnails for images, file chips for non-images)
+- Feat: chat textarea image paste support — clipboard image paste uploads and adds to preview
+- Feat: multi-device file upload/remove sync via WS `image-upload-notify` / `image-remove-notify`
+- Feat: deferred path injection — file paths not inserted into textarea, prepended at send time from `pendingImages`
+- Fix: PTY prompt detection — allow trailing hint lines (e.g. "Enter to confirm") in both numbered and cursor option patterns
+- Fix: ConceptHelp event isolation — triple stop propagation (click/mousedown/pointerdown) prevents parent handler triggers
+- Fix: ImageLightbox zoom sensitivity — scroll factor reduced from 15% to 6% per tick
+- Fix: Last Response divider — dashed line via `::before`/`::after` pseudo-elements
+- Fix: mobile image preview broken — use `apiUrl()` for LAN token authentication on thumbnail URLs
+- Fix: terminal upload skip `pendingImages` on receiving device to prevent double-send
+- Security: server-side path validation for `image-upload-notify`/`image-remove-notify` — reject `..` traversal, restrict to upload directories
+- Security: send-time path sanitization — strip `"` from image paths before quoting
+
+## 1.6.96 (2026-04-04)
+
+- Feat: multi-device approval sync — broadcast `*-resolved` messages when permission/plan/ask is answered on one device
+- Feat: PTY ask-hook cross-device sync — add `ask-hook-resolved` broadcast and handler
+- Fix: conditional broadcast — only send `perm-hook-resolved` when an answer was actually processed
+- Fix: SDK ask submit null guard — prevent sending `id: null` when another device already answered
+- Fix: SDK perm-hook path `msg.id` guard for robustness
+
+## 1.6.95 (2026-04-04)
+
+- Fix: Last Response rendering vs stick-to-bottom race — lock scroll handler during startRender DOM transition
+- Fix: scrollToBottom uses stickyBottom snapshot to prevent state race during content batch updates
+- Fix: mobile Virtuoso `atBottomStateChange` guarded by scroll lock to prevent stickyBottom flip during Footer rendering
+- Fix: mobile Footer (Last Response) scroll — rAF to scroll past Virtuoso LAST index to actual container bottom
+- Refactor: perm-bridge whitelist inversion — only Bash/Edit/Write/NotebookEdit require approval, all other tools auto-pass
+- Refactor: SDK mode canUseTool applies same APPROVAL_TOOLS filter, read-only tools no longer show approval UI
+- Security: move toolName/toolInput guard before APPROVAL_TOOLS check as defensive measure
+- Test: add 32 perm-bridge unit tests covering APPROVAL_TOOLS filtering, bypass mode, and server approval flow
+
+## 1.6.94 (2026-04-04)
+
+- Feat: Agent SDK integration — new `lib/sdk-adapter.js` and `lib/sdk-manager.js` for running Claude via Agent SDK without PTY
+- Feat: SDK mode plan approval — ExitPlanMode review via WebSocket canUseTool callback
+- Feat: SDK mode AskUserQuestion — structured answer submission through WebSocket
+- Feat: "Allow for session" button in tool approval panel for session-level permission grant
+- Feat: mobile global permission/plan approval overlay (fixed positioning outside transform context)
+- Feat: mobile AskUserQuestion responsive CSS (larger touch targets)
+- Refactor: rename `ensureAskHook` → `ensureHooks`, expand perm-bridge matcher to all tools with legacy cleanup
+- Fix: AskUserQuestion dedup — prevent duplicate rendering between message history and Last Response
+- Fix: hide terminal panel and toggle in SDK mode
+- Dep: add `@anthropic-ai/claude-agent-sdk` as optionalDependencies
+
+## 1.6.93 (2026-04-03)
+
+- Feat: tool permission approval panel — floating overlay above chat input for Bash/Write/Edit/NotebookEdit approval via PreToolUse hook bridge
+- Feat: open HTML/HTM files in browser via file-raw API with CSP sandbox protection
+- Feat: open Office files (doc/xlsx/ppt/pdf etc.) with system default application
+- Feat: /api/open-file endpoint for launching local files with OS default app
+- Feat: /api/perm-hook endpoint with long-poll + WebSocket for permission bridge
+- Security: add Content-Security-Policy: sandbox header when serving HTML files to prevent same-origin XSS
+- Security: require strict ID matching for perm-hook-answer WebSocket messages
+- Fix: clear pending permission state on WebSocket disconnect to prevent stale approval panel
+
+## 1.6.92 (2026-04-03)
+
+- Fix: hide empty "Last Response" section when filtered content has no visible blocks
+- Fix: debounce streaming spinner hide by 2s to prevent flickering during tool call gaps
+- Fix: cancel spinner fade-out when streaming resumes mid-fade
+- Fix: clear streaming debounce timer on SSE reconnect and local log switch to prevent race condition
+
+## 1.6.91 (2026-04-03)
+
+- Feat: add simplified tool display mode — tool calls collapse to compact tags by default, Edit/Write/Agent/TaskCreate/EnterPlanMode/ExitPlanMode/AskUserQuestion keep full display
+- Feat: hover popover on simplified tags (desktop), click popover with zoom fix (mobile)
+- Feat: "完整展示所有内容" toggle in settings (default OFF = simplified mode)
+- Feat: gray "调用工具:" label before simplified tool tags, resets after full-display tools
+- Fix: Write tool no longer truncates at 20 lines
+- Fix: Agent/TaskCreate tool content no longer truncates at 200 chars
+
 ## 1.6.90 (2026-04-03)
 
 - Fix: shell hook re-injection — use `ccv -logger` instead of `ccv` to prevent launching programming mode when claude is invoked

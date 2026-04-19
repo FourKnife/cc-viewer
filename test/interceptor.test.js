@@ -350,6 +350,17 @@ describe('interceptor', () => {
       assert.equal(isAnthropicApiPath('not-a-url/v1/messages'), true);
       assert.equal(isAnthropicApiPath('not-a-url/other'), false);
     });
+
+    it('matches proxy-prefixed /v1/messages', () => {
+      assert.equal(isAnthropicApiPath('https://work.group.com/proxy/group_235:8100/v1/messages'), true);
+      assert.equal(isAnthropicApiPath('https://gateway.example.com/proxy/anthropic/v1/messages'), true);
+      assert.equal(isAnthropicApiPath('https://gateway.example.com/proxy/anthropic/v1/messages/count_tokens'), true);
+      assert.equal(isAnthropicApiPath('https://gateway.example.com/proxy/anthropic/v1/messages/batches'), true);
+    });
+
+    it('still rejects proxy-prefixed unknown suffix', () => {
+      assert.equal(isAnthropicApiPath('https://gateway.example.com/proxy/anthropic/v1/messages/unknown'), false);
+    });
   });
 
   // --------------------------------------------------------------------------
