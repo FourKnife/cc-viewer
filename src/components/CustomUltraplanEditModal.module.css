@@ -1,3 +1,9 @@
+.titleRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .field {
   margin-bottom: 12px;
 }

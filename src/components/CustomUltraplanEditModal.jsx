@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Button, Popconfirm } from 'antd';
 import { t } from '../i18n';
+import ConceptHelp from './ConceptHelp';
 import styles from './CustomUltraplanEditModal.module.css';
 
 export default function CustomUltraplanEditModal({ open, initial, onSave, onDelete, onClose }) {
@@ -51,7 +52,12 @@ export default function CustomUltraplanEditModal({ open, initial, onSave, onDele
 
   return (
     <Modal
-      title={isEdit ? t('ui.ultraplan.customEditTitle') : t('ui.ultraplan.customCreateTitle')}
+      title={
+        <span className={styles.titleRow}>
+          {isEdit ? t('ui.ultraplan.customEditTitle') : t('ui.ultraplan.customCreateTitle')}
+          <ConceptHelp doc="CustomUltraplanExpert" zIndex={1100} />
+        </span>
+      }
       open={open}
       onCancel={onClose}
       footer={footer}
