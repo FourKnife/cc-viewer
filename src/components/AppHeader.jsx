@@ -78,6 +78,7 @@ class AppHeader extends React.Component {
       nextProps.cacheExpireAt !== this.props.cacheExpireAt ||
       nextProps.cacheType !== this.props.cacheType ||
       nextProps.isLocalLog !== this.props.isLocalLog ||
+      nextProps.localLogFile !== this.props.localLogFile ||
       nextProps.projectName !== this.props.projectName ||
       nextProps.collapseToolResults !== this.props.collapseToolResults ||
       nextProps.expandThinking !== this.props.expandThinking ||
@@ -85,10 +86,15 @@ class AppHeader extends React.Component {
       nextProps.expandDiff !== this.props.expandDiff ||
       nextProps.filterIrrelevant !== this.props.filterIrrelevant ||
       nextProps.logDir !== this.props.logDir ||
+      nextProps.updateInfo !== this.props.updateInfo ||
       nextProps.cliMode !== this.props.cliMode ||
+      nextProps.sdkMode !== this.props.sdkMode ||
+      nextProps.terminalVisible !== this.props.terminalVisible ||
       nextProps.contextWindow !== this.props.contextWindow ||
       nextProps.serverCachedContent !== this.props.serverCachedContent ||
       nextProps.resumeAutoChoice !== this.props.resumeAutoChoice ||
+      nextProps.themeColor !== this.props.themeColor ||
+      nextProps.autoApproveSeconds !== this.props.autoApproveSeconds ||
       nextProps.proxyProfiles !== this.props.proxyProfiles ||
       nextProps.activeProxyId !== this.props.activeProxyId ||
       nextProps.defaultConfig !== this.props.defaultConfig ||

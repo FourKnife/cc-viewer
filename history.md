@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.182 (2026-04-20)
+
+- Fix (Header theme 切换卡顿 — `AppHeader.shouldComponentUpdate` 漏检 `themeColor`): 用户反馈从 Header 设置里切换深色/浅色主题后，Header 上一些绑定 `themeColor` 的 UI（主题下拉 select 的 value、二维码弹窗 QRCodeCanvas 的 bg/fg 色、相关 checkbox 的 `checked`）要等别的 prop 变化（比如 `contextWindow` 秒级刷新、用户点开 popover 触发 setState）才补上一次渲染——体感"卡顿"。根因在 `src/components/AppHeader.jsx:73` 的自定义 `shouldComponentUpdate`：它用显式白名单逐个 `!==` 对比 props，但白名单里**没有 `themeColor`**——虽然 `AppBase.handleThemeColorChange` 同步把新值写到 `state.themeColor` 并通过 `document.documentElement.setAttribute('data-theme', ...)` 让全局 CSS 变量立即切换（页面大面积色彩确实变了），AppHeader 却因 SCU 返回 false 而不重渲，内部 `themeColor === 'light'` 的条件分支全部停在旧值。顺带审计发现同一 SCU 白名单还漏了 5 个真正影响 render 的 prop（同类隐藏 bug）：`updateInfo`（新版本提示 Badge 不刷新）、`terminalVisible`（终端开关按钮状态不同步）、`sdkMode`（SDK 模式 UI 不切换）、`localLogFile`（导入本地日志后文件名不显示）、`autoApproveSeconds`（自动批准倒计时显示不更新）。一次性补齐这 6 个 prop 的 `!==` 对比（6 行纯对比表达式，零风险）。callback 类 prop（`on*Change` 等）保持不检查——这些本来就稳定引用或不需要触发 re-render
+
 ## 1.6.181 (2026-04-20)
 
 - Fix (MarkdownBlock 复制/下载按钮遮挡阅读): assistant 气泡内 markdown 内容的 `.actionBar`（复制 + 另存为两个按钮）原先 `position: absolute; top: 2px; right: 2px` 浮在气泡右上角里面，hover 时遮挡首行文字阅读。用户反馈希望挪到气泡外侧右边的空白。在 `src/components/MarkdownBlock.module.css` 把 `.actionBar` 定位改为 `top: 0; left: 100%` 让它溢出到 `mdBlockWrapper` 右侧外面，并加 `padding-left: 12px` 作为不可见 hover 桥——这段透明 padding 仍响应 `:hover`，鼠标从气泡右边缘横向滑到按钮不会经过任何不可 hover 的空隙（配合既有 150ms mouseLeave 延迟兜底），解决用户担心的"移动出去一点点就消失"。actionBar 仍是 `mdBlockWrapper` 的 DOM 子元素，hover 事件继续冒泡，既有的 hover state 逻辑（`MarkdownBlock.jsx:133-140`）不变。加 `white-space: nowrap` 防止按钮在窄空间换行、`pointer-events: auto` 显式保持可点
