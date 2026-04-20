@@ -153,11 +153,6 @@ function MarkdownBlock({ text, className, style, trailingCursor }) {
       />
       {(!isMobile || isPad) && hovered && (
         <div className={styles.actionBar} data-html2canvas-ignore>
-          <Tooltip title={t('ui.copy')} mouseEnterDelay={0.3}>
-            <span className={styles.actionBtn} onClick={handleCopy}>
-              <CopyOutlined />
-            </span>
-          </Tooltip>
           <div className={styles.saveAsWrap}
             onMouseEnter={() => setSaveMenuOpen(true)}
             onMouseLeave={() => setSaveMenuOpen(false)}
@@ -172,6 +167,10 @@ function MarkdownBlock({ text, className, style, trailingCursor }) {
                 <button className={styles.saveMenuItem} onClick={handleSaveAs}>
                   <DownloadOutlined />
                   <span>{t('ui.saveAsMd')}</span>
+                </button>
+                <button className={styles.saveMenuItem} onClick={handleCopy}>
+                  <CopyOutlined />
+                  <span>{t('ui.copyTextContent')}</span>
                 </button>
                 <button className={styles.saveMenuItem} onClick={handleSaveAsImage}>
                   <CameraOutlined />

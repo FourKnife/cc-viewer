@@ -1605,6 +1605,14 @@ const i18nData = {
     "ar": "ملف Markdown", "no": "Markdown-fil", "pt-BR": "Arquivo Markdown",
     "th": "ไฟล์ Markdown", "tr": "Markdown Dosyası", "uk": "Файл Markdown"
   },
+  "ui.copyTextContent": {
+    "zh": "复制文本内容", "en": "Copy Text Content", "zh-TW": "複製文字內容",
+    "ko": "텍스트 내용 복사", "ja": "テキスト内容をコピー", "de": "Textinhalt kopieren",
+    "es": "Copiar contenido de texto", "fr": "Copier le contenu texte", "it": "Copia contenuto testo",
+    "da": "Kopiér tekstindhold", "pl": "Kopiuj treść tekstową", "ru": "Копировать текст",
+    "ar": "نسخ محتوى النص", "no": "Kopier tekstinnhold", "pt-BR": "Copiar conteúdo de texto",
+    "th": "คัดลอกเนื้อหาข้อความ", "tr": "Metin içeriğini kopyala", "uk": "Копіювати текстовий вміст"
+  },
   "ui.saveToProject": {
     "zh": "保存到项目", "en": "Save to Project", "zh-TW": "儲存到專案",
     "ko": "프로젝트에 저장", "ja": "プロジェクトに保存", "de": "Im Projekt speichern",
