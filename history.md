@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.194 (2026-04-21)
+
+- Fix (SDK subagent 被误判为 Teammate): `isNativeTeammate` 原先只凭 `/You are a Claude agent/` 正则判定，Claude Agent SDK 启动的普通 subagent（system prompt 开头同样是 "You are a Claude agent"）全部被误归为 teammate。追加 `SendMessage` tool 必要条件——teammate 间通信必需此工具，subagent 不会被授予。11 个单测守卫（`test/native-teammate-detector.test.js`）。
+- Polish (浅色主题 teammate/subAgent 头像背景过深): 改为 CSS 变量方案——`global.css` 定义两套 `--avatar-bg-0..19`（曜石黑 = 原饱和色，雪山白 = HSL s×0.35 / l+0.28 预处理的淡彩），`teammateAvatars.js` 的 `getTeammateAvatar` 直接返回 `var(--avatar-bg-N)` 字符串，浏览器按当前 `[data-theme]` 自动选色。JS 零主题判定，曜石黑模式完全不变。`--bg-sub-avatar` 浅色分支 `#C8C8C8` → `#E5E5E5`（subAgent 默认灰更淡，深色分支 `#3a3a3a` 保持不动）。
+
 ## 1.6.193 (2026-04-21)
 
 - Fix (xterm.js `requestMode` TDZ 在 1.6.192 未真正修复): 上版的 `vite.config.js` 加了顶层 `esbuild.minifyIdentifiers: false`，**但 Vite 顶层 `esbuild` 选项只作用于 transform 阶段，不传给 build minify 阶段**——bundle 里变量仍被压缩（用户截图栈帧出现 `r5 is not defined` / `vn.requestMode` / `bn$1.parse` 等单字母变量就是证据）。这次切到 `build.minify: 'terser'` + `terserOptions: { mangle: false, compress: true }`，terser 不 mangle identifier 能真正保留 xterm `InputHandler._activeBuffer` 等原始符号，验证 bundle `requestMode`/`this._activeBuffer` 原样存在。代价：build 时间 6s → 10s，gzip 相对 esbuild 默认 +15-25%（相对 1.6.192 的无效 workaround 会再多一些）。新增 `terser@^5.46.1` devDependency。后续 xterm 6.1 稳定版修复后可切回 esbuild minify。

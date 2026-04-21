@@ -117,19 +117,15 @@ function resolveRole(name) {
   return 'default';
 }
 
-// 20 色调色板：用于区分不同个体（同 SVG 角色 + 不同背景色 = 可区分）
-// 深色系，确保白色 SVG 图标可读
-const PALETTE = [
-  '#5b6abf', '#2a9d8f', '#6366f1', '#d97706', '#3b82f6',
-  '#8b5cf6', '#0e7490', '#ea580c', '#059669', '#e11d48',
-  '#0284c7', '#dc2626', '#65a30d', '#ca8a04', '#9333ea',
-  '#db2777', '#6b7280', '#1d4ed8', '#b45309', '#047857',
-];
+// 20 个 CSS 变量引用：背景色由 global.css 按当前主题（曜石黑 / 雪山白）决定。
+// 运行时不做主题判定，避免初次渲染时 data-theme 未就绪导致的误判。
+// 索引对应 `--avatar-bg-0..19`，顺序由 nameToColorIndex 决定。
+const AVATAR_BG_VAR_COUNT = 20;
 
 function nameToColorIndex(name) {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return ((hash % PALETTE.length) + PALETTE.length) % PALETTE.length;
+  return ((hash % AVATAR_BG_VAR_COUNT) + AVATAR_BG_VAR_COUNT) % AVATAR_BG_VAR_COUNT;
 }
 
 export function getTeammateAvatar(name) {
@@ -140,7 +136,7 @@ export function getTeammateAvatar(name) {
   clean = clean.replace(/\([^)]*\)\s*$/, '').trim();
   const role = resolveRole(clean);
   const entry = ROLE_MAP[role];
-  // SVG 表达角色，背景色表达个体身份（同角色不同名字 → 不同颜色）
-  const color = PALETTE[nameToColorIndex(clean)];
+  // SVG 表达角色，CSS 变量引用表达个体身份——浏览器按当前 [data-theme] 选值
+  const color = `var(--avatar-bg-${nameToColorIndex(clean)})`;
   return { svg: entry.svg, color, role };
 }
