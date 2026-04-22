@@ -7329,6 +7329,98 @@ const i18nData = {
     "th": "รายละเอียดผลลัพธ์",
     "tr": "Sonuç detayları",
     "uk": "Деталі результату"
+  },
+  "visual.tab": {
+    "zh": "可视化编辑", "en": "Visual Editor",
+    "zh-TW": "視覺化編輯", "ko": "비주얼 에디터", "ja": "ビジュアルエディタ"
+  },
+  "visual.projectLauncher": {
+    "zh": "项目启动器", "en": "Project Launcher",
+    "zh-TW": "專案啟動器", "ko": "프로젝트 런처", "ja": "プロジェクトランチャー"
+  },
+  "visual.projectPath": {
+    "zh": "项目路径", "en": "Project Path",
+    "zh-TW": "專案路徑", "ko": "프로젝트 경로", "ja": "プロジェクトパス"
+  },
+  "visual.startCommand": {
+    "zh": "启动命令", "en": "Start Command",
+    "zh-TW": "啟動命令", "ko": "시작 명령어", "ja": "起動コマンド"
+  },
+  "visual.start": {
+    "zh": "启动", "en": "Start",
+    "zh-TW": "啟動", "ko": "시작", "ja": "起動"
+  },
+  "visual.starting": {
+    "zh": "启动中...", "en": "Starting...",
+    "zh-TW": "啟動中...", "ko": "시작 중...", "ja": "起動中..."
+  },
+  "visual.stop": {
+    "zh": "停止", "en": "Stop",
+    "zh-TW": "停止", "ko": "중지", "ja": "停止"
+  },
+  "visual.running": {
+    "zh": "运行中 (端口 {port})", "en": "Running (port {port})",
+    "zh-TW": "執行中 (埠 {port})", "ko": "실행 중 (포트 {port})", "ja": "実行中 (ポート {port})"
+  },
+  "visual.noProject": {
+    "zh": "请先启动一个项目", "en": "Please start a project first",
+    "zh-TW": "請先啟動一個專案", "ko": "먼저 프로젝트를 시작하세요", "ja": "先にプロジェクトを起動してください"
+  },
+  "visual.log": {
+    "zh": "启动日志", "en": "Startup Log",
+    "zh-TW": "啟動日誌", "ko": "시작 로그", "ja": "起動ログ"
+  },
+  "visual.selectedElement": {
+    "zh": "选中元素", "en": "Selected Element",
+    "zh-TW": "選中元素", "ko": "선택된 요소", "ja": "選択された要素"
+  },
+  "visual.inspectorOn": {
+    "zh": "元素选择器 (已开启)", "en": "Element Inspector (On)",
+    "zh-TW": "元素選擇器 (已開啟)", "ko": "요소 선택기 (켜짐)", "ja": "要素セレクタ (オン)"
+  },
+  "visual.inspectorOff": {
+    "zh": "元素选择器 (已关闭)", "en": "Element Inspector (Off)",
+    "zh-TW": "元素選擇器 (已關閉)", "ko": "요소 선택기 (꺼짐)", "ja": "要素セレクタ (オフ)"
+  },
+  "visual.sourceLocation": {
+    "zh": "源码位置", "en": "Source Location",
+    "zh-TW": "原始碼位置", "ko": "소스 위치", "ja": "ソース位置"
+  },
+  "visual.copied": {
+    "zh": "已复制", "en": "Copied",
+    "zh-TW": "已複製", "ko": "복사됨", "ja": "コピーしました"
+  },
+  "visual.noSource": {
+    "zh": "无法定位源码", "en": "Cannot locate source",
+    "zh-TW": "無法定位原始碼", "ko": "소스를 찾을 수 없음", "ja": "ソースを特定できません"
+  },
+  "visual.aiModify": {
+    "zh": "AI 修改", "en": "AI Modify",
+    "zh-TW": "AI 修改", "ko": "AI 수정", "ja": "AI 修正"
+  },
+  "visual.promptPlaceholder": {
+    "zh": "描述你想要的修改...", "en": "Describe the change you want...",
+    "zh-TW": "描述你想要的修改...", "ko": "원하는 변경을 설명하세요...", "ja": "変更内容を入力..."
+  },
+  "visual.selectToModify": {
+    "zh": "选中页面元素后输入修改意图", "en": "Select an element to modify",
+    "zh-TW": "選中頁面元素後輸入修改意圖", "ko": "수정할 요소를 선택하세요", "ja": "要素を選択して修正"
+  },
+  "visual.sending": {
+    "zh": "发送中...", "en": "Sending...",
+    "zh-TW": "傳送中...", "ko": "전송 중...", "ja": "送信中..."
+  },
+  "visual.loadTimeout": {
+    "zh": "页面加载超时，请检查项目是否已启动", "en": "Page load timeout, check if project is running",
+    "zh-TW": "頁面載入逾時，請檢查專案是否已啟動", "ko": "페이지 로딩 시간 초과", "ja": "ページ読み込みタイムアウト"
+  },
+  "visual.noClaude": {
+    "zh": "请先在终端中启动 Claude Code", "en": "Please start Claude Code in terminal first",
+    "zh-TW": "請先在終端中啟動 Claude Code", "ko": "터미널에서 Claude Code를 먼저 시작하세요", "ja": "ターミナルでClaude Codeを起動してください"
+  },
+  "visual.askAI": {
+    "zh": "AI 修改此元素", "en": "AI Modify Element",
+    "zh-TW": "AI 修改此元素", "ko": "AI로 요소 수정", "ja": "AIで要素を修正"
   }
 };
 

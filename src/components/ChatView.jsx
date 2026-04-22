@@ -118,9 +118,9 @@ class ChatView extends React.Component {
       ptyPrompt: null,
       ptyPromptHistory: [],
       inputSuggestion: null,
-      fileExplorerOpen: !isMobile
+      fileExplorerOpen: props.compact ? false : (!isMobile
         ? localStorage.getItem('ccv_fileExplorerOpen') !== 'false'
-        : (isPad ? localStorage.getItem('ccv_fileExplorerOpen') === 'true' : false),
+        : (isPad ? localStorage.getItem('ccv_fileExplorerOpen') === 'true' : false)),
       currentFile: null,
       currentGitDiff: null,
       scrollToLine: null,
@@ -304,6 +304,20 @@ class ChatView extends React.Component {
     this._loadPresets();
     this._onPresetsChanged = () => this._loadPresets();
     window.addEventListener('ccv-presets-changed', this._onPresetsChanged);
+    // Visual Editor: 接收元素上下文注入到输入框
+    this._onInjectInput = (e) => {
+      const textarea = this._inputRef.current;
+      if (textarea && e.detail?.text) {
+        textarea.value = e.detail.text;
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+        textarea.focus();
+        // 将光标移到末尾
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        this.setState({ inputEmpty: false });
+      }
+    };
+    window.addEventListener('ccv-inject-input', this._onInjectInput);
   }
 
   shouldComponentUpdate(nextProps, nextState) {
@@ -477,6 +491,7 @@ class ChatView extends React.Component {
   componentWillUnmount() {
     this._unmounted = true;
     window.removeEventListener('ccv-presets-changed', this._onPresetsChanged);
+    window.removeEventListener('ccv-inject-input', this._onInjectInput);
     // 清理全局权限通知
     if (this.props.onPendingPermission) this.props.onPendingPermission(null);
     if (this.props.onPendingPlanApproval) this.props.onPendingPlanApproval(null);
@@ -3173,7 +3188,7 @@ class ChatView extends React.Component {
 
     return (<>
       <div ref={this.splitContainerRef} className={styles.splitContainer}>
-        <div className={styles.navSidebar}>
+        {!this.props.compact && <div className={styles.navSidebar}>
           <button
             className={this.state.roleFilterOpen ? styles.navBtnActive : styles.navBtn}
             onClick={() => this.setState(prev => prev.roleFilterOpen ? { roleFilterOpen: false, roleFilterSelected: new Set() } : { roleFilterOpen: true })}
@@ -3220,7 +3235,7 @@ class ChatView extends React.Component {
               />
             </button>
           </Popover>
-        </div>
+        </div>}
         <div className={styles.innerSplitArea} ref={this.innerSplitRef}>
           <SnapLineOverlay isDragging={this.state.isDragging} activeSnapLine={this.state.activeSnapLine} snapLines={this.state.snapLines} currentLeft={snapCurrentLeft} />
           {this.state.fileExplorerOpen && (

@@ -142,6 +142,13 @@ class TerminalPanel extends React.Component {
     window.addEventListener('ccv-presets-changed', this._onPresetsChanged);
     this._onFocusTerminal = () => { if (this.terminal && this.containerRef?.current?.offsetWidth > 0) this.terminal.focus(); };
     window.addEventListener('ccv-focus-terminal', this._onFocusTerminal);
+    // Visual Editor: 接收 AI 修改 prompt 并发送到 PTY
+    this._onTerminalSend = (e) => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && e.detail?.text) {
+        this.ws.send(JSON.stringify({ type: 'input', data: e.detail.text }));
+      }
+    };
+    window.addEventListener('ccv-terminal-send', this._onTerminalSend);
     this._themeObserver = new MutationObserver(() => {
       if (this.terminal) {
         const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
@@ -195,6 +202,7 @@ class TerminalPanel extends React.Component {
     if (this._themeObserver) { this._themeObserver.disconnect(); this._themeObserver = null; }
     window.removeEventListener('ccv-presets-changed', this._onPresetsChanged);
     window.removeEventListener('ccv-focus-terminal', this._onFocusTerminal);
+    window.removeEventListener('ccv-terminal-send', this._onTerminalSend);
     if (this._stopMobileMomentum) this._stopMobileMomentum();
     if (this._writeTimer) cancelAnimationFrame(this._writeTimer);
     if (this._wsReconnectTimer) clearTimeout(this._wsReconnectTimer);
