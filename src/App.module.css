@@ -858,6 +858,26 @@
   flex-direction: column;
 }
 
+/* Visual Editor 三栏布局 */
+.contentVisual {
+  display: flex !important;
+  flex-direction: row !important;
+}
+.visualSidebar {
+  width: 280px;
+  min-width: 280px;
+  background: var(--bg-primary);
+  border-right: 1px solid var(--border-color);
+  padding: 16px;
+  overflow-y: auto;
+}
+.visualPreview {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Resume modal footer */
 .resumeFooterRight {
   text-align: right;
