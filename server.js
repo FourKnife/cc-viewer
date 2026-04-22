@@ -48,6 +48,7 @@ import { isMainAgentEntry, extractCachedContent } from './lib/kv-cache-analyzer.
 import { listLocalLogs, deleteLogFiles, mergeLogFiles } from './lib/log-management.js';
 import { countLogEntries, streamRawEntriesAsync, readPagedEntries } from './lib/log-stream.js';
 import { buildTeamStatusResponse } from './lib/team-runtime.js';
+import { projectManager } from './lib/project-manager.js';
 
 
 // 动态获取 getPrefsFile()（LOG_DIR 可能在运行时被 setLogDir 修改）
@@ -173,6 +174,18 @@ const ACCESS_TOKEN = randomBytes(16).toString('hex');
 let clients = [];
 let server;
 let actualPort = 0;
+
+// 项目管理事件广播到 SSE 客户端
+projectManager.on('status', (status) => {
+  if (clients.length > 0 && sendEventToClients) {
+    sendEventToClients(clients, 'project_status', status);
+  }
+});
+projectManager.on('output', (text) => {
+  if (clients.length > 0 && sendEventToClients) {
+    sendEventToClients(clients, 'project_output', { text });
+  }
+});
 let serverProtocol = 'http';
 // Stats Worker 实例
 let statsWorker = null;
@@ -2310,6 +2323,182 @@ async function handleRequest(req, res) {
   if (url === '/api/cli-mode' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ cliMode: isCliMode, sdkMode: isSdkMode, workspaceMode: isWorkspaceMode && !_workspaceLaunched }));
+    return;
+  }
+
+  // === 项目管理 API (Visual Editor) ===
+
+  // POST /api/project/start
+  if (url === '/api/project/start' && method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > MAX_POST_BODY) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { projectPath, command, readyPattern } = JSON.parse(body);
+        if (!projectPath) throw new Error('projectPath required');
+        const result = await projectManager.start(projectPath, command, { readyPattern });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // POST /api/project/stop
+  if (url === '/api/project/stop' && method === 'POST') {
+    projectManager.stop();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true }));
+    return;
+  }
+
+  // GET /api/project/status
+  if (url === '/api/project/status' && method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(projectManager.getStatus()));
+    return;
+  }
+
+  // GET /api/source-locate - 根据文件名在项目目录中定位源码（_debugSource 降级方案）
+  if (url === '/api/source-locate' && method === 'GET') {
+    const fileName = parsedUrl.searchParams.get('file');
+    const projectDir = projectManager.getStatus()?.projectPath || process.cwd();
+
+    if (fileName) {
+      // 尝试精确匹配
+      const candidates = [join(projectDir, fileName), fileName];
+      for (const candidate of candidates) {
+        if (existsSync(candidate)) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ found: true, filePath: candidate }));
+          return;
+        }
+      }
+      // 模糊匹配：按文件名搜索
+      const baseName = basename(fileName);
+      try {
+        const { execSync } = require('child_process');
+        const result = execSync(
+          `find ${JSON.stringify(projectDir)} -name ${JSON.stringify(baseName)} -not -path "*/node_modules/*" -not -path "*/.umi/*" | head -5`,
+          { encoding: 'utf-8', timeout: 3000 }
+        ).trim();
+        if (result) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ found: true, filePath: result.split('\n')[0] }));
+          return;
+        }
+      } catch {}
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ found: false }));
+    return;
+  }
+
+  // POST /api/terminal-input - 向 PTY 写入文本（Visual Editor AI 修改用）
+  if (url === '/api/terminal-input' && method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { text } = JSON.parse(body);
+        if (_writeToPty && text) {
+          _writeToPty(text);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } else {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'PTY not connected' }));
+        }
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+      }
+    });
+    return;
+  }
+
+  // GET /inspector-inject.js - inspector 注入脚本静态文件
+  if (url === '/inspector-inject.js' && method === 'GET') {
+    const filePath = join(__dirname, 'public', 'inspector-inject.js');
+    if (existsSync(filePath)) {
+      res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' });
+      res.end(readFileSync(filePath));
+    } else {
+      res.writeHead(404);
+      res.end('Not found');
+    }
+    return;
+  }
+
+  // GET /api/proxy/:port/* - 代理到项目本地端口（解决 iframe 跨域 + 注入 inspector）
+  const proxyMatch = url.match(/^\/api\/proxy\/(\d+)(\/.*)?$/);
+  if (proxyMatch) {
+    const targetPort = proxyMatch[1];
+    const targetPath = proxyMatch[2] || '/';
+    const targetUrl = `http://localhost:${targetPort}${targetPath}`;
+
+    try {
+      const proxyHeaders = { ...req.headers };
+      delete proxyHeaders.host;
+      proxyHeaders.host = `127.0.0.1:${targetPort}`;
+      // 强制不压缩，防止 Node.js fetch 自动加 accept-encoding 导致编码问题
+      proxyHeaders['accept-encoding'] = 'identity';
+      const proxyRes = await fetch(targetUrl, {
+        method,
+        headers: proxyHeaders,
+      });
+      const respHeaders = {};
+      proxyRes.headers.forEach((v, k) => { respHeaders[k] = v; });
+      // Node.js fetch 可能自动解压响应体，删除编码头防止浏览器二次解压 ERR_CONTENT_DECODING_FAILED
+      delete respHeaders['content-encoding'];
+      delete respHeaders['transfer-encoding'];
+      delete respHeaders['content-length'];
+      const buffer = await proxyRes.arrayBuffer();
+
+      // HTML 响应：重写资源路径 + 注入 inspector 脚本
+      const contentType = respHeaders['content-type'] || '';
+      if (contentType.includes('text/html')) {
+        delete respHeaders['content-security-policy'];
+        delete respHeaders['content-security-policy-report-only'];
+        delete respHeaders['x-frame-options'];
+        delete respHeaders['cross-origin-embedder-policy'];
+        delete respHeaders['cross-origin-opener-policy'];
+        delete respHeaders['content-length'];
+        let html = Buffer.from(buffer).toString('utf-8');
+        // 注入 <base> 指向原始 dev server，让所有资源（JS/CSS/图片）直接从 dev server 加载
+        // 只有 HTML 本身经过代理（用于注入 inspector + 移除安全头）
+        const baseTag = `<base href="http://localhost:${targetPort}/">`;
+        if (html.includes('<head>')) {
+          html = html.replace('<head>', '<head>' + baseTag);
+        } else if (html.includes('<html>')) {
+          html = html.replace('<html>', '<html><head>' + baseTag + '</head>');
+        } else {
+          html = baseTag + html;
+        }
+        // inspector 脚本用完整 URL 指向 cc-viewer 服务器（避免被 <base> 重定向到 dev server）
+        const viewerOrigin = `${serverProtocol}://${req.headers.host}`;
+        const injectScript = `<script src="${viewerOrigin}/inspector-inject.js"></script>`;
+        if (html.includes('</body>')) {
+          html = html.replace('</body>', injectScript + '</body>');
+        } else if (html.includes('</html>')) {
+          html = html.replace('</html>', injectScript + '</html>');
+        } else {
+          html += injectScript;
+        }
+        res.writeHead(proxyRes.status, respHeaders);
+        res.end(html);
+      } else {
+        res.writeHead(proxyRes.status, respHeaders);
+        res.end(Buffer.from(buffer));
+      }
+    } catch (err) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Proxy error: ' + err.message }));
+    }
     return;
   }
 

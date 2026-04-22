@@ -16,6 +16,10 @@ import { filterRelevantRequests, findPrevMainAgentTimestamp } from './utils/help
 import { isMainAgent } from './utils/contentFilter';
 import { classifyRequest } from './utils/requestType';
 import { apiUrl } from './utils/apiUrl';
+import ProjectLauncher from './components/VisualEditor/ProjectLauncher';
+import PagePreview from './components/VisualEditor/PagePreview';
+import ElementInfo from './components/VisualEditor/ElementInfo';
+// PromptInput 已移除 — AI 修改通过右侧 ChatView 输入
 
 class App extends AppBase {
   constructor(props) {
@@ -98,6 +102,8 @@ class App extends AppBase {
 
   handleToggleViewMode = () => {
     this.setState(prev => {
+      // 从 visual 模式回到 chat
+      if (prev.viewMode === 'visual') return { viewMode: 'chat' };
       const newMode = prev.viewMode === 'raw' ? 'chat' : 'raw';
       if (newMode === 'raw') {
         if (prev.selectedIndex === null) {
@@ -362,6 +368,7 @@ class App extends AppBase {
               activeProxyId={this.state.activeProxyId}
               defaultConfig={this.state.defaultConfig}
               onProxyProfileChange={this.handleProxyProfileChange}
+              onSetViewMode={(mode) => this.setState({ viewMode: mode })}
             />
           </Layout.Header>
           {this.state.claudeMissing && (
@@ -373,7 +380,7 @@ class App extends AppBase {
               description={<span>{t('ui.claudeMissing.desc')}<br /><code style={{ background: 'var(--bg-code)', padding: '2px 6px', borderRadius: 3 }}>npm install -g @anthropic-ai/claude-code</code> <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>{t('ui.claudeMissing.or')}</span> <a href="https://claude.ai/download" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary-light)' }}>{t('ui.claudeMissing.native')}</a></span>}
             />
           )}
-          <Layout.Content className={styles.content}>
+          <Layout.Content className={`${styles.content}${viewMode === 'visual' ? ' ' + styles.contentVisual : ''}`}>
             {viewMode === 'raw' && (
               filteredRequests.length === 0 ? (
                 <div className={styles.guideContainer}>
@@ -446,8 +453,29 @@ class App extends AppBase {
               </div>
               )
             )}
-            <div className={styles.chatViewWrapper} style={{ display: viewMode === 'chat' ? 'flex' : 'none' }}>
-              <ChatView getTokenStatsContent={this._getTokenStatsContent} requests={filteredRequests} mainAgentSessions={mainAgentSessions} streamingLatest={this.state.streamingLatest} userProfile={this.state.userProfile} collapseToolResults={this.state.collapseToolResults} expandThinking={this.state.expandThinking} showFullToolContent={this.state.showFullToolContent} showThinkingSummaries={this.state.showThinkingSummaries} onViewRequest={this.handleViewRequest} scrollToTimestamp={this.state.chatScrollToTs} onScrollTsDone={this.handleScrollTsDone} cliMode={this._isLocalLog ? false : this.state.cliMode} sdkMode={this._isLocalLog ? false : this.state.sdkMode} terminalVisible={this._isLocalLog ? false : (this.state.sdkMode ? false : this.state.terminalVisible)} onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))} pendingUploadPaths={this.state.pendingUploadPaths} onUploadPathsConsumed={this.handleUploadPathsConsumed} fileLoading={this.state.fileLoading} isStreaming={this.state.isStreaming} hasMoreHistory={this.state.hasMoreHistory} loadingMore={this.state.loadingMore} onLoadMoreHistory={() => this.loadMoreHistory()} loadingSessionId={this.state.loadingSessionId} onLoadSession={(sid) => this.loadSession(sid)} lang={this.state.lang} autoApproveSeconds={this.state.autoApproveSeconds} onAutoApproveChange={this.handleAutoApproveChange} onClearContextOptimistic={this.handleClearContextOptimistic} />
+            {viewMode === 'visual' && (
+              <div className={styles.visualSidebar}>
+                <ProjectLauncher
+                  status={this.state.projectStatus}
+                  output={this.state.projectOutput}
+                  onStart={this.handleStartProject}
+                  onStop={this.handleStopProject}
+                />
+                <ElementInfo element={this.state.selectedElement} />
+              </div>
+            )}
+            {viewMode === 'visual' && (
+              <div className={styles.visualPreview}>
+                <PagePreview
+                  port={this.state.projectStatus?.port}
+                  onElementHover={(el) => {}}
+                  onElementSelect={(el) => this.setState({ selectedElement: el })}
+                  onElementDeselect={() => this.setState({ selectedElement: null })}
+                />
+              </div>
+            )}
+            <div className={styles.chatViewWrapper} style={{ display: (viewMode === 'chat' || viewMode === 'visual') ? 'flex' : 'none', ...(viewMode === 'visual' ? { width: '400px', minWidth: '400px', borderLeft: '1px solid var(--border-color)' } : {}) }}>
+              <ChatView compact={viewMode === 'visual'} getTokenStatsContent={this._getTokenStatsContent} requests={filteredRequests} mainAgentSessions={mainAgentSessions} streamingLatest={this.state.streamingLatest} userProfile={this.state.userProfile} collapseToolResults={this.state.collapseToolResults} expandThinking={this.state.expandThinking} showFullToolContent={this.state.showFullToolContent} showThinkingSummaries={this.state.showThinkingSummaries} onViewRequest={this.handleViewRequest} scrollToTimestamp={this.state.chatScrollToTs} onScrollTsDone={this.handleScrollTsDone} cliMode={this._isLocalLog ? false : this.state.cliMode} sdkMode={this._isLocalLog ? false : this.state.sdkMode} terminalVisible={viewMode === 'visual' ? false : (this._isLocalLog ? false : (this.state.sdkMode ? false : this.state.terminalVisible))} onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))} pendingUploadPaths={this.state.pendingUploadPaths} onUploadPathsConsumed={this.handleUploadPathsConsumed} fileLoading={this.state.fileLoading} isStreaming={this.state.isStreaming} hasMoreHistory={this.state.hasMoreHistory} loadingMore={this.state.loadingMore} onLoadMoreHistory={() => this.loadMoreHistory()} loadingSessionId={this.state.loadingSessionId} onLoadSession={(sid) => this.loadSession(sid)} lang={this.state.lang} autoApproveSeconds={this.state.autoApproveSeconds} onAutoApproveChange={this.handleAutoApproveChange} onClearContextOptimistic={this.handleClearContextOptimistic} />
             </div>
           </Layout.Content>
           <div className={styles.footer}>

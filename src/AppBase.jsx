@@ -88,6 +88,9 @@ class AppBase extends React.Component {
       proxyProfiles: [],
       activeProxyId: 'max',
       defaultConfig: null,
+      projectStatus: null,
+      projectOutput: '',
+      selectedElement: null,
     };
     this.eventSource = null;
     this._currentSessionId = null;
@@ -860,6 +863,31 @@ class AppBase extends React.Component {
               if (d.profiles) this.setState({ proxyProfiles: d.profiles, activeProxyId: d.active || 'max' });
             }).catch(() => { });
           }
+        } catch { }
+      });
+      this.eventSource.addEventListener('project_status', (event) => {
+        this._resetSSETimeout();
+        try {
+          const data = JSON.parse(event.data);
+          this.setState({ projectStatus: data });
+          // 状态变为 stopped 时清空日志
+          if (data.status === 'stopped') {
+            this.setState({ projectOutput: '' });
+          }
+        } catch { }
+      });
+      this.eventSource.addEventListener('project_output', (event) => {
+        this._resetSSETimeout();
+        try {
+          const data = JSON.parse(event.data);
+          this.setState(prev => {
+            // 限制日志缓冲区大小
+            let output = prev.projectOutput + data.text;
+            if (output.length > 50000) {
+              output = output.slice(-30000);
+            }
+            return { projectOutput: output };
+          });
         } catch { }
       });
       this.eventSource.addEventListener('ping', () => { this._resetSSETimeout(); });
@@ -1695,6 +1723,35 @@ class AppBase extends React.Component {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resumeAutoChoice: value }),
     }).catch(() => {});
+  };
+
+  // ─── 项目管理 (Visual Editor) ──────────────────────────
+
+  handleStartProject = async (projectPath, command) => {
+    this.setState({ projectOutput: '' });
+    const res = await fetch(apiUrl('/api/project/start'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectPath, command }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to start');
+    }
+    return res.json();
+  };
+
+  handleStopProject = async () => {
+    await fetch(apiUrl('/api/project/stop'), { method: 'POST' });
+  };
+
+  handleAIModify = (prompt) => {
+    // 通过 REST API 直接写入 PTY（不依赖 TerminalPanel 的 WebSocket 是否挂载）
+    fetch(apiUrl('/api/terminal-input'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: prompt + '\n' }),
+    }).catch(err => console.error('AI modify send failed:', err));
   };
 
   _finishLocalLoad = (entries, fileNames) => {

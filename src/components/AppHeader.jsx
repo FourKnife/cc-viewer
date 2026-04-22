@@ -1577,6 +1577,21 @@ class AppHeader extends React.Component {
           )}
           <Button
             className={styles.compactBtn}
+            type={viewMode === 'visual' ? 'primary' : 'default'}
+            ghost={viewMode === 'visual'}
+            icon={<EditOutlined />}
+            onClick={() => {
+              if (viewMode === 'visual') {
+                onToggleViewMode();
+              } else if (this.props.onSetViewMode) {
+                this.props.onSetViewMode('visual');
+              }
+            }}
+          >
+            {t('visual.tab')}
+          </Button>
+          <Button
+            className={styles.compactBtn}
             type={viewMode === 'raw' ? 'primary' : 'default'}
             icon={viewMode === 'raw' ? <MessageOutlined /> : <FileTextOutlined />}
             onClick={onToggleViewMode}
