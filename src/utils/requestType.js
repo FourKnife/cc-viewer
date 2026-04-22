@@ -1,9 +1,23 @@
 /**
  * 请求类型分类工具
  * classifyRequest(req, nextReq?) 返回 { type, subType }
- * type: 'MainAgent' | 'SubAgent' | 'Teammate' | 'Count' | 'Preflight' | 'Plan'
+ * type: 'MainAgent' | 'SubAgent' | 'Teammate' | 'Count' | 'Preflight' | 'Plan' | 'Synthetic'
+ *
+ * Synthetic: Claude Code CLI 在主会话里合成的内部工具查询
+ * （idle 返回 recap / 会话标题生成 / 压缩摘要等），HTTP 层 role=user 但并非用户手输。
+ * subType: 'Recap' | 'Title' | 'Compact' | 'Topic' | 'Summary'
  */
 import { isMainAgent, isTeammate, getSystemText, extractTeammateName } from './contentFilter';
+
+// Claude Code 内部合成 prompt 白名单（基于实际拦截日志归纳的固定字符串）
+// 匹配 last user message 的起首，避免误伤用户在对话中引用同一句话的场景。
+const SYNTHETIC_PROMPTS = [
+  { subType: 'Recap',   pattern: /^The user stepped away and is coming back\. Recap in under/i },
+  { subType: 'Title',   pattern: /^(Based on the above conversation, generate a|Please write a)\s+(short|concise)\s+title/i },
+  { subType: 'Compact', pattern: /^(Your task is to create a detailed summary of the conversation|This session is being continued from a previous conversation)/i },
+  { subType: 'Topic',   pattern: /^Analyze if this message indicates a new/i },
+  { subType: 'Summary', pattern: /^Summarize this coding session/i },
+];
 
 function getMessageText(msg) {
   const c = msg?.content;
@@ -35,6 +49,29 @@ function getSubAgentSubType(req) {
     break;
   }
 
+  return null;
+}
+
+/**
+ * 判断请求是否为 Claude Code 内部合成的工具查询。
+ * 必须同时满足：(1) 来自主会话（isMainAgent 通过），(2) 最后一条 user message 的起首
+ * 命中 SYNTHETIC_PROMPTS 白名单。返回匹配的 subType 或 null。
+ *
+ * 为什么不用"消息数短"作为启发式：拦截日志里 teammate 消息 / tool_result
+ * 也常出现 messages.length <= 3，会把它们误判为 Synthetic。白名单精确度更高，
+ * 代价是 Claude Code 新增合成类型需要手工加 pattern。
+ */
+function getSyntheticSubType(req) {
+  if (!isMainAgent(req)) return null;
+  const msgs = req.body?.messages || [];
+  if (!msgs.length) return null;
+  const last = msgs[msgs.length - 1];
+  if (!last || last.role !== 'user') return null;
+  const text = getMessageText(last).trim();
+  if (!text) return null;
+  for (const { subType, pattern } of SYNTHETIC_PROMPTS) {
+    if (pattern.test(text)) return subType;
+  }
   return null;
 }
 
@@ -112,6 +149,13 @@ export function classifyRequest(req, nextReq) {
     return { type: 'Teammate', subType: req._cachedTeammateName };
   }
 
+  // Synthetic 检查要在 MainAgent 之前——这类请求 mainAgent=true，
+  // 不拦截就会被当作普通主会话轮次，用户看不出是 Claude Code 合成的。
+  const syntheticSub = getSyntheticSubType(req);
+  if (syntheticSub) {
+    return { type: 'Synthetic', subType: syntheticSub };
+  }
+
   if (isMainAgent(req)) {
     return { type: 'MainAgent', subType: null };
   }
@@ -138,6 +182,7 @@ export function formatRequestTag(type, subType) {
   if (type === 'Teammate' && subType) return `Teammate:${subType}`;
   if (type === 'Plan' && subType) return `Plan:${subType}`;
   if (type === 'SubAgent' && subType) return `SubAgent:${subType}`;
+  if (type === 'Synthetic' && subType) return `Synthetic:${subType}`;
   return type;
 }
 

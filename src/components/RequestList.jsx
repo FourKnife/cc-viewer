@@ -107,7 +107,9 @@ class RequestList extends React.Component {
                         ? <Tag className={`${styles.tagNoMargin} ${styles.tagPlan}`}>{formatRequestTag(reqType, subType)}</Tag>
                         : reqType === 'Count' || reqType === 'Preflight'
                           ? <Tag className={`${styles.tagNoMargin} ${styles.tagMuted}`}>{reqType}</Tag>
-                          : <Tag className={styles.tagNoMargin}>{formatRequestTag(reqType, subType)}</Tag>
+                          : reqType === 'Synthetic'
+                            ? <Tag className={`${styles.tagNoMargin} ${styles.tagMuted}`}>{formatRequestTag(reqType, subType)}</Tag>
+                            : <Tag className={styles.tagNoMargin}>{formatRequestTag(reqType, subType)}</Tag>
                     }
                     {model && <span className={`${styles.modelName} ${reqType === 'MainAgent' ? styles.modelNameMain : ''}`}>{model}</span>}
                     <span className={styles.time}>{time}</span>
