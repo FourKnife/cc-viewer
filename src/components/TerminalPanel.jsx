@@ -1,5 +1,5 @@
 import React from 'react';
-import { message, Tooltip, Popover, Popconfirm, Button, Checkbox } from 'antd';
+import { message, Tooltip, Popover, Popconfirm, Button, Checkbox, Modal } from 'antd';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
