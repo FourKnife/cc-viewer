@@ -344,10 +344,12 @@ export async function spawnShell() {
   currentWorkspacePath = cwd;
 
   // Clean env: remove cc-viewer specific vars so child shells don't inherit them
-  // (prevents CCVIEWER_PORT leaking to non-cc-viewer Claude instances)
+  // (prevents CCVIEWER_PORT/CCVIEWER_PROTOCOL leaking to non-cc-viewer Claude instances;
+  // 115c48b 加入 CCVIEWER_PROTOCOL 但只更新 spawnClaude，此处对齐)
   const shellEnv = { ...process.env };
   delete shellEnv.CCVIEWER_PORT;
   delete shellEnv.CCV_EDITOR_PORT;
+  delete shellEnv.CCVIEWER_PROTOCOL;
   // 交互 shell 里手动敲 claude 时也禁鼠标，理由同 spawnClaude；NO_FLICKER 仍不注入
   shellEnv.CLAUDE_CODE_DISABLE_MOUSE ??= '1';
 

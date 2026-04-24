@@ -2059,10 +2059,13 @@ async function handleRequest(req, res) {
         const HOOK_TIMEOUT = 5 * 60 * 1000;
         const id = `perm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-        // Plugin hook: let plugins handle permission requests directly
+        // Plugin hook: let plugins handle permission requests directly.
+        // 与 sdk-manager.js:401-412 对齐：严格白名单 'allow'|'deny'，未知值 fall-through 到常规审批。
+        // 早期 truthy-check 会把 plugin 返回的任意字符串原样转发到 perm-bridge（再被 coerce 为 'deny'），
+        // 既违反 cb2326e 声明的 fail-safe 语义，又让 SDK 与 bridge 两路径行为不对称。
         try {
           const hookResult = await runWaterfallHook('onPermRequest', { id, toolName, input, mode: 'hook' });
-          if (hookResult.decision) {
+          if (hookResult.decision === 'allow' || hookResult.decision === 'deny') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: hookResult.decision }));
             return;

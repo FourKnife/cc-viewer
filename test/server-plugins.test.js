@@ -154,4 +154,81 @@ describe('server plugin endpoints', { concurrency: false }, () => {
     assert.equal(res.status, 500);
     assert.ok(res.json().error.includes('Failed to fetch'));
   });
+
+  // --- /api/perm-hook decision whitelist (fix/pr70-review B4) ---
+  // server.js:2065 曾经是 `if (hookResult.decision)` 的 truthy-check，
+  // plugin 返回 `decision: 'garbage'` 会被原样回转给 perm-bridge.js:133，
+  // 再被 coerce 为 'deny' —— 既与 sdk-manager.js 的 strict allow/deny 白名单
+  // 不对称，也违反 cb2326e 声称的 "unknown → fall through to user UI" 语义。
+  // 下面两条锁死新的白名单行为。
+
+  function permHookRequest(port, body, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const req = request({
+        hostname: '127.0.0.1',
+        port,
+        path: '/api/perm-hook',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => resolve({ status: res.statusCode, body: data, json() { return JSON.parse(data); } }));
+      });
+      req.on('error', reject);
+      const t = setTimeout(() => { try { req.destroy(); } catch {} reject(Object.assign(new Error('client-timeout'), { code: 'ETIMEDOUT' })); }, timeoutMs);
+      req.on('close', () => clearTimeout(t));
+      req.write(JSON.stringify(body));
+      req.end();
+    });
+  }
+
+  it('POST /api/perm-hook short-circuits when plugin returns decision:allow', async () => {
+    const pluginContent = `
+      export default {
+        name: 'perm-whitelist-allow',
+        hooks: { onPermRequest() { return { decision: 'allow' }; } }
+      };
+    `;
+    const up = await httpRequest(port, '/api/plugins/upload', {
+      method: 'POST',
+      body: { files: [{ name: 'test-perm-allow.js', content: pluginContent }] },
+    });
+    assert.equal(up.status, 200);
+    try {
+      const res = await permHookRequest(port, { toolName: 'Bash', input: {} }, 2000);
+      assert.equal(res.status, 200);
+      assert.equal(res.json().decision, 'allow');
+    } finally {
+      await httpRequest(port, '/api/plugins?file=test-perm-allow.js', { method: 'DELETE' });
+    }
+  });
+
+  it('POST /api/perm-hook does NOT short-circuit on non-whitelist decision (falls through to long-poll)', async () => {
+    const pluginContent = `
+      export default {
+        name: 'perm-whitelist-garbage',
+        hooks: { onPermRequest() { return { decision: 'garbage' }; } }
+      };
+    `;
+    const up = await httpRequest(port, '/api/plugins/upload', {
+      method: 'POST',
+      body: { files: [{ name: 'test-perm-garbage.js', content: pluginContent }] },
+    });
+    assert.equal(up.status, 200);
+    try {
+      // Plugin 返回 decision:'garbage'。修复前：server 立即 200 + {decision:'garbage'}。
+      // 修复后：server 走长轮询等待真实 user 审批；这里 300ms 内肯定收不到 200。
+      let shortCircuited = false;
+      try {
+        await permHookRequest(port, { toolName: 'Bash', input: {} }, 300);
+        shortCircuited = true;
+      } catch (err) {
+        assert.equal(err.code, 'ETIMEDOUT', 'expected client-timeout, got ' + err.message);
+      }
+      assert.equal(shortCircuited, false, 'server short-circuited with non-whitelist decision — regression to pre-cb2326e truthy-check');
+    } finally {
+      await httpRequest(port, '/api/plugins?file=test-perm-garbage.js', { method: 'DELETE' });
+    }
+  });
 }); 
