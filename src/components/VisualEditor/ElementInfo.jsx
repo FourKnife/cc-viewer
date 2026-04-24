@@ -1,33 +1,10 @@
 import React from 'react';
-import { Typography, Tag, Button, message } from 'antd';
-import { EditOutlined } from '@ant-design/icons';
+import { Typography, Tag, message } from 'antd';
 import { t } from '../../i18n';
 import styles from './styles.module.css';
 
-function buildContext(element) {
-  const lines = [];
-  if (element.sourceInfo?.fileName) {
-    lines.push('文件: ' + element.sourceInfo.fileName + ':' + element.sourceInfo.lineNumber);
-  }
-  if (element.sourceInfo?.componentName) {
-    lines.push('组件: ' + element.sourceInfo.componentName);
-  }
-  const cls = element.className ? ' class="' + element.className.split(' ').slice(0, 3).join(' ') + '"' : '';
-  lines.push('元素: <' + element.tag + cls + '>');
-  if (element.selector) {
-    lines.push('选择器: ' + element.selector);
-  }
-  return '请修改以下元素:\n' + lines.join('\n') + '\n\n';
-}
-
 export default function ElementInfo({ element }) {
   if (!element) return null;
-
-  const handleAskAI = () => {
-    const context = buildContext(element);
-    // 注入到 ChatView 输入框
-    window.dispatchEvent(new CustomEvent('ccv-inject-input', { detail: { text: context } }));
-  };
 
   return (
     <div className={styles.elementInfo}>
@@ -123,11 +100,6 @@ export default function ElementInfo({ element }) {
         </div>
       )}
 
-      <div className={styles.askAiRow}>
-        <Button type="primary" icon={<EditOutlined />} block onClick={handleAskAI}>
-          {t('visual.askAI')}
-        </Button>
-      </div>
     </div>
   );
 }

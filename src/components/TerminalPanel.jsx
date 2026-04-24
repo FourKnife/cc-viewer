@@ -13,6 +13,7 @@ import { isMobile, isIOS, isPad } from '../env';
 import styles from './TerminalPanel.module.css';
 import { BUILTIN_PRESETS } from '../utils/builtinPresets.js';
 import { buildLocalUltraplan } from '../utils/ultraplanTemplates';
+import { buildElementContext } from '../utils/elementContext';
 import { getModelMaxTokens } from '../utils/helpers';
 import ConceptHelp from './ConceptHelp';
 import CustomUltraplanEditModal from './CustomUltraplanEditModal';
@@ -145,7 +146,18 @@ class TerminalPanel extends React.Component {
     // Visual Editor: 接收 AI 修改 prompt 并发送到 PTY
     this._onTerminalSend = (e) => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN && e.detail?.text) {
-        this.ws.send(JSON.stringify({ type: 'input', data: e.detail.text }));
+        const text = e.detail.text;
+        // 多行文本用 bracketed paste 包裹，防止换行被当成回车逐行提交
+        if (text.includes('\n') || text.includes('\r')) {
+          this.ws.send(JSON.stringify({ type: 'input', data: `\x1b[200~${text}\x1b[201~` }));
+          setTimeout(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+            }
+          }, 50);
+        } else {
+          this.ws.send(JSON.stringify({ type: 'input', data: text + '\r' }));
+        }
       }
     };
     window.addEventListener('ccv-terminal-send', this._onTerminalSend);
@@ -228,6 +240,24 @@ class TerminalPanel extends React.Component {
     }
   }
 
+  componentDidUpdate(prevProps) {
+    // Visual Editor: 选中新元素时，在输入行插入 [SelectUI #N] 标记
+    if (prevProps.selectedElement !== this.props.selectedElement && this.terminal) {
+      if (this.props.selectedElement) {
+        const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
+        if (!inAlternateScreen && this.ws && this.ws.readyState === WebSocket.OPEN) {
+          if (!this._selectUiCounter) this._selectUiCounter = 0;
+          this._selectUiCounter += 1;
+          const tag = `[SelectUI #${this._selectUiCounter}] `;
+          // 将标记发送到 PTY 输入行（如同用户输入）
+          this.ws.send(JSON.stringify({ type: 'input', data: tag }));
+          // 同步到 _userInputBuffer，确保 Enter 时能正确组合 prompt
+          this._userInputBuffer = (this._userInputBuffer || '') + tag;
+        }
+      }
+    }
+  }
+
   initTerminal() {
     const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
     this.terminal = new Terminal({
@@ -236,7 +266,7 @@ class TerminalPanel extends React.Component {
       cursorWidth: 1,
       cursorInactiveStyle: 'none',
       fontSize: (isMobile && !isPad) ? 11 : 13,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: 'Menlo, Monaco, "Courier New", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", monospace',
       theme: isDark ? darkTerminalTheme : lightTerminalTheme,
       allowProposedApi: true,
       scrollback: isPad ? 3000 : isIOS ? 200 : isMobile ? 1000 : 3000,
@@ -307,7 +337,9 @@ class TerminalPanel extends React.Component {
       if (e.type === 'keydown' && e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         const pending = this.props.pendingImages;
         const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
-        if (pending?.length > 0 && !inAlternateScreen && this.ws?.readyState === WebSocket.OPEN) {
+        // Visual Editor: selectedElement 激活时，跳过独立的路径注入，
+        // 由 onData handler 统一组合 截图路径 + 元素上下文 + 用户输入
+        if (pending?.length > 0 && !this.props.selectedElement && !inAlternateScreen && this.ws?.readyState === WebSocket.OPEN) {
           const paths = pending.map(img => `'${img.path.replace(/'/g, "'\\''")}'`).join(' ');
           this.ws.send(JSON.stringify({ type: 'input', data: paths + ' ' }));
           this.props.onClearPendingImages?.();
@@ -334,8 +366,50 @@ class TerminalPanel extends React.Component {
       return false;
     });
 
+    this._userInputBuffer = '';
     this.terminal.onData((data) => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        // Visual Editor: 选中元素时，Enter 自动注入上下文并发送
+        if (this.props.selectedElement) {
+          if (data === '\r') {
+            const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
+            if (!inAlternateScreen && this._userInputBuffer) {
+              const context = buildElementContext(this.props.selectedElement);
+              if (context) {
+                // 清理 [SelectUI #N] 标记，提取纯用户输入
+                const userInput = this._userInputBuffer.replace(/\[SelectUI #\d+\]\s*/g, '').trim();
+                this._userInputBuffer = '';
+                // 清理后无实际输入，按普通 Enter 处理
+                if (!userInput) {
+                  this.ws.send(JSON.stringify({ type: 'input', data }));
+                  return;
+                }
+                // 统一处理 pending 截图路径（避免与 attachCustomKeyEventHandler 重复注入）
+                const pending = this.props.pendingImages;
+                let imagePaths = '';
+                if (pending?.length > 0) {
+                  imagePaths = pending.map(img => `'${img.path.replace(/'/g, "'\\''")}'`).join(' ') + ' ';
+                  this.props.onClearPendingImages?.();
+                }
+                // 组合完整 prompt：截图路径 + 元素上下文 + 用户要求
+                const fullPrompt = imagePaths + context.replace(/\n+/g, ' ').trim() + ' 用户要求: ' + userInput;
+                // 通过 visual-input 发送，服务端会抑制 PTY 回显，
+                // 终端上 [SelectUI #N] + 用户输入保持原样
+                this.ws.send(JSON.stringify({ type: 'visual-input', prompt: fullPrompt }));
+                return;
+              }
+            }
+            this._userInputBuffer = '';
+          } else if (data === '\x7f') {
+            this._userInputBuffer = (this._userInputBuffer || '').slice(0, -1);
+          } else if (data === '\x15') {
+            this._userInputBuffer = '';
+          } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+            this._userInputBuffer = (this._userInputBuffer || '') + data;
+          } else if (data.length > 1 && !data.startsWith('\x1b')) {
+            this._userInputBuffer = (this._userInputBuffer || '') + data;
+          }
+        }
         this.ws.send(JSON.stringify({ type: 'input', data }));
       }
     });

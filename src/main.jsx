@@ -1,4 +1,4 @@
-import './tokenInterceptor';
+// import './tokenInterceptor'; // 文件不存在，暂时注释
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './global.css';

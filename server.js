@@ -1,5 +1,5 @@
-import { createServer } from 'node:http';
-import { createServer as createHttpsServer } from 'node:https';
+import { createServer, request as httpRequest } from 'node:http';
+import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
 import { createConnection } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, watchFile, unwatchFile, statSync, readdirSync, renameSync, unlinkSync, rmSync, openSync, readSync, closeSync, realpathSync, mkdirSync, createReadStream, cpSync, copyFileSync } from 'node:fs';
@@ -1083,6 +1083,335 @@ async function handleRequest(req, res) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
+    return;
+  }
+
+  // Sketch MCP 选中图层代理（避免前端 CORS 问题）
+  if (url === '/api/sketch-selection' && method === 'GET') {
+    const script = "const sketch = require('sketch'); const doc = sketch.getSelectedDocument(); if (!doc) { console.log(''); } else { const names = doc.selectedLayers.layers.map(l => l.name); console.log(names.join(', ')); }";
+    const postData = JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'run_code', arguments: { script: script, title: 'get_selection' } }, id: Date.now() });
+    const mcpReq = httpRequest({ hostname: '127.0.0.1', port: 31126, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }, timeout: 3000 }, (mcpRes) => {
+      let body = '';
+      mcpRes.on('data', c => { body += c; });
+      mcpRes.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          const content = data?.result?.content;
+          const text = Array.isArray(content) ? content.find(c => c.type === 'text') : null;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ layerName: text?.text || null }));
+        } catch {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ layerName: null }));
+        }
+      });
+    });
+    mcpReq.on('error', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ layerName: null }));
+    });
+    mcpReq.on('timeout', () => { mcpReq.destroy(); });
+    mcpReq.write(postData);
+    mcpReq.end();
+    return;
+  }
+
+  // Sketch 图层结构化样式提取（通过 MCP run_code 提取选中图层属性 JSON）
+  if (url === '/api/sketch-layer-styles' && method === 'GET') {
+    const script = `
+const sketch = require('sketch');
+const doc = sketch.getSelectedDocument();
+if (!doc || doc.selectedLayers.layers.length === 0) {
+  console.log(JSON.stringify({ error: 'no_selection' }));
+} else {
+  const layer = doc.selectedLayers.layers[0];
+  const result = { name: layer.name, type: layer.type, frame: { x: layer.frame.x, y: layer.frame.y, width: layer.frame.width, height: layer.frame.height } };
+
+  // 文字图层
+  if (layer.type === 'Text') {
+    result.text = layer.text;
+    result.textStyle = {
+      fontSize: layer.style.fontSize,
+      fontWeight: layer.style.fontWeight,
+      fontFamily: layer.style.fontFamily,
+      lineHeight: layer.style.lineHeight,
+      letterSpacing: layer.style.kerning,
+      textColor: layer.style.textColor,
+      alignment: layer.style.alignment
+    };
+  }
+
+  // 填充
+  if (layer.style && layer.style.fills) {
+    result.fills = layer.style.fills.filter(function(f) { return f.enabled; }).map(function(f) {
+      var info = { fillType: f.fillType, color: f.color };
+      if (f.fillType === 'Gradient' && f.gradient) {
+        info.gradient = { type: f.gradient.gradientType, stops: f.gradient.stops.map(function(s) { return { color: s.color, position: s.position }; }) };
+      }
+      return info;
+    });
+  }
+
+  // 边框
+  if (layer.style && layer.style.borders) {
+    result.borders = layer.style.borders.filter(function(b) { return b.enabled; }).map(function(b) {
+      return { color: b.color, thickness: b.thickness, position: b.position };
+    });
+  }
+
+  // 阴影
+  if (layer.style && layer.style.shadows) {
+    result.shadows = layer.style.shadows.filter(function(s) { return s.enabled; }).map(function(s) {
+      return { color: s.color, x: s.x, y: s.y, blur: s.blur, spread: s.spread };
+    });
+  }
+
+  // 圆角
+  if (layer.points) {
+    var radii = layer.points.map(function(p) { return p.cornerRadius || 0; });
+    result.borderRadius = radii;
+  }
+
+  // 透明度
+  result.opacity = layer.style ? layer.style.opacity : 1;
+
+  // 子图层概要（仅第一层）
+  if (layer.layers && layer.layers.length > 0) {
+    result.children = layer.layers.map(function(child) {
+      return { name: child.name, type: child.type, frame: { x: child.frame.x, y: child.frame.y, width: child.frame.width, height: child.frame.height } };
+    });
+  }
+
+  console.log(JSON.stringify(result));
+}`;
+
+    const postData = JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { name: 'run_code', arguments: { script, title: 'extract_layer_styles' } },
+      id: Date.now()
+    });
+
+    const mcpReq = httpRequest({
+      hostname: '127.0.0.1', port: 31126, path: '/mcp', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+      timeout: 10000
+    }, (mcpRes) => {
+      let body = '';
+      mcpRes.on('data', c => { body += c; });
+      mcpRes.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          const content = data?.result?.content;
+          const text = Array.isArray(content) ? content.find(c => c.type === 'text') : null;
+          if (text?.text) {
+            let rawText = text.text;
+            if (rawText.startsWith("'") && rawText.endsWith("'")) {
+              rawText = rawText.slice(1, -1);
+            }
+            const parsed = JSON.parse(rawText);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(parsed));
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'empty_response' }));
+          }
+        } catch (parseErr) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'parse_error' }));
+        }
+      });
+    });
+    mcpReq.on('error', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'mcp_unavailable' }));
+    });
+    mcpReq.on('timeout', () => { mcpReq.destroy(); });
+    mcpReq.write(postData);
+    mcpReq.end();
+    return;
+  }
+
+  // Sketch 图层截图导出（通过 MCP run_code 导出选中图层为 PNG base64）
+  if (url === '/api/sketch-screenshot' && method === 'GET') {
+    const script = `
+const sketch = require('sketch');
+const doc = sketch.getSelectedDocument();
+if (!doc || doc.selectedLayers.layers.length === 0) {
+  console.log(JSON.stringify({ error: 'no_selection' }));
+} else {
+  const layer = doc.selectedLayers.layers[0];
+  const options = { formats: 'png', scales: '2', output: false };
+  const buf = sketch.export(layer, options);
+  console.log(JSON.stringify({ name: layer.name, base64: buf.toString('base64'), width: layer.frame.width, height: layer.frame.height }));
+}`;
+    const postData = JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'run_code', arguments: { script, title: 'export_layer_png' } }, id: Date.now() });
+    const mcpReq = httpRequest({ hostname: '127.0.0.1', port: 31126, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }, timeout: 10000 }, (mcpRes) => {
+      let body = '';
+      mcpRes.on('data', c => { body += c; });
+      mcpRes.on('end', () => {
+        console.log('[Sketch MCP] status:', mcpRes.statusCode, 'body length:', body.length);
+        console.log('[Sketch MCP] raw body:', body.substring(0, 2000));
+        try {
+          const data = JSON.parse(body);
+          console.log('[Sketch MCP] parsed keys:', Object.keys(data));
+          const content = data?.result?.content;
+          console.log('[Sketch MCP] content:', JSON.stringify(content)?.substring(0, 500));
+          const text = Array.isArray(content) ? content.find(c => c.type === 'text') : null;
+          if (text?.text) {
+            let rawText = text.text;
+            // Sketch MCP 新版 console.log 输出可能被单引号包裹
+            if (rawText.startsWith("'") && rawText.endsWith("'")) {
+              rawText = rawText.slice(1, -1);
+            }
+            const parsed = JSON.parse(rawText);
+            if (parsed.error) {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: parsed.error }));
+            } else {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ name: parsed.name, image: `data:image/png;base64,${parsed.base64}`, width: parsed.width, height: parsed.height }));
+            }
+          } else {
+            console.log('[Sketch MCP] no text content found, data.result:', JSON.stringify(data?.result)?.substring(0, 500));
+            console.log('[Sketch MCP] data.error:', JSON.stringify(data?.error)?.substring(0, 500));
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'empty_response' }));
+          }
+        } catch (parseErr) {
+          console.error('[Sketch MCP] parse error:', parseErr.message);
+          console.error('[Sketch MCP] body preview:', body.substring(0, 500));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'parse_error' }));
+        }
+      });
+    });
+    mcpReq.on('error', (err) => {
+      console.error('[Sketch MCP] connection error:', err.message);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'mcp_unavailable' }));
+    });
+    mcpReq.on('timeout', () => { console.warn('[Sketch MCP] request timeout'); mcpReq.destroy(); });
+    mcpReq.write(postData);
+    mcpReq.end();
+    return;
+  }
+
+  // AI 对比分析（截图 vs Sketch 设计稿）
+  if (url === '/api/compare-analyze' && method === 'POST') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 20 * 1024 * 1024) { req.destroy(); } });
+    req.on('end', () => {
+      try {
+        const { imageA, imageB } = JSON.parse(body);
+        if (!imageA || !imageB) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing_images' }));
+          return;
+        }
+        const apiKey = _cachedApiKey;
+        const authHeader = _cachedAuthHeader;
+        if (!apiKey && !authHeader) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'no_api_key' }));
+          return;
+        }
+        const requestId = `compare_${Date.now()}`;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, requestId }));
+
+        // 异步调用 Anthropic Messages API (streaming)
+        const toBlock = (dataUri) => {
+          const match = dataUri.match(/^data:(image\/\w+);base64,(.+)$/);
+          if (!match) return null;
+          return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
+        };
+        const blockA = toBlock(imageA);
+        const blockB = toBlock(imageB);
+        if (!blockA || !blockB) {
+          sendEventToClients(clients, 'compare_analysis', { requestId, error: 'invalid_image_format', done: true });
+          return;
+        }
+
+        const prompt = `You are a frontend development expert reviewing implementation quality.
+
+Image A (first) is a screenshot of the current web implementation.
+Image B (second) is the design from Sketch.
+
+Compare the two images and provide a concise analysis covering:
+1. **Layout differences** - positioning, alignment, spacing issues
+2. **Color differences** - background, text, border colors that don't match
+3. **Typography** - font size, weight, line-height discrepancies
+4. **Spacing & sizing** - margins, paddings, widths/heights that differ
+5. **Missing or extra elements** - anything present in one but not the other
+
+For each difference found, suggest a specific CSS fix.
+Respond in Chinese (简体中文).
+Be concise - developers need actionable fixes, not lengthy descriptions.`;
+
+        const apiBody = JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 4096,
+          stream: true,
+          messages: [{
+            role: 'user',
+            content: [blockA, blockB, { type: 'text', text: prompt }]
+          }]
+        });
+
+        const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' };
+        if (apiKey) headers['x-api-key'] = apiKey;
+        else if (authHeader) headers['authorization'] = authHeader;
+
+        const apiReq = httpsRequest({
+          hostname: 'api.anthropic.com',
+          path: '/v1/messages',
+          method: 'POST',
+          headers: { ...headers, 'Content-Length': Buffer.byteLength(apiBody) },
+          timeout: 60000,
+        }, (apiRes) => {
+          if (apiRes.statusCode !== 200) {
+            let errBody = '';
+            apiRes.on('data', c => { errBody += c; });
+            apiRes.on('end', () => {
+              sendEventToClients(clients, 'compare_analysis', { requestId, error: `API error ${apiRes.statusCode}: ${errBody.slice(0, 200)}`, done: true });
+            });
+            return;
+          }
+          let sseBuffer = '';
+          let accumulatedText = '';
+          apiRes.on('data', (chunk) => {
+            sseBuffer += chunk.toString();
+            const lines = sseBuffer.split('\n');
+            sseBuffer = lines.pop();
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const payload = line.slice(6).trim();
+              if (payload === '[DONE]') continue;
+              try {
+                const evt = JSON.parse(payload);
+                if (evt.type === 'content_block_delta' && evt.delta?.text) {
+                  accumulatedText += evt.delta.text;
+                  sendEventToClients(clients, 'compare_analysis', { requestId, delta: evt.delta.text, text: accumulatedText, done: false });
+                }
+              } catch {}
+            }
+          });
+          apiRes.on('end', () => {
+            sendEventToClients(clients, 'compare_analysis', { requestId, text: accumulatedText, done: true });
+          });
+        });
+        apiReq.on('error', (err) => {
+          sendEventToClients(clients, 'compare_analysis', { requestId, error: err.message, done: true });
+        });
+        apiReq.on('timeout', () => { apiReq.destroy(); });
+        apiReq.write(apiBody);
+        apiReq.end();
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid_request' }));
+      }
+    });
     return;
   }
 
@@ -3234,6 +3563,8 @@ async function setupTerminalWebSocket(httpServer) {
     let activeWs = null;              // 当前活跃的 WebSocket 连接
     const clientSizes = new Map();    // ws → { cols, rows }
     const mobileClients = new Set();  // 移动端连接集合
+    let suppressVisualEcho = false;   // visual-input 回显抑制标志
+    let suppressVisualTimer = null;   // 抑制超时定时器
 
     // 找到一个在线的移动端并返回其尺寸
     const getMobileSize = () => {
@@ -3270,7 +3601,7 @@ async function setupTerminalWebSocket(httpServer) {
 
       // PTY 输出 → WebSocket
       const removeDataListener = onPtyData((data) => {
-        if (ws.readyState === 1) {
+        if (ws.readyState === 1 && !suppressVisualEcho) {
           ws.send(JSON.stringify({ type: 'data', data }));
         }
       });
@@ -3324,6 +3655,33 @@ async function setupTerminalWebSocket(httpServer) {
             } else {
               writeToPty(msg.data);
             }
+          } else if (msg.type === 'visual-input') {
+            // 可视化编辑器 prompt 注入：抑制 PTY 回显，用户只看到 [SelectUI #N] 标记
+            const state = getPtyState();
+            if (!state.running) {
+              try { await spawnShell(); } catch {}
+            }
+            if (activeWs !== ws) {
+              activeWs = ws;
+              const mSize = getMobileSize();
+              if (mSize) {
+                resizePty(mSize.cols, mSize.rows);
+              } else {
+                const size = clientSizes.get(ws);
+                if (size) resizePty(size.cols, size.rows);
+              }
+            }
+            // 激活输出抑制
+            suppressVisualEcho = true;
+            clearTimeout(suppressVisualTimer);
+            // 写入 PTY：清行 + 完整 prompt（bracketed paste）+ 回车
+            writeToPty('\x15');
+            writeToPty(`\x1b[200~${msg.prompt}\x1b[201~`);
+            setTimeout(() => {
+              writeToPty('\r');
+              // 300ms 后恢复转发（从发送回车开始计时）
+              suppressVisualTimer = setTimeout(() => { suppressVisualEcho = false; }, 300);
+            }, 50);
           } else if (msg.type === 'input-sequential') {
             // Programmatic sequential input: send chunks one by one, waiting for PTY ACK
             const state = getPtyState();

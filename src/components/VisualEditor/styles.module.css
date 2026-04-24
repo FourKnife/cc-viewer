@@ -1,11 +1,81 @@
 .launcher {
   padding: 8px;
 }
+.launcherHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.launcherToggle {
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+.launcherToggle:hover {
+  color: var(--text-primary);
+}
+.launcherSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  height: 28px;
+}
+.launcherDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+.launcherDotRunning {
+  background: var(--color-success);
+}
+.launcherSummaryPath {
+  color: var(--text-secondary);
+  font-family: monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.launcherSummaryPort {
+  color: var(--color-primary-light);
+  font-family: monospace;
+  font-size: 11px;
+}
+.launcherSummaryStatus {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.launcherSummaryBtn {
+  padding: 0 4px;
+  height: 20px;
+  font-size: 11px;
+}
 .emptyPreview {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+.emptyGuide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.emptyGuideIcon {
+  font-size: 32px;
+  color: var(--text-disabled);
+}
+.emptyGuideText {
+  color: var(--text-tertiary);
+  font-size: 13px;
 }
 .previewContainer {
   display: flex;
@@ -17,26 +87,34 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  background: var(--bg-primary, #111);
-  border-bottom: 1px solid var(--border-color, #333);
+  background: var(--bg-container);
+  border-bottom: 1px solid var(--border-primary);
 }
 .urlInspect {
-  color: var(--text-secondary, #999);
+  color: var(--text-secondary);
   font-size: 16px;
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
-  transition: all 0.2s;
+  transition: color 0.2s;
 }
 .urlInspect:hover {
-  color: var(--color-primary-light, #1668dc);
+  color: var(--color-primary-light);
 }
 .urlInspectActive {
-  color: var(--color-primary-light, #1668dc);
-  background: rgba(22, 104, 220, 0.15);
+  color: var(--color-primary-light);
+  background: var(--color-primary-bg-light);
+}
+.urlBtnDisabled {
+  color: var(--text-disabled) !important;
+  cursor: not-allowed !important;
+  opacity: 0.5;
+}
+.urlBtnDisabled:hover {
+  color: var(--text-disabled) !important;
 }
 .urlIcon {
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   font-size: 13px;
 }
 .urlInput {
@@ -45,7 +123,7 @@
   font-family: monospace;
 }
 .urlRefresh {
-  color: var(--text-secondary, #999);
+  color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
   padding: 4px;
@@ -53,10 +131,10 @@
   transition: color 0.2s;
 }
 .urlRefresh:hover {
-  color: var(--color-primary-light, #1668dc);
+  color: var(--color-primary-light);
 }
 .urlGo {
-  color: var(--text-secondary, #999);
+  color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
   padding: 4px;
@@ -64,30 +142,29 @@
   transition: color 0.2s;
 }
 .urlGo:hover {
-  color: var(--color-primary-light, #1668dc);
+  color: var(--color-primary-light);
 }
 .iframeError {
-  background: rgba(255, 77, 79, 0.1);
-  color: #ff4d4f;
+  background: var(--color-error-bg-faint);
+  color: var(--color-error-light);
   padding: 6px 12px;
   font-size: 12px;
-  border-bottom: 1px solid rgba(255, 77, 79, 0.2);
+  border-bottom: 1px solid var(--color-error-border-light);
 }
 .iframeArea {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-secondary, #0a0a0a);
+  background: var(--bg-base);
   overflow: auto;
 }
 .mobileFrame {
   width: 430px;
   height: 932px;
-  border: 1px solid var(--border-color, #333);
+  border: 1px solid var(--border-primary);
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   flex-shrink: 0;
 }
 .iframe {
@@ -96,9 +173,11 @@
   border: none;
 }
 .elementInfo {
-  margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color, #333);
+  border-top: 1px solid var(--border-primary);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .elementTag {
   display: flex;
@@ -108,7 +187,7 @@
 }
 .elementSize {
   font-size: 11px;
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
 }
 .elementRow {
   display: flex;
@@ -118,12 +197,12 @@
   font-size: 12px;
 }
 .elementLabel {
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   min-width: 52px;
   flex-shrink: 0;
 }
 .elementValue {
-  color: var(--text-secondary, #b0b0b0);
+  color: var(--text-secondary);
   word-break: break-all;
   font-size: 11px;
 }
@@ -140,27 +219,27 @@
   padding: 1px 0;
 }
 .styleKey {
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
   min-width: 100px;
   font-size: 11px;
 }
 .styleValue {
-  color: var(--text-secondary, #b0b0b0);
+  color: var(--text-secondary);
   font-size: 11px;
   font-family: monospace;
 }
 .sourceInfo {
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px solid var(--border-color, #333);
+  border-top: 1px solid var(--border-primary);
 }
 .sourceFile {
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 4px 8px;
-  background: var(--bg-code, #1a1a1a);
-  border: 1px solid var(--border-color, #333);
+  background: var(--bg-code);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   cursor: pointer;
   font-family: monospace;
@@ -169,13 +248,13 @@
   transition: border-color 0.2s;
 }
 .sourceFile:hover {
-  border-color: var(--color-primary-light, #1668dc);
+  border-color: var(--color-primary-light);
 }
 .sourceFileName {
-  color: var(--color-primary-light, #1668dc);
+  color: var(--color-primary-light);
 }
 .sourceLineNumber {
-  color: var(--text-muted, #666);
+  color: var(--text-muted);
 }
 .componentStack {
   display: flex;
@@ -187,7 +266,7 @@
 .promptContainer {
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color, #333);
+  border-top: 1px solid var(--border-primary);
 }
 .promptHeader {
   margin-bottom: 8px;
@@ -212,9 +291,6 @@
   text-align: center;
   font-size: 12px;
 }
-.askAiRow {
-  margin-top: 12px;
-}
 .logPanel {
   margin-top: 8px;
 }
@@ -224,9 +300,9 @@
   font-size: 12px;
 }
 .logContent {
-  background: var(--bg-code, #1a1a1a);
-  color: var(--text-secondary, #b0b0b0);
-  border: 1px solid var(--border-color, #333);
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
   border-radius: 6px;
   padding: 8px;
   font-size: 11px;
@@ -236,4 +312,54 @@
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0;
+}
+
+/* StatusBar */
+.statusBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 12px;
+  background: var(--bg-container);
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.statusBarLeft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.statusBarRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.statusDotConnected {
+  background: var(--color-success);
+}
+.statusDotDisconnected {
+  background: var(--text-muted);
+}
+.statusLabel {
+  color: var(--text-muted);
+}
+.statusSep {
+  color: var(--border-primary);
+  margin: 0 2px;
+}
+.statusElement {
+  font-family: monospace;
+  color: var(--text-secondary);
+}
+.statusClass {
+  color: var(--text-muted);
 }
