@@ -26,6 +26,7 @@ import UltraPlanModal from './UltraPlanModal';
 import CustomUltraplanEditModal from './CustomUltraplanEditModal';
 import { buildLocalUltraplan } from '../utils/ultraplanTemplates';
 import { getModelMaxTokens } from '../utils/helpers';
+import { buildElementContext } from '../utils/elementContext';
 import { Virtuoso } from 'react-virtuoso';
 import { isMobile, isIOS, isPad } from '../env';
 import { t } from '../i18n';
@@ -326,6 +327,7 @@ class ChatView extends React.Component {
       nextProps.lang !== this.props.lang ||
       nextProps.showThinkingSummaries !== this.props.showThinkingSummaries ||
       nextProps.fileLoading !== this.props.fileLoading ||
+      nextProps.selectedElement !== this.props.selectedElement ||
       nextState !== this.state
     );
   }
@@ -2398,20 +2400,30 @@ class ChatView extends React.Component {
     const userText = textarea.value.trim();
     // 拼接 pendingImages 路径到消息前面（发送时才注入，支持用户删除后不发）
     const imagePaths = this.state.pendingImages.map(img => `"${img.path.replace(/"/g, '')}"`).join(' ');
-    const text = imagePaths ? (userText ? `${imagePaths} ${userText}` : imagePaths) : userText;
+    let text = imagePaths ? (userText ? `${imagePaths} ${userText}` : imagePaths) : userText;
     if (!text) return;
+    // 选中元素时不再自动注入详细上下文，用户通过 [SelectUI #N] 标记传达选中信息
     if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
       if (this.props.sdkMode) {
         // SDK 模式：发送结构化用户消息
         this._inputWs.send(JSON.stringify({ type: 'sdk-user-message', text }));
       } else {
-        // PTY 模式：Claude Code TUI 逐字符处理输入，需要先发文字再单独发回车
-        this._inputWs.send(JSON.stringify({ type: 'input', data: text }));
-        setTimeout(() => {
-          if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
-            this._inputWs.send(JSON.stringify({ type: 'input', data: '\r' }));
-          }
-        }, 50);
+        // PTY 模式：多行文本用 bracketed paste 包裹，防止换行被当成回车逐行提交
+        if (text.includes('\n') || text.includes('\r')) {
+          this._inputWs.send(JSON.stringify({ type: 'input', data: `\x1b[200~${text}\x1b[201~` }));
+          setTimeout(() => {
+            if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+              this._inputWs.send(JSON.stringify({ type: 'input', data: '\r' }));
+            }
+          }, 50);
+        } else {
+          this._inputWs.send(JSON.stringify({ type: 'input', data: text }));
+          setTimeout(() => {
+            if (this._inputWs && this._inputWs.readyState === WebSocket.OPEN) {
+              this._inputWs.send(JSON.stringify({ type: 'input', data: '\r' }));
+            }
+          }, 50);
+        }
       }
       textarea.value = '';
       textarea.style.height = 'auto';
@@ -3375,6 +3387,14 @@ class ChatView extends React.Component {
                 onDeny={(id) => this.handlePlanReject(id, '')}
                 visible={true}
               />
+            )}
+            {this.props.selectedElement && (
+              <div className="ccv-element-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(22,104,220,0.12)', border: '1px solid rgba(22,104,220,0.3)', borderRadius: 4, padding: '2px 6px 2px 8px', margin: '0 0 6px 0', fontSize: 12, color: 'var(--color-primary-light, #1668dc)', fontFamily: 'monospace' }}>
+                <span className="ccv-element-tag-content">
+                  选中元素
+                </span>
+                <span className="ccv-element-tag-close" onClick={this.props.onDeselectElement} style={{ cursor: 'pointer', fontSize: 14, color: 'var(--text-muted)', padding: '0 2px', borderRadius: 2 }}>&times;</span>
+              </div>
             )}
             <ChatInputBar
               inputRef={this._inputRef}

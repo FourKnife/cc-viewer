@@ -862,21 +862,99 @@
 /* Visual Editor 三栏布局 */
 .contentVisual {
   display: flex !important;
-  flex-direction: row !important;
+  flex-direction: column !important;
 }
-.visualSidebar {
-  width: 280px;
-  min-width: 280px;
-  background: var(--bg-primary);
-  border-right: 1px solid var(--border-color);
-  padding: 16px;
-  overflow-y: auto;
+.visualMain {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
-.visualPreview {
+.visualCenter {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+.visualPreviewArea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.visualHResizer {
+  height: 4px;
+  cursor: row-resize;
+  background: var(--border-primary);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.visualHResizer:hover,
+.visualHResizer:active {
+  background: var(--color-primary-light);
+}
+.visualOperationArea {
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-primary);
+  padding: 12px 16px;
+  background: var(--bg-base-alt);
+  display: flex;
+  flex-direction: column;
+}
+.visualPipelinePlaceholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.visualTerminalWrapper {
+  display: flex;
+  flex-direction: column;
+  width: 400px;
+  min-width: 400px;
+  border-left: 1px solid var(--border-primary);
+}
+
+.visualElementTag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-base-alt);
+  border-bottom: 1px solid var(--border-light);
+  font-family: monospace;
+}
+
+.visualElementTagClass {
+  color: var(--text-muted);
+}
+
+.visualElementTagClose {
+  cursor: pointer;
+  padding: 0 4px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.visualElementTagClose:hover {
+  color: var(--text-primary);
+}
+
+.visualElementTagSend {
+  cursor: pointer;
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.visualElementTagSend:hover {
+  color: var(--color-primary-light);
 }
 
 /* Resume modal footer */

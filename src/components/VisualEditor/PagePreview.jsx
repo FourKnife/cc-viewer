@@ -1,8 +1,9 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Input, Empty, Tooltip } from 'antd';
-import { ReloadOutlined, LinkOutlined, ArrowRightOutlined, AimOutlined } from '@ant-design/icons';
+import { Input, Typography, Tooltip, message } from 'antd';
+import { ReloadOutlined, LinkOutlined, ArrowRightOutlined, AimOutlined, PlayCircleOutlined, CameraOutlined, DiffOutlined, LoadingOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import { apiUrl } from '../../utils/apiUrl';
+import ScreenshotCompare from './ScreenshotCompare';
 import styles from './styles.module.css';
 
 // 将 http://localhost:PORT/path 转为代理 URL /api/proxy/PORT/path
@@ -18,12 +19,132 @@ function toProxyUrl(url) {
   }
 }
 
-export default function PagePreview({ port, onElementHover, onElementSelect, onElementDeselect }) {
+// ---- 结构化样式对比工具 ----
+
+// 将 Sketch 颜色 (#rrggbbaa) 归一化为 CSS rgb/rgba
+function normalizeSketchColor(hex) {
+  if (!hex || typeof hex !== 'string') return null;
+  hex = hex.replace(/^#/, '');
+  if (hex.length === 8) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    const a = parseInt(hex.slice(6, 8), 16) / 255;
+    return a >= 0.99 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${a.toFixed(2)})`;
+  }
+  if (hex.length === 6) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  return hex;
+}
+
+// Sketch fontWeight 数字映射 (Sketch: 3=light, 4=regular, 5=medium, 6=semibold, 7=bold)
+function normalizeSketchFontWeight(w) {
+  const map = { 2: '200', 3: '300', 4: '400', 5: '500', 6: '600', 7: '700', 8: '800', 9: '900' };
+  return map[w] || String(w);
+}
+
+// Sketch alignment 映射
+function normalizeSketchAlignment(a) {
+  const map = { left: 'left', right: 'right', center: 'center', justified: 'justify' };
+  return map[a] || a;
+}
+
+// 构建结构化差异表
+function compareStyles(domStyles, sketchData) {
+  const diffs = [];
+
+  function addComparison(property, domValue, sketchValue, category) {
+    if (!domValue && !sketchValue) return;
+    const match = domValue === sketchValue;
+    diffs.push({ property, domValue: domValue || '-', sketchValue: sketchValue || '-', match, category });
+  }
+
+  // 尺寸对比 (Sketch frame vs DOM width/height)
+  if (sketchData.frame) {
+    addComparison('width', domStyles.width, sketchData.frame.width + 'px', 'layout');
+    addComparison('height', domStyles.height, sketchData.frame.height + 'px', 'layout');
+  }
+
+  // 文字样式对比
+  if (sketchData.textStyle) {
+    const ts = sketchData.textStyle;
+    if (ts.fontSize != null) {
+      addComparison('font-size', domStyles.fontSize, ts.fontSize + 'px', 'typography');
+    }
+    if (ts.fontWeight != null) {
+      addComparison('font-weight', domStyles.fontWeight, normalizeSketchFontWeight(ts.fontWeight), 'typography');
+    }
+    if (ts.textColor) {
+      addComparison('color', domStyles.color, normalizeSketchColor(ts.textColor), 'typography');
+    }
+    if (ts.alignment) {
+      addComparison('text-align', domStyles.textAlign, normalizeSketchAlignment(ts.alignment), 'typography');
+    }
+    if (ts.lineHeight != null) {
+      addComparison('line-height', domStyles.lineHeight, ts.lineHeight + 'px', 'typography');
+    }
+    if (ts.letterSpacing != null && ts.letterSpacing !== 0) {
+      addComparison('letter-spacing', domStyles.letterSpacing, ts.letterSpacing + 'px', 'typography');
+    }
+  }
+
+  // 背景/填充对比
+  if (sketchData.fills && sketchData.fills.length > 0) {
+    const fill = sketchData.fills[0];
+    if (fill.fillType === 'Color' && fill.color) {
+      addComparison('background-color', domStyles.backgroundColor, normalizeSketchColor(fill.color), 'fill');
+    } else if (fill.fillType === 'Gradient' && fill.gradient) {
+      const stops = fill.gradient.stops;
+      if (stops && stops.length >= 2) {
+        const gradientCSS = `linear-gradient(${stops.map(s => normalizeSketchColor(s.color)).join(', ')})`;
+        addComparison('background', domStyles.backgroundImage, gradientCSS, 'fill');
+      }
+    }
+  }
+
+  // 边框对比
+  if (sketchData.borders && sketchData.borders.length > 0) {
+    const border = sketchData.borders[0];
+    const sketchBorder = `${border.thickness}px solid ${normalizeSketchColor(border.color)}`;
+    const domBorder = `${domStyles.borderTopWidth} ${domStyles.borderTopStyle} ${domStyles.borderTopColor}`;
+    addComparison('border', domBorder, sketchBorder, 'border');
+  }
+
+  // 圆角对比
+  if (sketchData.borderRadius && sketchData.borderRadius.some(r => r > 0)) {
+    const sketchRadius = sketchData.borderRadius.length === 1
+      ? sketchData.borderRadius[0] + 'px'
+      : sketchData.borderRadius.map(r => r + 'px').join(' ');
+    addComparison('border-radius', domStyles.borderRadius, sketchRadius, 'border');
+  }
+
+  // 阴影对比
+  if (sketchData.shadows && sketchData.shadows.length > 0) {
+    const s = sketchData.shadows[0];
+    const sketchShadow = `${normalizeSketchColor(s.color)} ${s.x}px ${s.y}px ${s.blur}px ${s.spread}px`;
+    addComparison('box-shadow', domStyles.boxShadow, sketchShadow, 'shadow');
+  }
+
+  // 透明度对比
+  if (sketchData.opacity != null && sketchData.opacity < 1) {
+    addComparison('opacity', domStyles.opacity, String(sketchData.opacity), 'other');
+  }
+
+  return diffs;
+}
+
+export default function PagePreview({ port, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot }) {
   const [urlInput, setUrlInput] = useState('');
   const [iframeSrc, setIframeSrc] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
   const [inspecting, setInspecting] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [screenshotData, setScreenshotData] = useState(null);
+  const [autoComparing, setAutoComparing] = useState(false);
   const navigatedRef = useRef(false);
   const iframeRef = useRef(null);
   const loadTimerRef = useRef(null);
@@ -78,30 +199,168 @@ export default function PagePreview({ port, onElementHover, onElementSelect, onE
     });
   }, [sendInspectorCmd, onElementDeselect]);
 
+  // 截取 iframe 内选中元素区域
+  const captureElementScreenshot = useCallback(async (elementData) => {
+    const frame = iframeRef.current;
+    if (!frame?.contentDocument?.documentElement || !elementData?.rect) return;
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const { x, y, width, height } = elementData.rect;
+      const canvas = await html2canvas(frame.contentDocument.documentElement, {
+        useCORS: true, scale: 2, allowTaint: true,
+        width: frame.clientWidth, height: frame.clientHeight,
+        x: 0, y: 0,
+      });
+      // 裁剪出元素区域
+      const cropped = document.createElement('canvas');
+      const dpr = 2;
+      cropped.width = width * dpr;
+      cropped.height = height * dpr;
+      const ctx = cropped.getContext('2d');
+      ctx.drawImage(canvas, x * dpr, y * dpr, width * dpr, height * dpr, 0, 0, width * dpr, height * dpr);
+      cropped.toBlob(blob => {
+        if (blob) onElementScreenshot?.(blob, elementData);
+      }, 'image/png');
+    } catch (err) {
+      console.warn('Element screenshot failed:', err);
+    }
+  }, [onElementScreenshot]);
+
   // 监听 inspector postMessage
   useEffect(() => {
     function handleMessage(e) {
       if (!e.data || e.data.source !== 'cc-visual-inspector') return;
       switch (e.data.type) {
         case 'hover': onElementHover?.(e.data.data); break;
-        case 'select': onElementSelect?.(e.data.data); break;
+        case 'select':
+          onElementSelect?.(e.data.data);
+          captureElementScreenshot(e.data.data);
+          break;
         case 'deselect': onElementDeselect?.(); break;
         case 'ready': sendInspectorCmd(inspecting); break;
       }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [onElementHover, onElementSelect, onElementDeselect, sendInspectorCmd, inspecting]);
+  }, [onElementHover, onElementSelect, onElementDeselect, sendInspectorCmd, inspecting, captureElementScreenshot]);
 
   const handleRefresh = useCallback(() => {
     setIframeKey(k => k + 1);
   }, []);
 
+  const handleScreenshot = useCallback(async () => {
+    const frame = iframeRef.current;
+    if (!frame?.contentDocument?.documentElement) return;
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(frame.contentDocument.documentElement, { useCORS: true, scale: 2, allowTaint: true, width: frame.clientWidth, height: frame.clientHeight });
+      setScreenshotData({ imageA: canvas.toDataURL('image/png') });
+    } catch (err) {
+      console.warn('Screenshot failed:', err);
+    }
+  }, []);
+
+  const handleCompareSketch = useCallback(async () => {
+    const frame = iframeRef.current;
+    if (!frame?.contentDocument?.documentElement) return;
+    try {
+      const [html2canvas, sketchRes] = await Promise.all([
+        import('html2canvas').then(m => m.default),
+        fetch(apiUrl('/api/sketch-screenshot')).then(r => r.json()),
+      ]);
+      const canvas = await html2canvas(frame.contentDocument.documentElement, { useCORS: true, scale: 2, allowTaint: true, width: frame.clientWidth, height: frame.clientHeight });
+      const imageA = canvas.toDataURL('image/png');
+      const imageB = sketchRes.error ? null : sketchRes.image;
+      const sketchError = sketchRes.error || null;
+      setScreenshotData({ imageA, imageB, sketchError });
+    } catch (err) {
+      console.warn('Compare failed:', err);
+    }
+  }, []);
+
+  const handleAutoCompare = useCallback(async () => {
+    if (!selectedElement?.computedStyle || sketchMcpStatus !== 'connected') return;
+
+    setAutoComparing(true);
+    try {
+      // Step 1: 从服务端获取 Sketch 图层结构化样式
+      const sketchRes = await fetch(apiUrl('/api/sketch-layer-styles')).then(r => r.json());
+
+      if (sketchRes.error) {
+        message.warning(t('visual.structCompare.sketchError'));
+        return;
+      }
+
+      // Step 2: 结构化属性对比
+      const diffs = compareStyles(selectedElement.computedStyle, sketchRes);
+      const mismatches = diffs.filter(d => !d.match);
+
+      // Step 3: 无差异时提示并返回
+      if (mismatches.length === 0) {
+        message.success(t('visual.structCompare.noMismatch'));
+        return;
+      }
+
+      // Step 4: 构建结构化修复 Prompt
+      const el = selectedElement;
+      const parts = [];
+      parts.push('请根据以下结构化对比结果，调整代码使页面元素与 Sketch 设计稿一致：');
+      parts.push('');
+
+      // 元素信息
+      parts.push(`【元素信息】`);
+      parts.push(`标签: <${el.tag}>${el.className ? ' class="' + el.className + '"' : ''}${el.id ? ' id="' + el.id + '"' : ''}`);
+      if (el.text) parts.push(`文本: "${el.text.slice(0, 50)}"`);
+      if (el.sourceInfo?.fileName) {
+        parts.push(`源码: ${el.sourceInfo.fileName}:${el.sourceInfo.lineNumber}`);
+      }
+      parts.push('');
+
+      // Sketch 图层信息
+      parts.push(`【Sketch 图层】`);
+      parts.push(`名称: ${sketchRes.name} (${sketchRes.type})`);
+      if (sketchRes.frame) {
+        parts.push(`尺寸: ${sketchRes.frame.width} × ${sketchRes.frame.height}`);
+      }
+      parts.push('');
+
+      // 差异表
+      parts.push(`【样式差异】共 ${mismatches.length} 项不匹配:`);
+      parts.push('');
+      parts.push('| 属性 | 当前代码值 | 设计稿值 | 类别 |');
+      parts.push('|------|-----------|---------|------|');
+      for (const d of mismatches) {
+        parts.push(`| ${d.property} | ${d.domValue} | ${d.sketchValue} | ${d.category} |`);
+      }
+      parts.push('');
+
+      // 修复指令
+      parts.push('请逐个修复以上差异项，修改对应的 CSS/Less 文件。每个属性直接使用"设计稿值"列的值。');
+      if (sketchRes.textStyle && sketchRes.frame) {
+        parts.push(`注意: 如果设计稿基准是 750px 宽度，字体大小需要除以 2 转换到 375px 视口。`);
+      }
+
+      const prompt = parts.join('\n');
+
+      // Step 5: 发送到终端
+      window.dispatchEvent(new CustomEvent('ccv-terminal-send', { detail: { text: prompt } }));
+      message.success(t('visual.structCompare.sent'));
+
+    } catch (err) {
+      console.warn('Structural compare failed:', err);
+    } finally {
+      setAutoComparing(false);
+    }
+  }, [selectedElement, sketchMcpStatus]);
+
   // 无端口且无已加载页面时显示空状态
   if (!port && !iframeSrc) {
     return (
       <div className={styles.emptyPreview}>
-        <Empty description={t('visual.noProject')} />
+        <div className={styles.emptyGuide}>
+          <PlayCircleOutlined className={styles.emptyGuideIcon} />
+          <Typography.Text className={styles.emptyGuideText}>{t('visual.emptyGuide')}</Typography.Text>
+        </div>
       </div>
     );
   }
@@ -126,6 +385,23 @@ export default function PagePreview({ port, onElementHover, onElementSelect, onE
         />
         <ArrowRightOutlined className={styles.urlGo} onClick={() => handleNavigate(urlInput)} />
         <ReloadOutlined className={styles.urlRefresh} onClick={handleRefresh} />
+        <Tooltip title={t('visual.screenshot')}>
+          <CameraOutlined className={styles.urlRefresh} onClick={handleScreenshot} />
+        </Tooltip>
+        {autoComparing ? (
+          <LoadingOutlined className={styles.urlRefresh} spin />
+        ) : (
+          <Tooltip title={
+            !selectedElement ? t('visual.structCompare.needSelection') :
+            sketchMcpStatus !== 'connected' ? t('visual.structCompare.needSketch') :
+            t('visual.structCompare')
+          }>
+            <DiffOutlined
+              className={`${styles.urlRefresh} ${(!selectedElement || sketchMcpStatus !== 'connected') ? styles.urlBtnDisabled : ''}`}
+              onClick={(!selectedElement || sketchMcpStatus !== 'connected') ? undefined : handleAutoCompare}
+            />
+          </Tooltip>
+        )}
       </div>
       {loadError && <div className={styles.iframeError}>{loadError}</div>}
       <div className={styles.iframeArea}>
@@ -142,6 +418,14 @@ export default function PagePreview({ port, onElementHover, onElementSelect, onE
           )}
         </div>
       </div>
+      {screenshotData && (
+        <ScreenshotCompare
+          imageA={screenshotData.imageA}
+          imageB={screenshotData.imageB || null}
+          sketchError={screenshotData.sketchError || null}
+          onClose={() => setScreenshotData(null)}
+        />
+      )}
     </div>
   );
 }

@@ -104,6 +104,7 @@
   "dependencies": {
     "dompurify": "^3.3.3",
     "node-pty": "^1.1.0",
+    "pixelmatch": "^7.1.0",
     "undici": "^7.22.0",
     "ws": "^8.19.0"
   },

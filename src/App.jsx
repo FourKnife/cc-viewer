@@ -3,7 +3,7 @@ import { ConfigProvider, Layout, theme, Modal, Button, Checkbox, Spin, Alert, me
 import { UploadOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import AppBase, { styles } from './AppBase';
 import { isMobile, setViewMode } from './env';
-import { uploadFileAndGetPath } from './components/TerminalPanel';
+import TerminalPanel, { uploadFileAndGetPath } from './components/TerminalPanel';
 import AppHeader from './components/AppHeader';
 import RequestList from './components/RequestList';
 import DetailPanel from './components/DetailPanel';
@@ -19,6 +19,8 @@ import { apiUrl } from './utils/apiUrl';
 import ProjectLauncher from './components/VisualEditor/ProjectLauncher';
 import PagePreview from './components/VisualEditor/PagePreview';
 import ElementInfo from './components/VisualEditor/ElementInfo';
+import StatusBar from './components/VisualEditor/StatusBar';
+import SideMenu from './components/VisualEditor/SideMenu';
 // PromptInput 已移除 — AI 修改通过右侧 ChatView 输入
 
 class App extends AppBase {
@@ -30,9 +32,14 @@ class App extends AppBase {
       terminalVisible: true,
       currentTab: 'context',
       pendingCacheHighlight: null,
+      visualPendingImages: [],
+      visualMenuKey: 'ui-edit',
+      visualOperationHeight: 220,
+      launcherCollapsed: false,
     });
     this.appHeaderRef = React.createRef();
     this._getTokenStatsContent = () => this.appHeaderRef.current?.renderTokenStats?.() ?? null;
+    this.visualCenterRef = React.createRef();
   }
 
   componentDidMount() {
@@ -68,7 +75,40 @@ class App extends AppBase {
     super.componentWillUnmount();
   }
 
+  componentDidUpdate(prevProps, prevState) {
+    // 项目启动成功后自动折叠 ProjectLauncher
+    const prevStatus = prevState.projectStatus?.status;
+    const curStatus = this.state.projectStatus?.status;
+    if (prevStatus !== 'running' && curStatus === 'running') {
+      this.setState({ launcherCollapsed: true });
+    }
+    // 项目停止后自动展开
+    if (prevStatus === 'running' && curStatus !== 'running') {
+      this.setState({ launcherCollapsed: false });
+    }
+  }
+
   // ─── PC 专属方法 ───────────────────────────────────────
+
+  handleVerticalResizeStart = (e) => {
+    e.preventDefault();
+    const onMouseMove = (ev) => {
+      const center = this.visualCenterRef.current;
+      if (!center) return;
+      const rect = center.getBoundingClientRect();
+      let h = rect.bottom - ev.clientY;
+      const maxH = rect.height * 0.6;
+      if (h < 120) h = 120;
+      if (h > maxH) h = maxH;
+      this.setState({ visualOperationHeight: h });
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
 
   handleViewRequest = (index) => {
     this.setState({ viewMode: 'raw', selectedIndex: index, scrollCenter: true });
@@ -454,29 +494,97 @@ class App extends AppBase {
               )
             )}
             {viewMode === 'visual' && (
-              <div className={styles.visualSidebar}>
-                <ProjectLauncher
-                  status={this.state.projectStatus}
-                  output={this.state.projectOutput}
-                  onStart={this.handleStartProject}
-                  onStop={this.handleStopProject}
+              <div className={styles.visualMain}>
+                <SideMenu
+                  activeKey={this.state.visualMenuKey}
+                  onSelect={(key) => this.setState({ visualMenuKey: key })}
                 />
-                <ElementInfo element={this.state.selectedElement} />
+                <div className={styles.visualCenter} ref={this.visualCenterRef}>
+                  <StatusBar
+                    sketchMcpStatus={this.state.sketchMcpStatus}
+                    selectedElement={this.state.selectedElement}
+                    sketchSelectedLayer={this.state.sketchSelectedLayer}
+                  />
+                  {this.state.visualMenuKey === 'ui-edit' ? (
+                    <>
+                      <div className={styles.visualPreviewArea}>
+                        <PagePreview
+                          port={this.state.projectStatus?.port}
+                          onElementHover={(el) => {}}
+                          onElementSelect={(el) => this.setState({ selectedElement: el })}
+                          onElementDeselect={() => this.setState({ selectedElement: null, visualPendingImages: [] })}
+                          selectedElement={this.state.selectedElement}
+                          sketchMcpStatus={this.state.sketchMcpStatus}
+                          onElementScreenshot={this.handleElementScreenshot}
+                        />
+                      </div>
+                      <div
+                        className={styles.visualHResizer}
+                        onMouseDown={this.handleVerticalResizeStart}
+                      />
+                      <div
+                        className={styles.visualOperationArea}
+                        style={{ height: this.state.visualOperationHeight }}
+                      >
+                        <ProjectLauncher
+                          status={this.state.projectStatus}
+                          output={this.state.projectOutput}
+                          onStart={this.handleStartProject}
+                          onStop={this.handleStopProject}
+                          defaultPath={this.state.projectDir}
+                          collapsed={this.state.launcherCollapsed}
+                          onToggleCollapse={() => this.setState(prev => ({ launcherCollapsed: !prev.launcherCollapsed }))}
+                        />
+                        <ElementInfo element={this.state.selectedElement} />
+                      </div>
+                    </>
+                  ) : (
+                    <div className={styles.visualPipelinePlaceholder}>
+                      {t('visual.pipelineComingSoon')}
+                    </div>
+                  )}
+                </div>
+                <div className={styles.visualTerminalWrapper}>
+                  {this.state.selectedElement && (
+                    <div className={styles.visualElementTag}>
+                      <span>&lt;{this.state.selectedElement.tag}&gt;</span>
+                      {this.state.selectedElement.className && (
+                        <span className={styles.visualElementTagClass}>
+                          .{this.state.selectedElement.className.split(' ').slice(0, 2).join(' .')}
+                        </span>
+                      )}
+                      <span
+                        className={styles.visualElementTagSend}
+                        onClick={() => {
+                          const el = this.state.selectedElement;
+                          if (!el) return;
+                          const parts = [`<${el.tag}>`];
+                          if (el.className) parts.push(`.${el.className.split(' ').slice(0, 2).join('.')}`);
+                          if (el.id) parts.push(`#${el.id}`);
+                          if (el.textContent) parts.push(`text="${el.textContent.slice(0, 50)}"`);
+                          window.dispatchEvent(new CustomEvent('ccv-terminal-send', { detail: { text: parts.join(' ') } }));
+                        }}
+                        title="Send to terminal"
+                      >&#x27a4;</span>
+                      <span className={styles.visualElementTagClose} onClick={() => this.setState({ selectedElement: null })}>&times;</span>
+                    </div>
+                  )}
+                  <TerminalPanel
+                    pendingImages={this.state.visualPendingImages}
+                    onFilePath={() => {}}
+                    onRemovePendingImage={(i) => this.setState(prev => ({ visualPendingImages: prev.visualPendingImages.filter((_, idx) => idx !== i) }))}
+                    onClearPendingImages={() => this.setState({ visualPendingImages: [] })}
+                    modelName={this.state.contextWindow?.model}
+                    selectedElement={this.state.selectedElement}
+                  />
+                </div>
               </div>
             )}
-            {viewMode === 'visual' && (
-              <div className={styles.visualPreview}>
-                <PagePreview
-                  port={this.state.projectStatus?.port}
-                  onElementHover={(el) => {}}
-                  onElementSelect={(el) => this.setState({ selectedElement: el })}
-                  onElementDeselect={() => this.setState({ selectedElement: null })}
-                />
-              </div>
-            )}
-            <div className={styles.chatViewWrapper} style={{ display: (viewMode === 'chat' || viewMode === 'visual') ? 'flex' : 'none', ...(viewMode === 'visual' ? { width: '400px', minWidth: '400px', borderLeft: '1px solid var(--border-color)' } : {}) }}>
-              <ChatView compact={viewMode === 'visual'} getTokenStatsContent={this._getTokenStatsContent} requests={filteredRequests} mainAgentSessions={mainAgentSessions} streamingLatest={this.state.streamingLatest} userProfile={this.state.userProfile} collapseToolResults={this.state.collapseToolResults} expandThinking={this.state.expandThinking} showFullToolContent={this.state.showFullToolContent} showThinkingSummaries={this.state.showThinkingSummaries} onViewRequest={this.handleViewRequest} scrollToTimestamp={this.state.chatScrollToTs} onScrollTsDone={this.handleScrollTsDone} cliMode={this._isLocalLog ? false : this.state.cliMode} sdkMode={this._isLocalLog ? false : this.state.sdkMode} terminalVisible={viewMode === 'visual' ? false : (this._isLocalLog ? false : (this.state.sdkMode ? false : this.state.terminalVisible))} onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))} pendingUploadPaths={this.state.pendingUploadPaths} onUploadPathsConsumed={this.handleUploadPathsConsumed} fileLoading={this.state.fileLoading} isStreaming={this.state.isStreaming} hasMoreHistory={this.state.hasMoreHistory} loadingMore={this.state.loadingMore} onLoadMoreHistory={() => this.loadMoreHistory()} loadingSessionId={this.state.loadingSessionId} onLoadSession={(sid) => this.loadSession(sid)} lang={this.state.lang} autoApproveSeconds={this.state.autoApproveSeconds} onAutoApproveChange={this.handleAutoApproveChange} onClearContextOptimistic={this.handleClearContextOptimistic} />
+            {viewMode !== 'visual' && (
+            <div className={styles.chatViewWrapper} style={{ display: viewMode === 'chat' ? 'flex' : 'none' }}>
+              <ChatView compact={false} getTokenStatsContent={this._getTokenStatsContent} requests={filteredRequests} mainAgentSessions={mainAgentSessions} streamingLatest={this.state.streamingLatest} userProfile={this.state.userProfile} collapseToolResults={this.state.collapseToolResults} expandThinking={this.state.expandThinking} showFullToolContent={this.state.showFullToolContent} showThinkingSummaries={this.state.showThinkingSummaries} onViewRequest={this.handleViewRequest} scrollToTimestamp={this.state.chatScrollToTs} onScrollTsDone={this.handleScrollTsDone} cliMode={this._isLocalLog ? false : this.state.cliMode} sdkMode={this._isLocalLog ? false : this.state.sdkMode} terminalVisible={this._isLocalLog ? false : (this.state.sdkMode ? false : this.state.terminalVisible)} onToggleTerminal={() => this.setState(prev => ({ terminalVisible: !prev.terminalVisible }))} pendingUploadPaths={this.state.pendingUploadPaths} onUploadPathsConsumed={this.handleUploadPathsConsumed} fileLoading={this.state.fileLoading} isStreaming={this.state.isStreaming} hasMoreHistory={this.state.hasMoreHistory} loadingMore={this.state.loadingMore} onLoadMoreHistory={() => this.loadMoreHistory()} loadingSessionId={this.state.loadingSessionId} onLoadSession={(sid) => this.loadSession(sid)} lang={this.state.lang} autoApproveSeconds={this.state.autoApproveSeconds} onAutoApproveChange={this.handleAutoApproveChange} onClearContextOptimistic={this.handleClearContextOptimistic} />
             </div>
+            )}
           </Layout.Content>
           <div className={styles.footer}>
             <CountryFlag />

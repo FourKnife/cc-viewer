@@ -52,6 +52,7 @@ class AppBase extends React.Component {
       lang: getLang(),
       userProfile: null,    // { name, avatar }
       projectName: '',      // 当前监控的项目名称
+      projectDir: '',       // 启动 ccv 时的 CWD（用于 ProjectLauncher 默认路径）
       resumeModalVisible: false,
       resumeFileName: '',
       resumeRememberChoice: false,
@@ -91,6 +92,8 @@ class AppBase extends React.Component {
       projectStatus: null,
       projectOutput: '',
       selectedElement: null,
+      sketchMcpStatus: 'disconnected',
+      sketchSelectedLayer: null,
     };
     this.eventSource = null;
     this._currentSessionId = null;
@@ -218,6 +221,33 @@ class AppBase extends React.Component {
       if (data.claudeAvailable === false) this.setState({ claudeMissing: true });
     }).catch(() => {});
 
+    // Sketch MCP 心跳检测（no-cors HEAD 避免 CORS 问题）
+    this._checkSketchMcp = () => {
+      fetch('http://localhost:31126/mcp', { method: 'HEAD', mode: 'no-cors' })
+        .then(() => {
+          if (!this._unmounted) this.setState({ sketchMcpStatus: 'connected' });
+        })
+        .catch(() => {
+          if (!this._unmounted) this.setState({ sketchMcpStatus: 'disconnected', sketchSelectedLayer: null });
+        });
+    };
+    // Sketch 选中图层查询（通过后端代理避免 CORS）
+    this._checkSketchSelection = () => {
+      fetch('/api/sketch-selection')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (this._unmounted || !data) return;
+          this.setState({ sketchSelectedLayer: data.layerName || null });
+        })
+        .catch(() => {});
+    };
+    this._checkSketchMcp();
+    this._checkSketchSelection();
+    this._sketchMcpTimer = setInterval(() => {
+      this._checkSketchMcp();
+      this._checkSketchSelection();
+    }, 15000);
+
     // 获取用户偏好设置（包含 filterIrrelevant）
     // 用 Promise 保存，供 initSSE 等待（resume_prompt 需要知道 resumeAutoChoice）
     this._prefsReady = fetch(apiUrl('/api/preferences'))
@@ -309,6 +339,12 @@ class AppBase extends React.Component {
       })
       .catch(() => { });
 
+    // 获取项目目录（用于 ProjectLauncher 默认路径）
+    fetch(apiUrl('/api/project-dir'))
+      .then(res => res.json())
+      .then(data => { if (data.dir) this.setState({ projectDir: data.dir }); })
+      .catch(() => {});
+
     // 获取当前监控的项目名称
     const params = new URLSearchParams(window.location.search);
     const logfile = params.get('logfile');
@@ -387,6 +423,8 @@ class AppBase extends React.Component {
   }
 
   componentWillUnmount() {
+    this._unmounted = true;
+    if (this._sketchMcpTimer) clearInterval(this._sketchMcpTimer);
     if (this.eventSource) this.eventSource.close();
     if (this._localLogES) { this._localLogES.close(); this._localLogES = null; }
     if (this._autoSelectTimer) clearTimeout(this._autoSelectTimer);
@@ -889,6 +927,13 @@ class AppBase extends React.Component {
             return { projectOutput: output };
           });
         } catch { }
+      });
+      this.eventSource.addEventListener('compare_analysis', (event) => {
+        this._resetSSETimeout();
+        try {
+          const data = JSON.parse(event.data);
+          window.dispatchEvent(new CustomEvent('compare-analysis', { detail: data }));
+        } catch {}
       });
       this.eventSource.addEventListener('ping', () => { this._resetSSETimeout(); });
       this.eventSource.addEventListener('streaming_status', (e) => {
@@ -1743,6 +1788,17 @@ class AppBase extends React.Component {
 
   handleStopProject = async () => {
     await fetch(apiUrl('/api/project/stop'), { method: 'POST' });
+  };
+
+  handleElementScreenshot = async (blob, elementData) => {
+    try {
+      const { uploadFileAndGetPath } = await import('./components/TerminalPanel');
+      const file = new File([blob], `element-${Date.now()}.png`, { type: 'image/png' });
+      const path = await uploadFileAndGetPath(file);
+      this.setState({ visualPendingImages: [{ name: file.name, path }] });
+    } catch (err) {
+      console.warn('Element screenshot upload failed:', err);
+    }
   };
 
   handleAIModify = (prompt) => {

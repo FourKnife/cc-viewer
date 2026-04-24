@@ -7770,9 +7770,212 @@ const i18nData = {
     "zh": "请先在终端中启动 Claude Code", "en": "Please start Claude Code in terminal first",
     "zh-TW": "請先在終端中啟動 Claude Code", "ko": "터미널에서 Claude Code를 먼저 시작하세요", "ja": "ターミナルでClaude Codeを起動してください"
   },
-  "visual.askAI": {
-    "zh": "AI 修改此元素", "en": "AI Modify Element",
-    "zh-TW": "AI 修改此元素", "ko": "AI로 요소 수정", "ja": "AIで要素を修正"
+  "visual.statusConnected": {
+    "zh": "已连接", "en": "Connected",
+    "zh-TW": "已連線", "ko": "연결됨", "ja": "接続済み"
+  },
+  "visual.statusDisconnected": {
+    "zh": "未连接", "en": "Disconnected",
+    "zh-TW": "未連線", "ko": "연결 안됨", "ja": "未接続"
+  },
+  "visual.emptyGuide": {
+    "zh": "在左侧面板启动项目，或输入端口号预览页面",
+    "en": "Start a project in the left panel, or enter a port number to preview",
+    "zh-TW": "在左側面板啟動專案，或輸入埠號預覽頁面",
+    "ko": "왼쪽 패널에서 프로젝트를 시작하거나 포트 번호를 입력하여 미리보기",
+    "ja": "左パネルでプロジェクトを起動するか、ポート番号を入力してプレビュー"
+  },
+  "visual.screenshot": {
+    "zh": "截图",
+    "en": "Screenshot",
+    "zh-TW": "截圖",
+    "ko": "스크린샷",
+    "ja": "スクリーンショット"
+  },
+  "visual.compareSketch": {
+    "zh": "与 Sketch 对比",
+    "en": "Compare with Sketch",
+    "zh-TW": "與 Sketch 對比",
+    "ko": "Sketch와 비교",
+    "ja": "Sketchと比較"
+  },
+  "visual.compare.slide": {
+    "zh": "滑动对比",
+    "en": "Slide",
+    "zh-TW": "滑動對比",
+    "ko": "슬라이드",
+    "ja": "スライド"
+  },
+  "visual.compare.side": {
+    "zh": "并排对比",
+    "en": "Side by side",
+    "zh-TW": "並排對比",
+    "ko": "나란히",
+    "ja": "並べて比較"
+  },
+  "visual.compare.diff": {
+    "zh": "差异",
+    "en": "Diff",
+    "zh-TW": "差異",
+    "ko": "차이",
+    "ja": "差分"
+  },
+  "visual.compare.single": {
+    "zh": "截图预览",
+    "en": "Screenshot Preview",
+    "zh-TW": "截圖預覽",
+    "ko": "스크린샷 미리보기",
+    "ja": "スクリーンショットプレビュー"
+  },
+  "visual.compare.different": {
+    "zh": "差异",
+    "en": "different",
+    "zh-TW": "差異",
+    "ko": "차이",
+    "ja": "差分"
+  },
+  "visual.compare.error.no_selection": {
+    "zh": "请在 Sketch 中选择一个图层后重试",
+    "en": "Please select a layer in Sketch and try again",
+    "zh-TW": "請在 Sketch 中選擇一個圖層後重試",
+    "ko": "Sketch에서 레이어를 선택한 후 다시 시도하세요",
+    "ja": "Sketchでレイヤーを選択してから再試行してください"
+  },
+  "visual.compare.error.mcp_unavailable": {
+    "zh": "无法连接 Sketch MCP 服务，请确认 Sketch 已启动且 MCP 插件已运行",
+    "en": "Cannot connect to Sketch MCP. Ensure Sketch is running with MCP plugin active",
+    "zh-TW": "無法連接 Sketch MCP 服務，請確認 Sketch 已啟動且 MCP 插件已運行",
+    "ko": "Sketch MCP에 연결할 수 없습니다. Sketch가 MCP 플러그인과 함께 실행 중인지 확인하세요",
+    "ja": "Sketch MCPに接続できません。SketchがMCPプラグインとともに実行中であることを確認してください"
+  },
+  "visual.compare.error.empty_response": {
+    "zh": "Sketch MCP 返回了空响应，请重新选择图层后重试",
+    "en": "Sketch MCP returned an empty response. Please reselect the layer and try again",
+    "zh-TW": "Sketch MCP 返回了空回應，請重新選擇圖層後重試",
+    "ko": "Sketch MCP가 빈 응답을 반환했습니다. 레이어를 다시 선택하고 시도하세요",
+    "ja": "Sketch MCPが空のレスポンスを返しました。レイヤーを再選択してやり直してください"
+  },
+  "visual.compare.error.parse_error": {
+    "zh": "Sketch MCP 响应解析失败，请检查 MCP 插件版本",
+    "en": "Failed to parse Sketch MCP response. Please check MCP plugin version",
+    "zh-TW": "Sketch MCP 回應解析失敗，請檢查 MCP 插件版本",
+    "ko": "Sketch MCP 응답 파싱 실패. MCP 플러그인 버전을 확인하세요",
+    "ja": "Sketch MCPレスポンスの解析に失敗しました。MCPプラグインのバージョンを確認してください"
+  },
+  "visual.compare.aiAnalysis": {
+    "zh": "AI 分析",
+    "en": "AI Analysis",
+    "zh-TW": "AI 分析",
+    "ko": "AI 분석",
+    "ja": "AI分析"
+  },
+  "visual.compare.aiAnalyzing": {
+    "zh": "AI 正在分析差异...",
+    "en": "AI is analyzing differences...",
+    "zh-TW": "AI 正在分析差異...",
+    "ko": "AI가 차이를 분석하고 있습니다...",
+    "ja": "AIが差分を分析しています..."
+  },
+  "visual.compare.aiUnavailable": {
+    "zh": "AI 分析不可用（未检测到 API Key，请先发起一次 Claude 对话）",
+    "en": "AI analysis unavailable (no API key detected, please start a Claude conversation first)",
+    "zh-TW": "AI 分析不可用（未偵測到 API Key，請先發起一次 Claude 對話）",
+    "ko": "AI 분석을 사용할 수 없습니다 (API 키가 감지되지 않음, 먼저 Claude 대화를 시작하세요)",
+    "ja": "AI分析は利用できません（APIキーが検出されません。先にClaudeの会話を開始してください）"
+  },
+  "visual.compare.retryAiAnalysis": {
+    "zh": "重新分析",
+    "en": "Retry",
+    "zh-TW": "重新分析",
+    "ko": "다시 분석",
+    "ja": "再分析"
+  },
+  "visual.autoCompare": {
+    "zh": "对比设计稿并自动调整",
+    "en": "Compare with design & auto-adjust"
+  },
+  "visual.autoCompare.running": {
+    "zh": "正在对比...",
+    "en": "Comparing..."
+  },
+  "visual.autoCompare.needSelection": {
+    "zh": "请先选中一个页面元素",
+    "en": "Select an element first"
+  },
+  "visual.autoCompare.needSketch": {
+    "zh": "Sketch MCP 未连接",
+    "en": "Sketch MCP not connected"
+  },
+  "visual.autoCompare.noDiff": {
+    "zh": "未检测到明显差异",
+    "en": "No significant differences detected"
+  },
+  "visual.autoCompare.sent": {
+    "zh": "已发送调整命令到终端",
+    "en": "Adjustment command sent to terminal"
+  },
+  "visual.structCompare": {
+    "zh": "结构化对比设计稿",
+    "en": "Structural design comparison"
+  },
+  "visual.structCompare.needSelection": {
+    "zh": "请先选中一个页面元素",
+    "en": "Select an element first"
+  },
+  "visual.structCompare.needSketch": {
+    "zh": "Sketch MCP 未连接",
+    "en": "Sketch MCP not connected"
+  },
+  "visual.structCompare.fetching": {
+    "zh": "正在提取样式数据...",
+    "en": "Extracting style data..."
+  },
+  "visual.structCompare.noMismatch": {
+    "zh": "所有属性匹配，无需调整",
+    "en": "All properties match, no adjustment needed"
+  },
+  "visual.structCompare.sent": {
+    "zh": "已发送结构化差异修复命令到终端",
+    "en": "Structural diff fix command sent to terminal"
+  },
+  "visual.structCompare.sketchError": {
+    "zh": "Sketch 图层样式提取失败",
+    "en": "Failed to extract Sketch layer styles"
+  },
+  "visual.menuUIEdit": {
+    "zh": "UI编辑",
+    "en": "UI Edit",
+    "ja": "UI編集"
+  },
+  "visual.menuPipeline": {
+    "zh": "Pipeline",
+    "en": "Pipeline",
+    "ja": "Pipeline"
+  },
+  "visual.pipelineComingSoon": {
+    "zh": "Pipeline 功能即将推出",
+    "en": "Pipeline coming soon",
+    "ja": "Pipeline 近日公開"
+  },
+  "visual.launcher.collapse": {
+    "zh": "折叠",
+    "en": "Collapse",
+    "ja": "折りたたむ"
+  },
+  "visual.launcher.expand": {
+    "zh": "展开",
+    "en": "Expand",
+    "ja": "展開する"
+  },
+  "visual.launcher.running": {
+    "zh": "运行中",
+    "en": "Running",
+    "ja": "実行中"
+  },
+  "visual.launcher.stopped": {
+    "zh": "未启动",
+    "en": "Stopped",
+    "ja": "停止中"
   }
 };
 
