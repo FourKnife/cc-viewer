@@ -28,6 +28,20 @@
 
 ---
 
+## Backlog
+
+### Phase 999.1: 可视化模式底部面板 Tab 化 + 折叠功能 (BACKLOG)
+
+**Goal:** 解决项目启动器遮挡 iframe 的问题，并为底部面板未来扩展做架构准备
+**Description:** 当前可视化模式下，底部项目启动器会遮挡 iframe 内容。需要：①iframe 高度根据底部面板动态调整；②将底部区域改为 Tab 面板，现有「项目启动器」作为第一个 Tab，便于后续追加其他功能 Tab；③支持底部面板折叠，点击后收起为页面底部横条，点击横条可展开恢复。
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
+---
+
 ## 后续迭代方向（M2+）
 
 - Pipeline 场景录入与截图留痕
