@@ -16,6 +16,7 @@ import { filterRelevantRequests, findPrevMainAgentTimestamp } from './utils/help
 import { isMainAgent } from './utils/contentFilter';
 import { classifyRequest } from './utils/requestType';
 import { apiUrl } from './utils/apiUrl';
+import { parseAvailablePages } from './utils/parseAvailablePages';
 import ProjectLauncher from './components/VisualEditor/ProjectLauncher';
 import PagePreview from './components/VisualEditor/PagePreview';
 import ElementInfo from './components/VisualEditor/ElementInfo';
@@ -37,8 +38,9 @@ class App extends AppBase {
       visualMenuKey: 'ui-edit',
       visualOperationHeight: 220,
       bottomPanelCollapsed: false,
-      activeBottomTab: 'launcher',   // 'launcher' | 'element'
+      activeBottomTab: 'element',   // 'element' only — launcher is now a SideMenu entry
       previewUrl: '',          // persisted across viewMode switches
+      availablePages: [],
     });
     this.appHeaderRef = React.createRef();
     this._getTokenStatsContent = () => this.appHeaderRef.current?.renderTokenStats?.() ?? null;
@@ -79,6 +81,9 @@ class App extends AppBase {
   }
 
   componentDidUpdate(prevProps, prevState) {
+    // 仅在 ui-edit 模式下自动管理底部面板
+    if (this.state.visualMenuKey !== 'ui-edit') return;
+
     // 项目启动成功后自动折叠底部面板
     const prevStatus = prevState.projectStatus?.status;
     const curStatus = this.state.projectStatus?.status;
@@ -95,6 +100,14 @@ class App extends AppBase {
     const curEl = this.state.selectedElement;
     if (!prevEl && curEl) {
       this.setState({ activeBottomTab: 'element', bottomPanelCollapsed: false });
+    }
+
+    // 当 projectOutput 更新时，解析 Available Pages
+    if (this.state.projectOutput !== prevState.projectOutput && this.state.projectOutput) {
+      const pages = parseAvailablePages(this.state.projectOutput);
+      if (JSON.stringify(pages) !== JSON.stringify(this.state.availablePages)) {
+        this.setState({ availablePages: pages });
+      }
     }
   }
 
@@ -520,7 +533,20 @@ class App extends AppBase {
                     sketchSelectedLayer={this.state.sketchSelectedLayer}
                     onAuthenticate={this.handleSketchAuthenticate}
                   />
-                  {this.state.visualMenuKey === 'ui-edit' ? (
+                  {this.state.visualMenuKey === 'launcher' ? (
+                    <div className={styles.visualLauncherArea}>
+                      <ProjectLauncher
+                        status={this.state.projectStatus}
+                        output={this.state.projectOutput}
+                        onStart={this.handleStartProject}
+                        onStop={this.handleStopProject}
+                        defaultPath={this.state.projectDir}
+                        availablePages={this.state.availablePages}
+                        onPreviewUrlChange={this.handlePreviewUrlChange}
+                        onSelectMenu={(key) => this.setState({ visualMenuKey: key })}
+                      />
+                    </div>
+                  ) : this.state.visualMenuKey === 'ui-edit' ? (
                     <>
                       <div className={styles.visualPreviewArea}>
                         <PagePreview
@@ -551,26 +577,15 @@ class App extends AppBase {
                         }}
                       >
                         <BottomTabPanel
+                          tabs={[{ key: 'element', labelKey: 'visual.tabElement' }]}
                           activeTab={this.state.activeBottomTab}
                           collapsed={this.state.bottomPanelCollapsed}
                           onTabClick={(key) => {
-                            // 点击任意 tab：展开并切换到该 tab
                             this.setState({ activeBottomTab: key, bottomPanelCollapsed: false });
                           }}
                           onCollapse={() => this.setState(prev => ({ bottomPanelCollapsed: !prev.bottomPanelCollapsed }))}
                         >
                           {{
-                            launcher: (
-                              <ProjectLauncher
-                                status={this.state.projectStatus}
-                                output={this.state.projectOutput}
-                                onStart={this.handleStartProject}
-                                onStop={this.handleStopProject}
-                                defaultPath={this.state.projectDir}
-                                collapsed={false}
-                                onToggleCollapse={() => {}}
-                              />
-                            ),
                             element: (
                               <ElementInfo element={this.state.selectedElement} />
                             ),
