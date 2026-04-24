@@ -1,10 +1,21 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Input, Typography, Tooltip, message } from 'antd';
-import { ReloadOutlined, LinkOutlined, ArrowRightOutlined, AimOutlined, PlayCircleOutlined, CameraOutlined, DiffOutlined, LoadingOutlined } from '@ant-design/icons';
+import { ReloadOutlined, LinkOutlined, ArrowRightOutlined, AimOutlined, PlayCircleOutlined, CameraOutlined, LoadingOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import { apiUrl } from '../../utils/apiUrl';
 import ScreenshotCompare from './ScreenshotCompare';
 import styles from './styles.module.css';
+
+// Sketch 品牌图标（替代 DiffOutlined）
+function SketchSvgIcon({ className, onClick }) {
+  return (
+    <span role="img" className={className} onClick={onClick} style={{ lineHeight: 0, display: 'inline-flex', alignItems: 'center' }}>
+      <svg viewBox="0 0 1024 1024" width="1em" height="1em" fill="currentColor">
+        <path d="M55 324.4L18 374.2h181l13.8-261.4-157.8 211.6zM792.6 91.4L535.4 64l271.4 294.4-14.2-267zM224.4 436.6l-22.4-44H19.8L469.6 916z m4-62.4h568l-163-177L512.6 66z m594.6 18.2L555.2 916l449.6-523.4h-181.8zM830.8 138L812 112.8l1.8 34.6 12.2 226.8h180.6zM227 187l-9.2 171.2L489.4 64 232.2 91.4z m575.4 205.4h-580l84.8 165.8L512.6 960l289.8-567.6z" />
+      </svg>
+    </span>
+  );
+}
 
 // 将 http://localhost:PORT/path 转为代理 URL /api/proxy/PORT/path
 // 代理会注入 inspector-inject.js 脚本并移除 CSP 限制
@@ -413,7 +424,7 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
             sketchMcpStatus !== 'connected' ? t('visual.structCompare.needSketch') :
             t('visual.structCompare')
           }>
-            <DiffOutlined
+            <SketchSvgIcon
               className={`${styles.urlRefresh} ${(!selectedElement || sketchMcpStatus !== 'connected') ? styles.urlBtnDisabled : ''}`}
               onClick={(!selectedElement || sketchMcpStatus !== 'connected') ? undefined : handleAutoCompare}
             />

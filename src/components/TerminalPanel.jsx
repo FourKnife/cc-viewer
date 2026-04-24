@@ -249,10 +249,15 @@ class TerminalPanel extends React.Component {
           if (!this._selectUiCounter) this._selectUiCounter = 0;
           this._selectUiCounter += 1;
           const tag = `[SelectUI #${this._selectUiCounter}] `;
+          // 清空当前输入行（Ctrl+U），确保只显示最新 SelectUI 标记，不叠加旧标记
+          if ((this._userInputBuffer || '').length > 0) {
+            this.ws.send(JSON.stringify({ type: 'input', data: '\x15' }));
+            this._userInputBuffer = '';
+          }
           // 将标记发送到 PTY 输入行（如同用户输入）
           this.ws.send(JSON.stringify({ type: 'input', data: tag }));
           // 同步到 _userInputBuffer，确保 Enter 时能正确组合 prompt
-          this._userInputBuffer = (this._userInputBuffer || '') + tag;
+          this._userInputBuffer = tag;
         }
       }
     }
