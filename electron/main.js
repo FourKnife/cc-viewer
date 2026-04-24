@@ -9,16 +9,18 @@
  * Each tab = fork('tab-worker.js') → isolated proxy + server + PTY
  */
 import { app, BaseWindow, WebContentsView, Menu, ipcMain, dialog } from 'electron';
-import { fileURLToPath } from 'url';
-import { dirname, join, basename } from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { dirname, join, basename, delimiter } from 'path';
 import { fork, execSync } from 'child_process';
 import { realpathSync, existsSync, readFileSync, watchFile, unwatchFile } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = join(__dirname, '..');
-const { t } = await import(join(rootDir, 'i18n.js'));
-const { getClaudeConfigDir } = await import(join(rootDir, 'findcc.js'));
+// Windows 下 import(绝对路径) 会被 Node 把 'c:' 当 URL scheme 拒绝 (ERR_UNSUPPORTED_ESM_URL_SCHEME)。
+// pathToFileURL(p).href 在 POSIX 产出 file:///abs/.. 在 Windows 产出 file:///C:/.. —— 两平台 ESM 等价。
+const { t } = await import(pathToFileURL(join(rootDir, 'i18n.js')).href);
+const { getClaudeConfigDir } = await import(pathToFileURL(join(rootDir, 'findcc.js')).href);
 
 // --- Resolve shell environment (Finder-launched Electron has minimal env) ---
 // When launched from Finder/dock, process.env lacks shell profile vars (HTTP_PROXY, PATH, LANG, etc.)
@@ -47,11 +49,12 @@ if (!_hasShellEnv && process.platform !== 'win32') {
       }
     }
     // Merge shell PATH into process PATH (prepend shell paths for priority)
+    // 分隔符用 path.delimiter: POSIX 下 ':' (等价于原硬编码), Windows 下 ';'
     if (_shellPath) {
-      const existing = new Set((process.env.PATH || '').split(':'));
-      const merged = _shellPath.split(':').filter(p => !existing.has(p));
+      const existing = new Set((process.env.PATH || '').split(delimiter));
+      const merged = _shellPath.split(delimiter).filter(p => !existing.has(p));
       if (merged.length) {
-        process.env.PATH = _shellPath + ':' + process.env.PATH;
+        process.env.PATH = _shellPath + delimiter + process.env.PATH;
       }
     }
     if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY) {
@@ -63,13 +66,14 @@ if (!_hasShellEnv && process.platform !== 'win32') {
 }
 
 // --- Ensure PATH includes common node/npm binary locations ---
+// 分隔符用 path.delimiter (POSIX ':', Windows ';'). POSIX 硬编码路径在 Windows 下会被拼入 PATH 但无效，无副作用。
 const home = app.getPath('home');
-const pathDirs = (process.env.PATH || '').split(':');
+const pathDirs = (process.env.PATH || '').split(delimiter);
 const extraPaths = ['/usr/local/bin', '/opt/homebrew/bin', join(home, '.npm-global', 'bin'), join(home, '.nvm', 'versions', 'node')];
 for (const p of extraPaths) {
   if (!pathDirs.includes(p)) pathDirs.push(p);
 }
-process.env.PATH = pathDirs.join(':');
+process.env.PATH = pathDirs.join(delimiter);
 
 // --- Resolve real Node.js path (Electron's process.execPath is the Electron binary) ---
 let _nodePath = process.execPath;
@@ -80,7 +84,7 @@ if (process.versions.electron) {
   } catch { _nodePath = process.platform === 'win32' ? 'node' : '/usr/local/bin/node'; }
 }
 
-const { resolveNpmClaudePath, resolveNativePath } = await import(join(rootDir, 'findcc.js'));
+const { resolveNpmClaudePath, resolveNativePath } = await import(pathToFileURL(join(rootDir, 'findcc.js')).href);
 let claudePath = resolveNpmClaudePath();
 let isNpmVersion = !!claudePath;
 if (!claudePath) claudePath = resolveNativePath();
@@ -114,10 +118,10 @@ let mgmtServerMod = null;
 let mgmtPort = null;
 
 async function startMgmtServer() {
-  const { startProxy } = await import(join(rootDir, 'proxy.js'));
+  const { startProxy } = await import(pathToFileURL(join(rootDir, 'proxy.js')).href);
   const proxyPort = await startProxy();
   process.env.CCV_PROXY_PORT = String(proxyPort);
-  mgmtServerMod = await import(join(rootDir, 'server.js'));
+  mgmtServerMod = await import(pathToFileURL(join(rootDir, 'server.js')).href);
   await mgmtServerMod.startViewer();
   mgmtPort = mgmtServerMod.getPort();
   if (claudePath) {

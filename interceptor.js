@@ -9,7 +9,7 @@ import './lib/proxy-env.js';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync, statSync, renameSync, unlinkSync, existsSync, watchFile } from 'node:fs';
 import http from 'node:http';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { LOG_DIR, getClaudeConfigDir } from './findcc.js';
 import { assembleStreamMessage, createStreamAssembler, cleanupTempFiles, findRecentLog, isAnthropicApiPath, isMainAgentRequest, rotateLogFile } from './lib/interceptor-core.js';
@@ -435,12 +435,13 @@ export function setupInterceptor() {
   // 启动 viewer 服务（优先根目录 server.js，fallback 到 lib/server.js）
   // Teammate 子进程跳过，避免端口冲突（leader 已启动 viewer）
   if (!_isTeammate) {
+    // Windows 下 import(绝对路径) 会被拒 (ERR_UNSUPPORTED_ESM_URL_SCHEME)；统一走 pathToFileURL。
     const rootServerPath = join(__dirname, 'server.js');
     const libServerPath = join(__dirname, 'lib', 'server.js');
-    import(rootServerPath).then(module => {
+    import(pathToFileURL(rootServerPath).href).then(module => {
       viewerModule = module;
     }).catch(() => {
-      import(libServerPath).then(module => {
+      import(pathToFileURL(libServerPath).href).then(module => {
         viewerModule = module;
       }).catch(() => {
         // Silently fail if viewer service cannot start

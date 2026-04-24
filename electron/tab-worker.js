@@ -8,11 +8,14 @@
  * This mirrors cli.js:runCliModeWorkspaceSelector() + /api/workspaces/launch.
  */
 import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = join(__dirname, '..');
+// Windows 下 import(绝对路径) 会被拒 (ERR_UNSUPPORTED_ESM_URL_SCHEME)；统一走 pathToFileURL。
+// POSIX 下等价 —— pathToFileURL('/abs/foo.js').href === 'file:///abs/foo.js'，Node ESM 对两种形式行为等价。
+const importAbs = (p) => import(pathToFileURL(p).href);
 
 // Set env BEFORE any imports of server.js / interceptor.js
 process.env.CCV_CLI_MODE = '1';
@@ -46,17 +49,17 @@ let killPtyFn = null;
 async function launch({ path: projectPath, extraArgs = [], claudePath, isNpmVersion }) {
   console.log('[worker] launch:', projectPath, 'claude:', claudePath, 'npm:', isNpmVersion);
   // 1. Register hooks (idempotent)
-  const { ensureHooks } = await import(join(rootDir, 'lib', 'ensure-hooks.js'));
+  const { ensureHooks } = await importAbs(join(rootDir, 'lib', 'ensure-hooks.js'));
   ensureHooks();
 
   // 2. Start proxy
-  const { startProxy } = await import(join(rootDir, 'proxy.js'));
+  const { startProxy } = await importAbs(join(rootDir, 'proxy.js'));
   const proxyPort = await startProxy();
   process.env.CCV_PROXY_PORT = String(proxyPort);
   process.env.CCV_PROJECT_DIR = projectPath;
 
   // 3. Import server.js (workspace mode → skips auto-start)
-  serverMod = await import(join(rootDir, 'server.js'));
+  serverMod = await importAbs(join(rootDir, 'server.js'));
 
   // 4. Manually start server (like cli.js:542)
   await serverMod.startViewer();
@@ -73,7 +76,7 @@ async function launch({ path: projectPath, extraArgs = [], claudePath, isNpmVers
 
   // 7. Initialize workspace log directory (sets LOG_FILE, _projectName, _logDir)
   //    forceNew: false — 复用最近的日志文件以保留历史数据
-  const { initForWorkspace } = await import(join(rootDir, 'interceptor.js'));
+  const { initForWorkspace } = await importAbs(join(rootDir, 'interceptor.js'));
   const result = initForWorkspace(projectPath, { forceNew: false });
 
   // 7b. Mark workspace as launched so React app shows chat view instead of workspace selector
@@ -93,7 +96,7 @@ async function launch({ path: projectPath, extraArgs = [], claudePath, isNpmVers
   });
 
   // 9. Spawn Claude PTY (after ready, so view is already loading)
-  const { spawnClaude, killPty, onPtyExit } = await import(join(rootDir, 'pty-manager.js'));
+  const { spawnClaude, killPty, onPtyExit } = await importAbs(join(rootDir, 'pty-manager.js'));
   killPtyFn = killPty;
 
   onPtyExit((code) => {
