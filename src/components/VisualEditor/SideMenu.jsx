@@ -1,10 +1,11 @@
 import React from 'react';
-import { EditOutlined, ApiOutlined } from '@ant-design/icons';
+import { EditOutlined, ApiOutlined, RocketOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import styles from './SideMenu.module.css';
 
 const items = [
   { key: 'ui-edit', icon: EditOutlined, label: () => t('visual.menuUIEdit') },
+  { key: 'launcher', icon: RocketOutlined, label: () => t('visual.menuLauncher') },
   { key: 'pipeline', icon: ApiOutlined, label: () => t('visual.menuPipeline') },
 ];
 

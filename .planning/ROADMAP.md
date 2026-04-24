@@ -6,24 +6,39 @@
 - ✅ **[M1.1: UI 优化](milestones/v1.1-ROADMAP.md)** — 2 phases, 选中元素 Tag + 状态栏 + 截图对比 POC + UI 打磨 (2026-04-22)
 - ✅ **[M1.2: 可视化编辑体验增强](milestones/v1.2-ROADMAP.md)** — 4 phases, 默认值优化 + 终端替换 + 设计稿对比自动调整 (2026-04-23)
 - ✅ **[M1.3: 优化可视区域](milestones/v1.3-ROADMAP.md)** — 2 phases, 布局重构 + 操作区折叠 + Anti-AI-Slop (2026-04-23)
-- 🚧 **[M1.4: 细节修复与上下文结构化](milestones/v1.4-ROADMAP.md)** — 2 phases, iframe URL 持久化 + XML 结构化元素上下文
+- ✅ **[M1.4: 细节修复与上下文结构化](milestones/v1.4-ROADMAP.md)** — 2 phases, iframe URL 持久化 + XML 结构化元素上下文
+- 🚧 **[M1.5: 项目启动器 UI 改造](milestones/v1.5-ROADMAP.md)** — 2 phases, Launcher 迁移 SideMenu + PagePreview 常态化 + ANSI 过滤 + Available Pages 快捷导航
 
 ---
 
-## M1.4: 细节修复与上下文结构化
+## M1.4: 细节修复与上下文结构化 ✅
 
 ### Phase 18: iframe URL 状态持久化
 
 **Goal:** 修复可视化编辑器模式切换时 iframe URL 丢失的 bug
-**Description:** 关闭可视化编辑后再打开，iframe 的 URL 会重置为初始态，而非保留之前用户修改的 URL。需要在切换 displayMode 时持久化 previewUrl 状态。
-**Depends on:** Phase 15
-**Status:** pending
+**Status:** ✅ completed
 
 ### Phase 19: XML 结构化元素上下文替代硬编码 prompt
 
 **Goal:** 将可视化编辑器选中元素的上下文从硬编码中文 prompt 改为 XML 结构化格式
-**Description:** 当前 `buildElementContext()` 生成自然语言 prompt（"请修改以下 React 组件中的元素"），耦合了指令和数据。改用 XML 标签（如 `<selected-element>`）结构化表达截图路径、组件名、class、文件路径、选择器等信息，与用户实际输入的 prompt 分离。AI 可更灵活理解上下文，也便于扩展字段。
-**Depends on:** Phase 18
+**Status:** ✅ completed
+
+---
+
+## M1.5: 项目启动器 UI 改造
+
+### Phase 20: SideMenu 扩展 + Launcher 迁移 + PagePreview 常态化
+
+**Goal:** 将 ProjectLauncher 迁移为 SideMenu 独立菜单项；PagePreview 始终显示 URL 输入框
+**Description:** 新增 `launcher` 菜单项，center 区域按 visualMenuKey 渲染；移除 PagePreview 空状态判断，常态化显示 URL bar
+**Depends on:** Phase 19
+**Status:** pending
+
+### Phase 21: 日志 ANSI 过滤 + Available Pages 快捷导航
+
+**Goal:** 清除日志噪音；解析 Available Pages 展示为可点击快捷入口
+**Description:** 新建 `stripAnsi` / `parseAvailablePages` 工具函数；ProjectLauncher 渲染时过滤 ANSI；启动后展示页面列表，点击自动导航到 ui-edit 模式并填入 URL
+**Depends on:** Phase 20
 **Status:** pending
 
 ---

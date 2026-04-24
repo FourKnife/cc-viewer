@@ -7335,7 +7335,7 @@ const i18nData = {
     "zh-TW": "視覺化編輯", "ko": "비주얼 에디터", "ja": "ビジュアルエディタ"
   },
   "visual.projectLauncher": {
-    "zh": "项目启动器", "en": "Project Launcher",
+    "zh": "启动器", "en": "Project Launcher",
     "zh-TW": "專案啟動器", "ko": "프로젝트 런처", "ja": "プロジェクトランチャー"
   },
   "visual.projectPath": {
@@ -7608,8 +7608,13 @@ const i18nData = {
     "en": "Pipeline",
     "ja": "Pipeline"
   },
+  "visual.menuLauncher": {
+    "zh": "启动器",
+    "en": "Launcher",
+    "ja": "ランチャー"
+  },
   "visual.tabLauncher": {
-    "zh": "项目启动器",
+    "zh": "启动器",
     "en": "Launcher",
     "ja": "ランチャー"
   },
@@ -7642,6 +7647,11 @@ const i18nData = {
     "zh": "未启动",
     "en": "Stopped",
     "ja": "停止中"
+  },
+  "visual.launcher.pages": {
+    "zh": "可用页面",
+    "en": "Available Pages",
+    "ja": "利用可能なページ"
   }
 };
 

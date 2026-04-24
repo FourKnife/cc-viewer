@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.4
-milestone_name: M1.4 细节修复与上下文结构化
-status: completed
+milestone: v1.5
+milestone_name: M1.5 项目启动器 UI 改造
+status: in_progress
 last_updated: "2026-04-24T00:00:00.000Z"
 progress:
   total_phases: 2
-  completed_phases: 2
-  total_plans: 2
-  completed_plans: 2
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Cleffa - 项目状态
@@ -16,16 +16,16 @@ progress:
 ## 当前状态
 
 ```
-Milestone: M1.4 - 细节修复与上下文结构化
-Status: COMPLETED
+Milestone: M1.5 - 项目启动器 UI 改造
+Status: IN PROGRESS
 ```
 
 ## 进度概览
 
 | Phase | 名称 | 状态 | 完成度 |
 |-------|------|------|--------|
-| 18 | iframe URL 状态持久化 | ✅ Done | 100% |
-| 19 | XML 结构化元素上下文 | ✅ Done | 100% |
+| 20 | SideMenu 扩展 + Launcher 迁移 + PagePreview 常态化 | ⏳ Pending | 0% |
+| 21 | 日志 ANSI 过滤 + Available Pages 快捷导航 | ⏳ Pending | 0% |
 
 ## 版本历史
 
@@ -43,4 +43,4 @@ Status: COMPLETED
 
 ## 下一步
 
-M1.4 已完成。可运行 `/gsd:new-milestone` 开启下一个里程碑，或从 Backlog 提取 Phase 999.1（可视化模式底部面板 Tab 化 + 折叠）。
+运行 `/gsd:plan-phase 20` 开始规划 Phase 20。

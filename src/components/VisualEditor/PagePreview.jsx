@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Input, Typography, Tooltip, message } from 'antd';
-import { ReloadOutlined, LinkOutlined, ArrowRightOutlined, AimOutlined, PlayCircleOutlined, CameraOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Input, Tooltip, message } from 'antd';
+import { ReloadOutlined, LinkOutlined, ArrowRightOutlined, AimOutlined, CameraOutlined, LoadingOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import { apiUrl } from '../../utils/apiUrl';
 import ScreenshotCompare from './ScreenshotCompare';
@@ -380,18 +380,6 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
       setAutoComparing(false);
     }
   }, [selectedElement, sketchMcpStatus]);
-
-  // 无端口且无已加载页面时显示空状态
-  if (!port && !iframeSrc) {
-    return (
-      <div className={styles.emptyPreview}>
-        <div className={styles.emptyGuide}>
-          <PlayCircleOutlined className={styles.emptyGuideIcon} />
-          <Typography.Text className={styles.emptyGuideText}>{t('visual.emptyGuide')}</Typography.Text>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className={styles.previewContainer}>

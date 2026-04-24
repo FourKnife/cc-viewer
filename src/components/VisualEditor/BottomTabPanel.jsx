@@ -3,23 +3,21 @@ import { UpOutlined, DownOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import styles from './BottomTabPanel.module.css';
 
-const TABS = [
-  { key: 'launcher', labelKey: 'visual.tabLauncher' },
-  { key: 'element',  labelKey: 'visual.tabElement' },
-];
-
 export default function BottomTabPanel({
+  tabs = [],
   activeTab,
   collapsed,
   onTabClick,
   onCollapse,
-  children,   // { launcher: <node>, element: <node> }
+  children,
 }) {
+  if (tabs.length === 0) return null;
+
   return (
     <div className={styles.panel}>
       {/* Tab 标签横条 — 始终可见 */}
       <div className={styles.tabBar}>
-        {TABS.map(({ key, labelKey }) => (
+        {tabs.map(({ key, labelKey }) => (
           <div
             key={key}
             className={`${styles.tab}${activeTab === key ? ' ' + styles.tabActive : ''}`}
@@ -36,12 +34,12 @@ export default function BottomTabPanel({
 
       {/* Tab 内容区 — 始终挂载，折叠时 display:none（避免状态丢失） */}
       <div className={styles.content} style={{ display: collapsed ? 'none' : undefined }}>
-        {TABS.map(({ key }) => (
+        {tabs.map(({ key }) => (
           <div
             key={key}
             style={{ display: activeTab === key ? 'flex' : 'none', height: '100%', flexDirection: 'column', overflow: 'auto', minHeight: 0 }}
           >
-            {children[key]}
+            {children?.[key]}
           </div>
         ))}
       </div>
