@@ -7778,6 +7778,14 @@ const i18nData = {
     "zh": "未连接", "en": "Disconnected",
     "zh-TW": "未連線", "ko": "연결 안됨", "ja": "未接続"
   },
+  "visual.statusUnauthenticated": {
+    "zh": "未认证", "en": "Unauthenticated",
+    "zh-TW": "未驗證", "ko": "인증 안됨", "ja": "未認証"
+  },
+  "visual.authButton": {
+    "zh": "点击认证", "en": "Authenticate",
+    "zh-TW": "點擊驗證", "ko": "인증하기", "ja": "認証する"
+  },
   "visual.emptyGuide": {
     "zh": "在左侧面板启动项目，或输入端口号预览页面",
     "en": "Start a project in the left panel, or enter a port number to preview",
@@ -7951,6 +7959,16 @@ const i18nData = {
     "zh": "Pipeline",
     "en": "Pipeline",
     "ja": "Pipeline"
+  },
+  "visual.tabLauncher": {
+    "zh": "项目启动器",
+    "en": "Launcher",
+    "ja": "ランチャー"
+  },
+  "visual.tabElement": {
+    "zh": "元素信息",
+    "en": "Element Info",
+    "ja": "要素情報"
   },
   "visual.pipelineComingSoon": {
     "zh": "Pipeline 功能即将推出",

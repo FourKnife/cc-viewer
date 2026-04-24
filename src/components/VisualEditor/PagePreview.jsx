@@ -137,8 +137,8 @@ function compareStyles(domStyles, sketchData) {
   return diffs;
 }
 
-export default function PagePreview({ port, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot }) {
-  const [urlInput, setUrlInput] = useState('');
+export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot }) {
+  const [urlInput, setUrlInput] = useState(externalUrl || '');
   const [iframeSrc, setIframeSrc] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
   const [inspecting, setInspecting] = useState(true);
@@ -167,7 +167,8 @@ export default function PagePreview({ port, onElementHover, onElementSelect, onE
     setLoadError('');
     if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
     loadTimerRef.current = setTimeout(() => setLoadError(t('visual.loadTimeout')), 15000);
-  }, [port]);
+    onPreviewUrlChange?.(displayUrl);   // persist in App state
+  }, [port, onPreviewUrlChange]);
 
   // 端口变化时设置默认 URL 并自动导航
   useEffect(() => {
@@ -178,6 +179,22 @@ export default function PagePreview({ port, onElementHover, onElementSelect, onE
       navigatedRef.current = true;
     }
   }, [port, handleNavigate]);
+
+  // 同步外部 previewUrl（viewMode 切换后 App state 下发）
+  useEffect(() => {
+    if (externalUrl && externalUrl !== urlInput) {
+      setUrlInput(externalUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalUrl]);
+
+  // 组件重新挂载时若有已持久化的 URL，自动重新加载
+  useEffect(() => {
+    if (externalUrl && !iframeSrc) {
+      handleNavigate(externalUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount only
 
   // 向 iframe 发送 inspector 开关指令
   const sendInspectorCmd = useCallback((enabled) => {
