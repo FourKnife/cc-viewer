@@ -213,14 +213,37 @@ class AppBase extends React.Component {
       if (data.claudeAvailable === false) this.setState({ claudeMissing: true });
     }).catch(() => {});
 
-    // Sketch MCP 心跳检测（no-cors HEAD 避免 CORS 问题）
+    // Sketch MCP 心跳检测（通过后端代理检测连接与认证状态）
     this._checkSketchMcp = () => {
-      fetch('http://localhost:31126/mcp', { method: 'HEAD', mode: 'no-cors' })
-        .then(() => {
-          if (!this._unmounted) this.setState({ sketchMcpStatus: 'connected' });
+      fetch('/api/sketch-auth-check')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (this._unmounted) return;
+          if (!data || data.status === 'disconnected') {
+            this.setState({ sketchMcpStatus: 'disconnected', sketchSelectedLayer: null });
+          } else if (data.status === 'unauthenticated') {
+            this.setState({ sketchMcpStatus: 'unauthenticated' });
+          } else {
+            this.setState({ sketchMcpStatus: 'connected' });
+          }
         })
         .catch(() => {
           if (!this._unmounted) this.setState({ sketchMcpStatus: 'disconnected', sketchSelectedLayer: null });
+        });
+    };
+    this.handleSketchAuthenticate = () => {
+      fetch('/api/sketch-auth-url')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data?.url) {
+            window.open(data.url, '_blank');
+          } else {
+            // 降级：提示用户在 Claude Code 中手动认证
+            alert('请在 Claude Code 中运行 /mcp 并点击 Sketch 服务器的认证按钮');
+          }
+        })
+        .catch(() => {
+          alert('请在 Claude Code 中运行 /mcp 并点击 Sketch 服务器的认证按钮');
         });
     };
     // Sketch 选中图层查询（通过后端代理避免 CORS）

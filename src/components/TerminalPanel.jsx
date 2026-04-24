@@ -374,30 +374,26 @@ class TerminalPanel extends React.Component {
           if (data === '\r') {
             const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
             if (!inAlternateScreen && this._userInputBuffer) {
-              const context = buildElementContext(this.props.selectedElement);
-              if (context) {
-                // 清理 [SelectUI #N] 标记，提取纯用户输入
-                const userInput = this._userInputBuffer.replace(/\[SelectUI #\d+\]\s*/g, '').trim();
-                this._userInputBuffer = '';
-                // 清理后无实际输入，按普通 Enter 处理
-                if (!userInput) {
-                  this.ws.send(JSON.stringify({ type: 'input', data }));
-                  return;
-                }
-                // 统一处理 pending 截图路径（避免与 attachCustomKeyEventHandler 重复注入）
-                const pending = this.props.pendingImages;
-                let imagePaths = '';
-                if (pending?.length > 0) {
-                  imagePaths = pending.map(img => `'${img.path.replace(/'/g, "'\\''")}'`).join(' ') + ' ';
-                  this.props.onClearPendingImages?.();
-                }
-                // 组合完整 prompt：截图路径 + 元素上下文 + 用户要求
-                const fullPrompt = imagePaths + context.replace(/\n+/g, ' ').trim() + ' 用户要求: ' + userInput;
-                // 通过 visual-input 发送，服务端会抑制 PTY 回显，
-                // 终端上 [SelectUI #N] + 用户输入保持原样
-                this.ws.send(JSON.stringify({ type: 'visual-input', prompt: fullPrompt }));
+              // 清理 [SelectUI #N] 标记，提取纯用户输入
+              const userInput = this._userInputBuffer.replace(/\[SelectUI #\d+\]\s*/g, '').trim();
+              this._userInputBuffer = '';
+              // 清理后无实际输入，按普通 Enter 处理
+              if (!userInput) {
+                this.ws.send(JSON.stringify({ type: 'input', data }));
                 return;
               }
+              // 收集截图路径并传入 buildElementContext（per D1）
+              const pending = this.props.pendingImages;
+              const screenshotPaths = pending?.map(img => img.path) ?? [];
+              if (screenshotPaths.length > 0) this.props.onClearPendingImages?.();
+              // 组合 XML 上下文，截图路径内嵌于 <screenshot> 标签（per D1, D3）
+              const context = buildElementContext(this.props.selectedElement, screenshotPaths);
+              // 组合完整 prompt：XML 上下文 + \n用户要求: + 用户输入
+              const fullPrompt = context + '\n用户要求: ' + userInput;
+              // 通过 visual-input 发送，服务端会抑制 PTY 回显，
+              // 终端上 [SelectUI #N] + 用户输入保持原样
+              this.ws.send(JSON.stringify({ type: 'visual-input', prompt: fullPrompt }));
+              return;
             }
             this._userInputBuffer = '';
           } else if (data === '\x7f') {

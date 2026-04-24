@@ -2,15 +2,32 @@ import React from 'react';
 import { t } from '../../i18n';
 import styles from './styles.module.css';
 
-export default function StatusBar({ sketchMcpStatus, selectedElement, sketchSelectedLayer }) {
+function getDotClass(status) {
+  if (status === 'connected') return styles.statusDotConnected;
+  if (status === 'unauthenticated') return styles.statusDotUnauthenticated;
+  return styles.statusDotDisconnected;
+}
+
+function getStatusLabel(status) {
+  if (status === 'connected') return t('visual.statusConnected');
+  if (status === 'unauthenticated') return t('visual.statusUnauthenticated');
+  return t('visual.statusDisconnected');
+}
+
+export default function StatusBar({ sketchMcpStatus, selectedElement, sketchSelectedLayer, onAuthenticate }) {
   return (
     <div className={styles.statusBar}>
       <div className={styles.statusBarLeft}>
-        <span className={styles.statusDot + ' ' + (sketchMcpStatus === 'connected' ? styles.statusDotConnected : styles.statusDotDisconnected)} />
+        <span className={styles.statusDot + ' ' + getDotClass(sketchMcpStatus)} />
         <span className={styles.statusLabel}>
-          Sketch MCP {sketchMcpStatus === 'connected' ? t('visual.statusConnected') : t('visual.statusDisconnected')}
+          Sketch MCP {getStatusLabel(sketchMcpStatus)}
         </span>
-        {sketchSelectedLayer && (
+        {sketchMcpStatus === 'unauthenticated' && (
+          <button className={styles.authButton} onClick={onAuthenticate}>
+            {t('visual.authButton')}
+          </button>
+        )}
+        {sketchMcpStatus === 'connected' && sketchSelectedLayer && (
           <>
             <span className={styles.statusSep}>|</span>
             <span className={styles.statusElement}>{sketchSelectedLayer}</span>

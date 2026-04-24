@@ -21,6 +21,7 @@ import PagePreview from './components/VisualEditor/PagePreview';
 import ElementInfo from './components/VisualEditor/ElementInfo';
 import StatusBar from './components/VisualEditor/StatusBar';
 import SideMenu from './components/VisualEditor/SideMenu';
+import BottomTabPanel from './components/VisualEditor/BottomTabPanel';
 // PromptInput 已移除 — AI 修改通过右侧 ChatView 输入
 
 class App extends AppBase {
@@ -35,7 +36,9 @@ class App extends AppBase {
       visualPendingImages: [],
       visualMenuKey: 'ui-edit',
       visualOperationHeight: 220,
-      launcherCollapsed: false,
+      bottomPanelCollapsed: false,
+      activeBottomTab: 'launcher',   // 'launcher' | 'element'
+      previewUrl: '',          // persisted across viewMode switches
     });
     this.visualCenterRef = React.createRef();
   }
@@ -74,15 +77,22 @@ class App extends AppBase {
   }
 
   componentDidUpdate(prevProps, prevState) {
-    // 项目启动成功后自动折叠 ProjectLauncher
+    // 项目启动成功后自动折叠底部面板
     const prevStatus = prevState.projectStatus?.status;
     const curStatus = this.state.projectStatus?.status;
     if (prevStatus !== 'running' && curStatus === 'running') {
-      this.setState({ launcherCollapsed: true });
+      this.setState({ bottomPanelCollapsed: true });
     }
     // 项目停止后自动展开
     if (prevStatus === 'running' && curStatus !== 'running') {
-      this.setState({ launcherCollapsed: false });
+      this.setState({ bottomPanelCollapsed: false });
+    }
+
+    // selectedElement 从 null 变为非 null 时，展开并切换到元素信息 Tab
+    const prevEl = prevState.selectedElement;
+    const curEl = this.state.selectedElement;
+    if (!prevEl && curEl) {
+      this.setState({ activeBottomTab: 'element', bottomPanelCollapsed: false });
     }
   }
 
@@ -106,6 +116,10 @@ class App extends AppBase {
     };
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
+  };
+
+  handlePreviewUrlChange = (url) => {
+    this.setState({ previewUrl: url });
   };
 
   handleViewRequest = (index) => {
@@ -500,12 +514,15 @@ class App extends AppBase {
                     sketchMcpStatus={this.state.sketchMcpStatus}
                     selectedElement={this.state.selectedElement}
                     sketchSelectedLayer={this.state.sketchSelectedLayer}
+                    onAuthenticate={this.handleSketchAuthenticate}
                   />
                   {this.state.visualMenuKey === 'ui-edit' ? (
                     <>
                       <div className={styles.visualPreviewArea}>
                         <PagePreview
                           port={this.state.projectStatus?.port}
+                          previewUrl={this.state.previewUrl}
+                          onPreviewUrlChange={this.handlePreviewUrlChange}
                           onElementHover={(el) => {}}
                           onElementSelect={(el) => this.setState({ selectedElement: el })}
                           onElementDeselect={() => this.setState({ selectedElement: null, visualPendingImages: [] })}
@@ -514,24 +531,47 @@ class App extends AppBase {
                           onElementScreenshot={this.handleElementScreenshot}
                         />
                       </div>
-                      <div
-                        className={styles.visualHResizer}
-                        onMouseDown={this.handleVerticalResizeStart}
-                      />
+                      {/* 折叠时隐藏 resizer */}
+                      {!this.state.bottomPanelCollapsed && (
+                        <div
+                          className={styles.visualHResizer}
+                          onMouseDown={this.handleVerticalResizeStart}
+                        />
+                      )}
                       <div
                         className={styles.visualOperationArea}
-                        style={{ height: this.state.visualOperationHeight }}
+                        style={{
+                          height: this.state.bottomPanelCollapsed
+                            ? 33
+                            : this.state.visualOperationHeight,
+                        }}
                       >
-                        <ProjectLauncher
-                          status={this.state.projectStatus}
-                          output={this.state.projectOutput}
-                          onStart={this.handleStartProject}
-                          onStop={this.handleStopProject}
-                          defaultPath={this.state.projectDir}
-                          collapsed={this.state.launcherCollapsed}
-                          onToggleCollapse={() => this.setState(prev => ({ launcherCollapsed: !prev.launcherCollapsed }))}
-                        />
-                        <ElementInfo element={this.state.selectedElement} />
+                        <BottomTabPanel
+                          activeTab={this.state.activeBottomTab}
+                          collapsed={this.state.bottomPanelCollapsed}
+                          onTabClick={(key) => {
+                            // 点击任意 tab：展开并切换到该 tab
+                            this.setState({ activeBottomTab: key, bottomPanelCollapsed: false });
+                          }}
+                          onCollapse={() => this.setState(prev => ({ bottomPanelCollapsed: !prev.bottomPanelCollapsed }))}
+                        >
+                          {{
+                            launcher: (
+                              <ProjectLauncher
+                                status={this.state.projectStatus}
+                                output={this.state.projectOutput}
+                                onStart={this.handleStartProject}
+                                onStop={this.handleStopProject}
+                                defaultPath={this.state.projectDir}
+                                collapsed={false}
+                                onToggleCollapse={() => {}}
+                              />
+                            ),
+                            element: (
+                              <ElementInfo element={this.state.selectedElement} />
+                            ),
+                          }}
+                        </BottomTabPanel>
                       </div>
                     </>
                   ) : (

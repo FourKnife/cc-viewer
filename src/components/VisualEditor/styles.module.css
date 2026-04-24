@@ -156,7 +156,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-base);
+  background: var(--bg-surface);
   overflow: auto;
 }
 .mobileFrame {
@@ -349,8 +349,27 @@
 .statusDotDisconnected {
   background: var(--text-muted);
 }
+.statusDotUnauthenticated {
+  background: var(--color-warning, #f0a020);
+}
 .statusLabel {
   color: var(--text-muted);
+}
+.authButton {
+  padding: 0 6px;
+  height: 16px;
+  line-height: 14px;
+  font-size: 10px;
+  border: 1px solid var(--color-warning, #f0a020);
+  border-radius: 3px;
+  color: var(--color-warning, #f0a020);
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.authButton:hover {
+  background: var(--color-warning, #f0a020);
+  color: var(--bg-container);
 }
 .statusSep {
   color: var(--border-primary);

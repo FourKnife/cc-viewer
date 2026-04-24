@@ -1116,6 +1116,61 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // Sketch MCP 认证状态检测（通过 tools/list 判断是否已认证）
+  if (url === '/api/sketch-auth-check' && method === 'GET') {
+    const postData = JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', params: {}, id: Date.now() });
+    const mcpReq = httpRequest({ hostname: '127.0.0.1', port: 31126, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }, timeout: 3000 }, (mcpRes) => {
+      let body = '';
+      mcpRes.on('data', c => { body += c; });
+      mcpRes.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        // 非 2xx → 未认证（覆盖 401/403/302 等）
+        if (mcpRes.statusCode < 200 || mcpRes.statusCode >= 300) {
+          return res.end(JSON.stringify({ status: 'unauthenticated' }));
+        }
+        try {
+          const data = JSON.parse(body);
+          // 只有明确返回 result.tools 才视为已认证，其余（error、空响应等）均为未认证
+          if (Array.isArray(data?.result?.tools)) {
+            return res.end(JSON.stringify({ status: 'authenticated' }));
+          }
+          res.end(JSON.stringify({ status: 'unauthenticated' }));
+        } catch {
+          // 无法解析 JSON（如 HTML OAuth 重定向页）→ 未认证
+          res.end(JSON.stringify({ status: 'unauthenticated' }));
+        }
+      });
+    });
+    mcpReq.on('error', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ status: 'disconnected' })); });
+    mcpReq.on('timeout', () => { mcpReq.destroy(); });
+    mcpReq.write(postData);
+    mcpReq.end();
+    return;
+  }
+
+  // Sketch MCP OAuth URL 获取（通过标准 well-known 元数据端点）
+  if (url === '/api/sketch-auth-url' && method === 'GET') {
+    const metaReq = httpRequest({ hostname: '127.0.0.1', port: 31126, path: '/.well-known/oauth-authorization-server', method: 'GET', timeout: 3000 }, (metaRes) => {
+      let body = '';
+      metaRes.on('data', c => { body += c; });
+      metaRes.on('end', () => {
+        try {
+          const meta = JSON.parse(body);
+          const authUrl = meta?.authorization_endpoint || null;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ url: authUrl }));
+        } catch {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ url: null }));
+        }
+      });
+    });
+    metaReq.on('error', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ url: null })); });
+    metaReq.on('timeout', () => { metaReq.destroy(); });
+    metaReq.end();
+    return;
+  }
+
   // Sketch 图层结构化样式提取（通过 MCP run_code 提取选中图层属性 JSON）
   if (url === '/api/sketch-layer-styles' && method === 'GET') {
     const script = `

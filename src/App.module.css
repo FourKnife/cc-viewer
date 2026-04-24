@@ -895,9 +895,8 @@
 }
 .visualOperationArea {
   flex-shrink: 0;
-  overflow-y: auto;
+  overflow: hidden;
   border-top: 1px solid var(--border-primary);
-  padding: 12px 16px;
   background: var(--bg-base-alt);
   display: flex;
   flex-direction: column;
