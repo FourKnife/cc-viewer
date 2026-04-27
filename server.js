@@ -2760,6 +2760,26 @@ Be concise - developers need actionable fixes, not lengthy descriptions.`;
     return;
   }
 
+  // POST /api/project/stdin
+  if (url === '/api/project/stdin' && method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { text } = JSON.parse(body);
+        if (typeof text === 'string') {
+          projectManager.writeStdin(text);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false }));
+      }
+    });
+    return;
+  }
+
   // GET /api/source-locate - 根据文件名在项目目录中定位源码（_debugSource 降级方案）
   if (url === '/api/source-locate' && method === 'GET') {
     const fileName = parsedUrl.searchParams.get('file');

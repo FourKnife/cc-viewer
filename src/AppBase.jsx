@@ -1813,6 +1813,18 @@ class AppBase extends React.Component {
     await fetch(apiUrl('/api/project/stop'), { method: 'POST' });
   };
 
+  handleQrClick = async (pageName) => {
+    try {
+      await fetch(apiUrl('/api/project/stdin'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: `sim ${pageName}\n` }),
+      });
+    } catch (_) {
+      // 静默忽略网络错误
+    }
+  };
+
   handleElementScreenshot = async (blob, elementData) => {
     try {
       const { uploadFileAndGetPath } = await import('./components/TerminalPanel');

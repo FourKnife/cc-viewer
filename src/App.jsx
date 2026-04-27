@@ -148,6 +148,18 @@ class App extends AppBase {
     this.setState({ previewUrl: url });
   };
 
+  handleQrClick = async (pageName) => {
+    try {
+      await fetch('/api/project/stdin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: `sim ${pageName}\n` }),
+      });
+    } catch (_) {
+      // 静默忽略网络错误
+    }
+  };
+
   handleRunScenario = (scenario) => {
     this.setState({ pendingScenario: scenario, visualMenuKey: 'ui-edit' });
   };
@@ -645,6 +657,7 @@ class App extends AppBase {
                         availablePages={this.state.availablePages}
                         onPreviewUrlChange={this.handlePreviewUrlChange}
                         onSelectMenu={(key) => this.setState({ visualMenuKey: key })}
+                        onQrClick={this.handleQrClick}
                       />
                     </div>
                   ) : this.state.visualMenuKey === 'ui-edit' ? (

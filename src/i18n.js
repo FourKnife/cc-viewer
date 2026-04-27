@@ -8015,6 +8015,7 @@ const i18nData = {
     "en": "Available Pages",
     "ja": "利用可能なページ"
   },
+  "visual.launcher.qrTooltip": { "zh": "生成二维码", "en": "Generate QR", "ja": "QRコード生成" },
   "visual.menuScenarios": {
     "zh": "场景",
     "en": "Scenarios"

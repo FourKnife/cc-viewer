@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Input, Button, Space, Typography, Alert } from 'antd';
-import { PlayCircleOutlined, StopOutlined, FolderOpenOutlined } from '@ant-design/icons';
+import { Input, Button, Space, Typography, Alert, Tooltip } from 'antd';
+import { PlayCircleOutlined, StopOutlined, FolderOpenOutlined, QrcodeOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import { stripAnsi } from '../../utils/stripAnsi';
 import styles from './styles.module.css';
@@ -14,6 +14,7 @@ export default function ProjectLauncher({
   availablePages = [],
   onPreviewUrlChange,
   onSelectMenu,
+  onQrClick,
 }) {
   const [projectPath, setProjectPath] = useState('');
   const [command, setCommand] = useState('npm run mock');
@@ -123,14 +124,24 @@ export default function ProjectLauncher({
             <Typography.Text type="secondary">{t('visual.launcher.pages')}</Typography.Text>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
               {availablePages.map((page) => (
-                <Button
-                  key={page.url}
-                  size="small"
-                  type="default"
-                  onClick={() => handlePageClick(page)}
-                >
-                  {page.name}
-                </Button>
+                <span key={page.url} style={{ display: 'inline-flex', gap: 2 }}>
+                  <Button
+                    size="small"
+                    type="default"
+                    onClick={() => handlePageClick(page)}
+                  >
+                    {page.name}
+                  </Button>
+                  <Tooltip title={t('visual.launcher.qrTooltip')}>
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<QrcodeOutlined />}
+                      disabled={!isRunning}
+                      onClick={() => onQrClick?.(page.name)}
+                    />
+                  </Tooltip>
+                </span>
               ))}
             </div>
           </div>
