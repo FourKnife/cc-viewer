@@ -85,12 +85,40 @@ function ScenarioForm({ initial, onSave, onCancel }) {
     Object.entries(initial?.storage || {}).map(([key, value]) => ({ key, value }))
   );
   const [steps, setSteps] = useState(initial?.steps || []);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [showAiInput, setShowAiInput] = useState(false);
 
   const handleSave = () => {
     if (!name.trim() || !url.trim()) { message.warning('Name and URL are required'); return; }
     const storage = {};
     pairs.forEach(p => { if (p.key.trim()) storage[p.key.trim()] = p.value; });
     onSave({ name: name.trim(), url: url.trim(), storage, steps });
+  };
+
+  const handleAiGenerate = async () => {
+    if (!aiPrompt.trim()) return;
+    setAiLoading(true);
+    try {
+      const res = await fetch('/api/generate-scenario', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: aiPrompt, url: url }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        message.error(t('visual.scenario.aiError'));
+      } else {
+        setSteps(data.steps || []);
+        setShowAiInput(false);
+        setAiPrompt('');
+        message.success(`已生成 ${(data.steps || []).length} 个步骤`);
+      }
+    } catch (e) {
+      message.error(t('visual.scenario.aiError'));
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   return (
@@ -100,7 +128,26 @@ function ScenarioForm({ initial, onSave, onCancel }) {
         <Input size="small" placeholder={t('visual.scenario.url')} value={url} onChange={e => setUrl(e.target.value)} />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('visual.scenario.storage')}</Typography.Text>
         <StorageEditor pairs={pairs} onChange={setPairs} />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('visual.scenario.steps')}</Typography.Text>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('visual.scenario.steps')}</Typography.Text>
+          <Button size="small" type="dashed" onClick={() => setShowAiInput(v => !v)}>
+            {t('visual.scenario.aiGenerate')}
+          </Button>
+        </div>
+        {showAiInput && (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Input.TextArea
+              size="small"
+              rows={2}
+              placeholder={t('visual.scenario.aiPrompt')}
+              value={aiPrompt}
+              onChange={e => setAiPrompt(e.target.value)}
+            />
+            <Button size="small" type="primary" loading={aiLoading} onClick={handleAiGenerate}>
+              {aiLoading ? t('visual.scenario.aiGenerating') : t('visual.scenario.aiGenerate')}
+            </Button>
+          </Space>
+        )}
         <StepsEditor steps={steps} onChange={setSteps} />
         <Space>
           <Button size="small" type="primary" onClick={handleSave}>{t('visual.scenario.save')}</Button>
@@ -111,10 +158,27 @@ function ScenarioForm({ initial, onSave, onCancel }) {
   );
 }
 
-export default function ScenarioPanel({ onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario }) {
+export default function ScenarioPanel({ onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario, isRecording, onStartRecording, onStopRecording, recordedSteps }) {
   const [scenarios, setScenarios] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [showRecordSave, setShowRecordSave] = useState(false);
+  const [pendingRecordedSteps, setPendingRecordedSteps] = useState([]);
+
+  const handleStopAndSave = () => {
+    onStopRecording?.();
+    setPendingRecordedSteps(recordedSteps || []);
+    setShowRecordSave(true);
+    setShowAdd(false);
+    setEditingId(null);
+  };
+
+  const handleSaveRecorded = async (data) => {
+    await createScenario(data);
+    setShowRecordSave(false);
+    setPendingRecordedSteps([]);
+    load();
+  };
 
   const load = useCallback(async () => {
     try {
@@ -154,9 +218,18 @@ export default function ScenarioPanel({ onRunScenario, scenarioProgress, onBatch
               {t('visual.scenario.batchRun')}
             </Button>
           )}
-          <Button size="small" icon={<PlusOutlined />} onClick={() => { setShowAdd(v => !v); setEditingId(null); }}>
-            {t('visual.scenario.add')}
-          </Button>
+          {isRecording ? (
+              <Button size="small" danger onClick={handleStopAndSave}>
+                {t('visual.scenario.stopRecord')}
+              </Button>
+            ) : (
+              <Button size="small" icon={<span style={{color:'#ff4d4f'}}>●</span>} onClick={() => { onStartRecording?.(); setShowAdd(false); setEditingId(null); }}>
+                {t('visual.scenario.record')}
+              </Button>
+            )}
+            <Button size="small" icon={<PlusOutlined />} onClick={() => { setShowAdd(v => !v); setEditingId(null); }}>
+              {t('visual.scenario.add')}
+            </Button>
         </Space>
       </div>
 
@@ -166,6 +239,25 @@ export default function ScenarioPanel({ onRunScenario, scenarioProgress, onBatch
         </div>
       )}
 
+      {isRecording && (
+        <div style={{ padding: '6px 12px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-primary)' }}>
+          <Typography.Text type="danger" style={{ fontSize: 12 }}>● {t('visual.scenario.recording')} ({(recordedSteps || []).length} {t('visual.scenario.steps')})</Typography.Text>
+          <div style={{ maxHeight: 120, overflowY: 'auto', marginTop: 4 }}>
+            {(recordedSteps || []).map((s, i) => (
+              <div key={i} style={{ fontSize: 11, color: 'var(--text-muted)', padding: '1px 0' }}>
+                {i + 1}. [{s.type}] {s.selector}{s.value ? ` = "${s.value}"` : ''}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {showRecordSave && (
+        <ScenarioForm
+          initial={{ steps: pendingRecordedSteps }}
+          onSave={handleSaveRecorded}
+          onCancel={() => { setShowRecordSave(false); setPendingRecordedSteps([]); }}
+        />
+      )}
       {showAdd && (
         <ScenarioForm onSave={handleAdd} onCancel={() => setShowAdd(false)} />
       )}
