@@ -49,6 +49,8 @@ class App extends AppBase {
       batchScreenshots: [],   // [{ scenarioId, name, dataUrl }]
       showGallery: false,
       pinnedScenario: null,  // { id, name, url, storage, steps }
+      isRecording: false,
+      recordedSteps: [],
     });
     this.appHeaderRef = React.createRef();
     this._getTokenStatsContent = () => this.appHeaderRef.current?.renderTokenStats?.() ?? null;
@@ -154,6 +156,18 @@ class App extends AppBase {
     this.setState(prev => ({
       pinnedScenario: prev.pinnedScenario?.id === scenario?.id ? null : scenario,
     }));
+  };
+
+  handleStartRecording = () => {
+    this.setState({ isRecording: true, recordedSteps: [], visualMenuKey: 'ui-edit' });
+  };
+
+  handleStopRecording = () => {
+    this.setState({ isRecording: false });
+  };
+
+  handleRecordedStep = (step) => {
+    this.setState(prev => ({ recordedSteps: [...prev.recordedSteps, step] }));
   };
 
   handleStepProgress = (current, total) => {
@@ -652,6 +666,8 @@ class App extends AppBase {
                           onScreenshotReady={this.handleScreenshotReady}
                           pinnedScenario={this.state.pinnedScenario}
                           onUnpinScenario={() => this.setState({ pinnedScenario: null })}
+                          isRecording={this.state.isRecording}
+                          onRecordedStep={this.handleRecordedStep}
                         />
                       </div>
                       {/* 折叠时隐藏 resizer */}
@@ -701,6 +717,10 @@ class App extends AppBase {
                           onBatchRun={this.handleBatchRun}
                           pinnedScenarioId={this.state.pinnedScenario?.id || null}
                           onPinScenario={this.handlePinScenario}
+                          isRecording={this.state.isRecording}
+                          onStartRecording={this.handleStartRecording}
+                          onStopRecording={this.handleStopRecording}
+                          recordedSteps={this.state.recordedSteps}
                         />
                       )}
                     </div>
