@@ -8075,7 +8075,7 @@ const i18nData = {
   "visual.scenario.stepMs": { "zh": "毫秒", "en": "ms" },
   "visual.scenario.stepValue": { "zh": "值", "en": "Value" },
   "visual.scenario.running": { "zh": "运行中", "en": "Running" },
-  "visual.scenario.batchRun": { "zh": "全部截图", "en": "Batch Screenshot" },
+  "visual.scenario.batchRun": { "zh": "开始全部场景截图", "en": "Run All Scenarios" },
   "visual.scenario.gallery.title": { "zh": "截图画廊", "en": "Screenshot Gallery" },
   "visual.scenario.gallery.back": { "zh": "返回", "en": "Back" },
   "visual.scenario.gallery.empty": { "zh": "暂无截图", "en": "No screenshots yet" },
@@ -8084,7 +8084,14 @@ const i18nData = {
   "visual.scenario.gallery.close": { "zh": "关闭", "en": "Close" },
   "visual.scenario.pin": { "zh": "固定", "en": "Pin" },
   "visual.scenario.unpin": { "zh": "取消固定", "en": "Unpin" },
-  "visual.scenario.pinned": { "zh": "场景", "en": "Scenario" }
+  "visual.scenario.pinned": { "zh": "场景", "en": "Scenario" },
+  "visual.scenario.record": { "zh": "录制", "en": "Record" },
+  "visual.scenario.stopRecord": { "zh": "停止录制", "en": "Stop Recording" },
+  "visual.scenario.recording": { "zh": "录制中", "en": "Recording" },
+  "visual.scenario.aiGenerate": { "zh": "AI 生成", "en": "AI Generate" },
+  "visual.scenario.aiPrompt": { "zh": "描述操作流程（如：点击登录按钮，填写用户名密码）", "en": "Describe the flow (e.g. click login, fill username and password)" },
+  "visual.scenario.aiGenerating": { "zh": "AI 生成中...", "en": "Generating..." },
+  "visual.scenario.aiError": { "zh": "AI 生成失败，请检查 API Key 配置", "en": "AI generation failed. Check API Key config." }
 };
 
 // 将 { key: { lang: text } } 转换为 { lang: { key: text } }

@@ -2832,6 +2832,88 @@ Be concise - developers need actionable fixes, not lengthy descriptions.`;
     return;
   }
 
+  // POST /api/generate-scenario
+  if (url === '/api/generate-scenario' && method === 'POST') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 64 * 1024) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const { description, url: pageUrl } = JSON.parse(body);
+        if (!description) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'missing_description' }));
+          return;
+        }
+        const apiKey = _cachedApiKey;
+        const authHeader = _cachedAuthHeader;
+        if (!apiKey && !authHeader) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'no_api_key' }));
+          return;
+        }
+        const prompt = `You are a frontend test automation expert. Generate a JSON array of scenario steps based on the user's description.
+
+Page URL: ${pageUrl || 'unknown'}
+User description: ${description}
+
+Rules:
+1. Return ONLY a valid JSON array, no markdown, no explanation.
+2. Each step must be one of:
+   - { "type": "click", "selector": "CSS_SELECTOR" }
+   - { "type": "fill", "selector": "CSS_SELECTOR", "value": "TEXT" }
+   - { "type": "wait", "ms": NUMBER }
+3. Use specific, stable CSS selectors (prefer id, data-testid, aria-label over class names).
+4. Add wait steps (300-500ms) after clicks that trigger navigation or async operations.
+5. Generate 3-10 steps maximum.
+
+Return only the JSON array.`;
+
+        const apiBody = JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          messages: [{ role: 'user', content: prompt }]
+        });
+        const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' };
+        if (apiKey) headers['x-api-key'] = apiKey;
+        else if (authHeader) headers['authorization'] = authHeader;
+
+        const apiReq = httpsRequest({
+          hostname: 'api.anthropic.com',
+          path: '/v1/messages',
+          method: 'POST',
+          headers: { ...headers, 'Content-Length': Buffer.byteLength(apiBody) },
+          timeout: 30000,
+        }, (apiRes) => {
+          let data = '';
+          apiRes.on('data', c => { data += c; });
+          apiRes.on('end', () => {
+            try {
+              const parsed = JSON.parse(data);
+              const text = parsed.content?.[0]?.text || '[]';
+              const match = text.match(/\[[\s\S]*\]/);
+              const steps = match ? JSON.parse(match[0]) : [];
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ steps }));
+            } catch (e) {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'parse_error', steps: [] }));
+            }
+          });
+        });
+        apiReq.on('error', (e) => {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: String(e) }));
+        });
+        apiReq.write(apiBody);
+        apiReq.end();
+      } catch (e) {
+        res.writeHead(400);
+        res.end('Bad request');
+      }
+    });
+    return;
+  }
+
   // GET /api/scenarios
   if (url === '/api/scenarios' && method === 'GET') {
     const projectDir = process.env.CCV_PROJECT_DIR || process.cwd();
