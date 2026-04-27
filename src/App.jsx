@@ -17,6 +17,7 @@ import { isMainAgent } from './utils/contentFilter';
 import { classifyRequest } from './utils/requestType';
 import { apiUrl } from './utils/apiUrl';
 import { parseAvailablePages } from './utils/parseAvailablePages';
+import { stripAnsi } from './utils/stripAnsi';
 import ProjectLauncher from './components/VisualEditor/ProjectLauncher';
 import PagePreview from './components/VisualEditor/PagePreview';
 import ElementInfo from './components/VisualEditor/ElementInfo';
@@ -92,6 +93,15 @@ class App extends AppBase {
   }
 
   componentDidUpdate(prevProps, prevState) {
+    // 当 projectOutput 更新时，解析 Available Pages（不依赖 visualMenuKey）
+    if (this.state.projectOutput !== prevState.projectOutput && this.state.projectOutput) {
+      const cleanOutput = stripAnsi(this.state.projectOutput);
+      const pages = parseAvailablePages(cleanOutput);
+      if (JSON.stringify(pages) !== JSON.stringify(this.state.availablePages)) {
+        this.setState({ availablePages: pages });
+      }
+    }
+
     // 仅在 ui-edit 模式下自动管理底部面板
     if (this.state.visualMenuKey !== 'ui-edit') return;
 
@@ -111,14 +121,6 @@ class App extends AppBase {
     const curEl = this.state.selectedElement;
     if (!prevEl && curEl) {
       this.setState({ activeBottomTab: 'element', bottomPanelCollapsed: false });
-    }
-
-    // 当 projectOutput 更新时，解析 Available Pages
-    if (this.state.projectOutput !== prevState.projectOutput && this.state.projectOutput) {
-      const pages = parseAvailablePages(this.state.projectOutput);
-      if (JSON.stringify(pages) !== JSON.stringify(this.state.availablePages)) {
-        this.setState({ availablePages: pages });
-      }
     }
   }
 
