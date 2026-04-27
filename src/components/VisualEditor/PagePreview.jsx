@@ -164,7 +164,7 @@ function compareStyles(domStyles, sketchData) {
   return diffs;
 }
 
-export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot, pendingScenario, onScenarioDone, onStepProgress, onScreenshotReady, pinnedScenario, onUnpinScenario }) {
+export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot, pendingScenario, onScenarioDone, onStepProgress, onScreenshotReady, pinnedScenario, onUnpinScenario, isRecording, onRecordedStep }) {
   const [urlInput, setUrlInput] = useState(externalUrl || '');
   const [iframeSrc, setIframeSrc] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
@@ -253,6 +253,16 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
     }
   }, []);
 
+  const sendRecordingCmd = useCallback((start) => {
+    const iframe = iframeRef.current;
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage(
+        { source: 'cc-visual-parent', type: start ? 'start-recording' : 'stop-recording' },
+        '*'
+      );
+    }
+  }, []);
+
   const sendNextStep = useCallback(() => {
     const state = pendingStepsRef.current;
     if (!state) return;
@@ -273,6 +283,12 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
       );
     }
   }, [onScenarioDone, onStepProgress]);
+
+  useEffect(() => {
+    if (isRecording !== undefined) {
+      sendRecordingCmd(isRecording);
+    }
+  }, [isRecording, sendRecordingCmd]);
 
   const toggleInspecting = useCallback(() => {
     setInspecting(prev => {
@@ -334,6 +350,9 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
             pendingStepsRef.current.stepIndex++;
             sendNextStep();
           }
+          break;
+        case 'recorded-step':
+          onRecordedStep?.(e.data.data);
           break;
       }
     }
