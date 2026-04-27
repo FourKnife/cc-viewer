@@ -7,7 +7,8 @@
 - ✅ **[M1.2: 可视化编辑体验增强](milestones/v1.2-ROADMAP.md)** — 4 phases, 默认值优化 + 终端替换 + 设计稿对比自动调整 (2026-04-23)
 - ✅ **[M1.3: 优化可视区域](milestones/v1.3-ROADMAP.md)** — 2 phases, 布局重构 + 操作区折叠 + Anti-AI-Slop (2026-04-23)
 - ✅ **[M1.4: 细节修复与上下文结构化](milestones/v1.4-ROADMAP.md)** — 2 phases, iframe URL 持久化 + XML 结构化元素上下文
-- 🚧 **[M1.5: 项目启动器 UI 改造](milestones/v1.5-ROADMAP.md)** — 2 phases, Launcher 迁移 SideMenu + PagePreview 常态化 + ANSI 过滤 + Available Pages 快捷导航
+- ✅ **[M1.5: 项目启动器 UI 改造](milestones/v1.5-ROADMAP.md)** — 2 phases, Launcher 迁移 SideMenu + PagePreview 常态化 + ANSI 过滤 + Available Pages 快捷导航 (2026-04-24)
+- 🚧 **[M1.6: Scenario 场景系统](milestones/v1.6-ROADMAP.md)** — 4 phases, 多页面状态快速导航 + storage 注入 + steps 执行引擎 + 批量截图画廊 + 固定场景
 
 ---
 
@@ -25,21 +26,21 @@
 
 ---
 
-## M1.5: 项目启动器 UI 改造
+## M1.5: 项目启动器 UI 改造 ✅
 
 ### Phase 20: SideMenu 扩展 + Launcher 迁移 + PagePreview 常态化
 
 **Goal:** 将 ProjectLauncher 迁移为 SideMenu 独立菜单项；PagePreview 始终显示 URL 输入框
 **Description:** 新增 `launcher` 菜单项，center 区域按 visualMenuKey 渲染；移除 PagePreview 空状态判断，常态化显示 URL bar
 **Depends on:** Phase 19
-**Status:** pending
+**Status:** ✅ completed
 
 ### Phase 21: 日志 ANSI 过滤 + Available Pages 快捷导航
 
 **Goal:** 清除日志噪音；解析 Available Pages 展示为可点击快捷入口
 **Description:** 新建 `stripAnsi` / `parseAvailablePages` 工具函数；ProjectLauncher 渲染时过滤 ANSI；启动后展示页面列表，点击自动导航到 ui-edit 模式并填入 URL
 **Depends on:** Phase 20
-**Status:** pending
+**Status:** ✅ completed
 
 ---
 

@@ -6,16 +6,32 @@ import { apiUrl } from '../../utils/apiUrl';
 import ScreenshotCompare from './ScreenshotCompare';
 import styles from './styles.module.css';
 
-// Sketch 品牌图标（替代 DiffOutlined）
-function SketchSvgIcon({ className, onClick }) {
+// Sketch 品牌图标
+const SketchSvgIcon = React.forwardRef(function SketchSvgIcon({ className, onClick, ...rest }, ref) {
   return (
-    <span role="img" className={className} onClick={onClick} style={{ lineHeight: 0, display: 'inline-flex', alignItems: 'center' }}>
+    <span ref={ref} role="img" className={className} onClick={onClick} {...rest} style={{ lineHeight: 0, display: 'inline-flex', alignItems: 'center' }}>
       <svg viewBox="0 0 1024 1024" width="1em" height="1em" fill="currentColor">
         <path d="M55 324.4L18 374.2h181l13.8-261.4-157.8 211.6zM792.6 91.4L535.4 64l271.4 294.4-14.2-267zM224.4 436.6l-22.4-44H19.8L469.6 916z m4-62.4h568l-163-177L512.6 66z m594.6 18.2L555.2 916l449.6-523.4h-181.8zM830.8 138L812 112.8l1.8 34.6 12.2 226.8h180.6zM227 187l-9.2 171.2L489.4 64 232.2 91.4z m575.4 205.4h-580l84.8 165.8L512.6 960l289.8-567.6z" />
       </svg>
     </span>
   );
-}
+});
+
+// 对比/差异图标（两个矩形并列，中间带双向箭头）
+const CompareSvgIcon = React.forwardRef(function CompareSvgIcon({ className, onClick, ...rest }, ref) {
+  return (
+    <span ref={ref} role="img" className={className} onClick={onClick} {...rest} style={{ lineHeight: 0, display: 'inline-flex', alignItems: 'center' }}>
+      <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="4" width="8" height="16" rx="1" />
+        <rect x="14" y="4" width="8" height="16" rx="1" />
+        <line x1="12" y1="8" x2="10" y2="12" />
+        <line x1="12" y1="8" x2="14" y2="12" />
+        <line x1="12" y1="16" x2="10" y2="12" />
+        <line x1="12" y1="16" x2="14" y2="12" />
+      </svg>
+    </span>
+  );
+});
 
 // 将 http://localhost:PORT/path 转为代理 URL /api/proxy/PORT/path
 // 代理会注入 inspector-inject.js 脚本并移除 CSP 限制
@@ -148,7 +164,7 @@ function compareStyles(domStyles, sketchData) {
   return diffs;
 }
 
-export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot }) {
+export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot, pendingScenario, onScenarioDone, onStepProgress, onScreenshotReady, pinnedScenario, onUnpinScenario }) {
   const [urlInput, setUrlInput] = useState(externalUrl || '');
   const [iframeSrc, setIframeSrc] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
@@ -156,9 +172,15 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
   const [loadError, setLoadError] = useState('');
   const [screenshotData, setScreenshotData] = useState(null);
   const [autoComparing, setAutoComparing] = useState(false);
+  const [sketchPreviewVisible, setSketchPreviewVisible] = useState(false);
+  const [sketchPreviewData, setSketchPreviewData] = useState(null);
+  const [frameWidth, setFrameWidth] = useState(430);
+  const frameRef = useRef(null);
   const navigatedRef = useRef(false);
   const iframeRef = useRef(null);
   const loadTimerRef = useRef(null);
+  const pendingStepsRef = useRef(null);
+  const pinnedRunningRef = useRef(false);
 
   const handleNavigate = useCallback((value) => {
     const input = (value || '').trim();
@@ -207,6 +229,19 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount only
 
+  // 检测 mobileFrame 实际宽度，用于 Sketch 缩放
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        setFrameWidth(entry.contentRect.width);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // 向 iframe 发送 inspector 开关指令
   const sendInspectorCmd = useCallback((enabled) => {
     const iframe = iframeRef.current;
@@ -217,6 +252,27 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
       );
     }
   }, []);
+
+  const sendNextStep = useCallback(() => {
+    const state = pendingStepsRef.current;
+    if (!state) return;
+    const { scenario, stepIndex } = state;
+    const steps = scenario.steps || [];
+    if (stepIndex >= steps.length) {
+      pendingStepsRef.current = null;
+      onStepProgress?.(0, 0);
+      onScenarioDone?.();
+      return;
+    }
+    onStepProgress?.(stepIndex + 1, steps.length);
+    const iframe = iframeRef.current;
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage(
+        { source: 'cc-visual-parent', type: 'run-step', step: steps[stepIndex], stepIndex },
+        '*'
+      );
+    }
+  }, [onScenarioDone, onStepProgress]);
 
   const toggleInspecting = useCallback(() => {
     setInspecting(prev => {
@@ -266,27 +322,95 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
           break;
         case 'deselect': onElementDeselect?.(); break;
         case 'ready': sendInspectorCmd(inspecting); break;
+        case 'step-done':
+          if (pendingStepsRef.current) {
+            pendingStepsRef.current.stepIndex++;
+            sendNextStep();
+          }
+          break;
+        case 'step-error':
+          console.warn('Step error:', e.data.data);
+          if (pendingStepsRef.current) {
+            pendingStepsRef.current.stepIndex++;
+            sendNextStep();
+          }
+          break;
       }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [onElementHover, onElementSelect, onElementDeselect, sendInspectorCmd, inspecting, captureElementScreenshot]);
+  }, [onElementHover, onElementSelect, onElementDeselect, sendInspectorCmd, inspecting, captureElementScreenshot, sendNextStep]);
+
+  // Sketch 预览自动轮询
+  useEffect(() => {
+    if (!sketchPreviewVisible) return;
+    const fetchSketch = async () => {
+      try {
+        const res = await fetch(apiUrl('/api/sketch-screenshot')).then(r => r.json());
+        if (!res.error && res.image) {
+          setSketchPreviewData({ image: res.image, width: res.width, height: res.height, name: res.name });
+        }
+      } catch (err) {
+        console.warn('Sketch preview poll failed:', err);
+      }
+    };
+    fetchSketch();
+    const timer = setInterval(fetchSketch, 2000);
+    return () => clearInterval(timer);
+  }, [sketchPreviewVisible]);
+
+  // 执行 pendingScenario：注入 localStorage → 设置步骤引用 → 导航
+  useEffect(() => {
+    if (!pendingScenario) return;
+    const iframe = iframeRef.current;
+    try {
+      const win = iframe?.contentWindow;
+      if (win && pendingScenario.storage) {
+        Object.entries(pendingScenario.storage).forEach(([k, v]) => {
+          win.localStorage.setItem(k, v);
+        });
+      }
+    } catch (err) {
+      console.warn('localStorage inject failed:', err);
+    }
+    const steps = pendingScenario.steps || [];
+    if (steps.length > 0) {
+      pendingStepsRef.current = { scenario: pendingScenario, stepIndex: 0 };
+    } else {
+      pendingStepsRef.current = null;
+      onScenarioDone?.();
+    }
+    handleNavigate(pendingScenario.url);
+  }, [pendingScenario]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRefresh = useCallback(() => {
     setIframeKey(k => k + 1);
   }, []);
 
-  const handleScreenshot = useCallback(async () => {
+  const captureFullScreenshot = useCallback(async () => {
     const frame = iframeRef.current;
-    if (!frame?.contentDocument?.documentElement) return;
+    if (!frame?.contentDocument?.documentElement) return null;
     try {
       const html2canvas = (await import('html2canvas')).default;
       const canvas = await html2canvas(frame.contentDocument.documentElement, { useCORS: true, scale: 2, allowTaint: true, width: frame.clientWidth, height: frame.clientHeight });
-      setScreenshotData({ imageA: canvas.toDataURL('image/png') });
+      return canvas.toDataURL('image/png');
     } catch (err) {
       console.warn('Screenshot failed:', err);
+      return null;
     }
   }, []);
+
+  // Expose screenshot capability to parent via callback ref pattern
+  useEffect(() => {
+    if (onScreenshotReady) {
+      onScreenshotReady(captureFullScreenshot);
+    }
+  }, [onScreenshotReady, captureFullScreenshot]);
+
+  const handleScreenshot = useCallback(async () => {
+    const dataUrl = await captureFullScreenshot();
+    if (dataUrl) setScreenshotData({ imageA: dataUrl });
+  }, [captureFullScreenshot]);
 
   const handleCompareSketch = useCallback(async () => {
     const frame = iframeRef.current;
@@ -404,6 +528,12 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
         <Tooltip title={t('visual.screenshot')}>
           <CameraOutlined className={styles.urlRefresh} onClick={handleScreenshot} />
         </Tooltip>
+        <Tooltip title={t('visual.sketchPreview')}>
+          <SketchSvgIcon
+            className={`${styles.urlRefresh} ${sketchPreviewVisible ? styles.urlSketchActive : ''}`}
+            onClick={() => setSketchPreviewVisible(v => !v)}
+          />
+        </Tooltip>
         {autoComparing ? (
           <LoadingOutlined className={styles.urlRefresh} spin />
         ) : (
@@ -412,25 +542,87 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
             sketchMcpStatus !== 'connected' ? t('visual.structCompare.needSketch') :
             t('visual.structCompare')
           }>
-            <SketchSvgIcon
+            <CompareSvgIcon
               className={`${styles.urlRefresh} ${(!selectedElement || sketchMcpStatus !== 'connected') ? styles.urlBtnDisabled : ''}`}
               onClick={(!selectedElement || sketchMcpStatus !== 'connected') ? undefined : handleAutoCompare}
             />
           </Tooltip>
         )}
+        {pinnedScenario && (
+          <span
+            className={styles.pinnedScenarioTag}
+            onClick={onUnpinScenario}
+            title={t('visual.scenario.unpin')}
+          >
+            {t('visual.scenario.pinned')}: {pinnedScenario.name}
+          </span>
+        )}
       </div>
       {loadError && <div className={styles.iframeError}>{loadError}</div>}
       <div className={styles.iframeArea}>
-        <div className={styles.mobileFrame}>
-          {iframeSrc && (
-            <iframe
-              ref={iframeRef}
-              key={iframeKey}
-              src={iframeSrc}
-              className={styles.iframe}
-              title="Project Preview"
-              onLoad={() => { if (loadTimerRef.current) { clearTimeout(loadTimerRef.current); loadTimerRef.current = null; } setLoadError(''); }}
-            />
+        <div className={styles.previewRow}>
+          <div className={styles.mobileFrame} ref={frameRef}>
+            {iframeSrc && (
+              <iframe
+                ref={iframeRef}
+                key={iframeKey}
+                src={iframeSrc}
+                className={styles.iframe}
+                title="Project Preview"
+                onLoad={() => {
+                  if (loadTimerRef.current) { clearTimeout(loadTimerRef.current); loadTimerRef.current = null; }
+                  setLoadError('');
+                  if (pendingStepsRef.current) {
+                    sendNextStep();
+                  } else if (pinnedScenario && !pinnedRunningRef.current) {
+                    // Auto-execute pinned scenario; guard prevents re-entry
+                    pinnedRunningRef.current = true;
+                    const iframe = iframeRef.current;
+                    try {
+                      const win = iframe?.contentWindow;
+                      if (win && pinnedScenario.storage) {
+                        Object.entries(pinnedScenario.storage).forEach(([k, v]) => {
+                          win.localStorage.setItem(k, v);
+                        });
+                      }
+                    } catch (err) {
+                      console.warn('pinnedScenario localStorage inject failed:', err);
+                    }
+                    const steps = pinnedScenario.steps || [];
+                    if (steps.length > 0) {
+                      pendingStepsRef.current = { scenario: pinnedScenario, stepIndex: 0 };
+                      sendNextStep();
+                    }
+                    // Reset guard after a short delay so next manual refresh can re-run
+                    setTimeout(() => { pinnedRunningRef.current = false; }, 500);
+                  }
+                }}
+              />
+            )}
+          </div>
+          {sketchPreviewVisible && (
+            <div className={styles.sketchPreviewPanel}>
+              {sketchPreviewData ? (
+                <>
+                  <img
+                    src={sketchPreviewData.image}
+                    className={styles.sketchPreviewImg}
+                    alt="Sketch"
+                    style={{
+                      width: Math.round(sketchPreviewData.width * (frameWidth / 750)),
+                      height: 'auto',
+                    }}
+                  />
+                  <div className={styles.sketchPreviewLabel}>{sketchPreviewData.name}</div>
+                  <div className={styles.sketchPreviewSize}>
+                    {sketchPreviewData.width} × {sketchPreviewData.height} px
+                    ({Math.round((frameWidth / 750) * 100)}%)
+                  </div>
+                </>
+              ) : (
+                <div className={styles.sketchPreviewEmpty}>{t('visual.sketchPreviewEmpty')}</div>
+              )}
+            </div>
           )}
         </div>
       </div>

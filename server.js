@@ -51,6 +51,29 @@ import { buildTeamStatusResponse } from './lib/team-runtime.js';
 import { projectManager } from './lib/project-manager.js';
 
 
+// ─── Scenario storage helpers (exported for testing) ───────────────────────
+export function scenariosFilePath(projectDir) {
+  return join(projectDir, '.cleffa', 'scenarios.json');
+}
+
+export function readScenariosFile(projectDir) {
+  const filePath = scenariosFilePath(projectDir);
+  if (!existsSync(filePath)) return [];
+  try {
+    const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+    return Array.isArray(data.scenarios) ? data.scenarios : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeScenariosFile(projectDir, scenarios) {
+  const filePath = scenariosFilePath(projectDir);
+  const dir = join(projectDir, '.cleffa');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(filePath, JSON.stringify({ scenarios }, null, 2), 'utf-8');
+}
+
 // 动态获取 getPrefsFile()（LOG_DIR 可能在运行时被 setLogDir 修改）
 function getPrefsFile() { return join(LOG_DIR, 'preferences.json'); }
 
@@ -1322,13 +1345,9 @@ if (!doc || doc.selectedLayers.layers.length === 0) {
       let body = '';
       mcpRes.on('data', c => { body += c; });
       mcpRes.on('end', () => {
-        console.log('[Sketch MCP] status:', mcpRes.statusCode, 'body length:', body.length);
-        console.log('[Sketch MCP] raw body:', body.substring(0, 2000));
         try {
           const data = JSON.parse(body);
-          console.log('[Sketch MCP] parsed keys:', Object.keys(data));
           const content = data?.result?.content;
-          console.log('[Sketch MCP] content:', JSON.stringify(content)?.substring(0, 500));
           const text = Array.isArray(content) ? content.find(c => c.type === 'text') : null;
           if (text?.text) {
             let rawText = text.text;
@@ -1345,25 +1364,20 @@ if (!doc || doc.selectedLayers.layers.length === 0) {
               res.end(JSON.stringify({ name: parsed.name, image: `data:image/png;base64,${parsed.base64}`, width: parsed.width, height: parsed.height }));
             }
           } else {
-            console.log('[Sketch MCP] no text content found, data.result:', JSON.stringify(data?.result)?.substring(0, 500));
-            console.log('[Sketch MCP] data.error:', JSON.stringify(data?.error)?.substring(0, 500));
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'empty_response' }));
           }
         } catch (parseErr) {
-          console.error('[Sketch MCP] parse error:', parseErr.message);
-          console.error('[Sketch MCP] body preview:', body.substring(0, 500));
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'parse_error' }));
         }
       });
     });
-    mcpReq.on('error', (err) => {
-      console.error('[Sketch MCP] connection error:', err.message);
+    mcpReq.on('error', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'mcp_unavailable' }));
     });
-    mcpReq.on('timeout', () => { console.warn('[Sketch MCP] request timeout'); mcpReq.destroy(); });
+    mcpReq.on('timeout', () => { mcpReq.destroy(); });
     mcpReq.write(postData);
     mcpReq.end();
     return;
@@ -2815,6 +2829,81 @@ Be concise - developers need actionable fixes, not lengthy descriptions.`;
       res.writeHead(404);
       res.end('Not found');
     }
+    return;
+  }
+
+  // GET /api/scenarios
+  if (url === '/api/scenarios' && method === 'GET') {
+    const projectDir = process.env.CCV_PROJECT_DIR || process.cwd();
+    const scenarios = readScenariosFile(projectDir);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ scenarios }));
+    return;
+  }
+
+  // POST /api/scenarios
+  if (url === '/api/scenarios' && method === 'POST') {
+    const projectDir = process.env.CCV_PROJECT_DIR || process.cwd();
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > MAX_POST_BODY) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const scenarios = readScenariosFile(projectDir);
+        const newScenario = {
+          id: randomBytes(8).toString('hex'),
+          name: data.name || 'Untitled',
+          url: data.url || '/',
+          storage: data.storage || {},
+          steps: data.steps || [],
+        };
+        scenarios.push(newScenario);
+        writeScenariosFile(projectDir, scenarios);
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(newScenario));
+      } catch (e) {
+        res.writeHead(400);
+        res.end('Bad request');
+      }
+    });
+    return;
+  }
+
+  // PUT /api/scenarios/:id
+  const scenarioPutMatch = method === 'PUT' ? url.match(/^\/api\/scenarios\/([^/]+)$/) : null;
+  if (scenarioPutMatch) {
+    const projectDir = process.env.CCV_PROJECT_DIR || process.cwd();
+    const id = scenarioPutMatch[1];
+    let body = '';
+    req.on('data', chunk => { body += chunk; if (body.length > MAX_POST_BODY) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const scenarios = readScenariosFile(projectDir);
+        const idx = scenarios.findIndex(s => s.id === id);
+        if (idx === -1) { res.writeHead(404); res.end('Not found'); return; }
+        scenarios[idx] = { ...scenarios[idx], ...data, id };
+        writeScenariosFile(projectDir, scenarios);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(scenarios[idx]));
+      } catch (e) {
+        res.writeHead(400);
+        res.end('Bad request');
+      }
+    });
+    return;
+  }
+
+  // DELETE /api/scenarios/:id
+  const scenarioDeleteMatch = method === 'DELETE' ? url.match(/^\/api\/scenarios\/([^/]+)$/) : null;
+  if (scenarioDeleteMatch) {
+    const projectDir = process.env.CCV_PROJECT_DIR || process.cwd();
+    const id = scenarioDeleteMatch[1];
+    const scenarios = readScenariosFile(projectDir);
+    const filtered = scenarios.filter(s => s.id !== id);
+    writeScenariosFile(projectDir, filtered);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 

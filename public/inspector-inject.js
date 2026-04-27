@@ -4,6 +4,8 @@
 
   let enabled = true;
   let selectedElement = null;
+  var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') &&
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   let hoverOverlay = null;
   let selectOverlay = null;
 
@@ -187,6 +189,35 @@
       hoverOverlay.style.display = 'none';
       selectOverlay.style.display = 'none';
       selectedElement = null;
+    }
+    if (e.data.type === 'run-step') {
+      var step = e.data.step;
+      var stepIndex = e.data.stepIndex;
+      try {
+        if (step.type === 'click') {
+          var clickEl = document.querySelector(step.selector);
+          if (!clickEl) { sendToParent('step-error', { stepIndex: stepIndex, reason: 'selector not found: ' + step.selector }); return; }
+          clickEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          sendToParent('step-done', { stepIndex: stepIndex });
+        } else if (step.type === 'wait') {
+          setTimeout(function() { sendToParent('step-done', { stepIndex: stepIndex }); }, step.ms || 0);
+        } else if (step.type === 'fill') {
+          var fillEl = document.querySelector(step.selector);
+          if (!fillEl) { sendToParent('step-error', { stepIndex: stepIndex, reason: 'selector not found: ' + step.selector }); return; }
+          if (nativeInputValueSetter) {
+            nativeInputValueSetter.call(fillEl, step.value || '');
+          } else {
+            fillEl.value = step.value || '';
+          }
+          fillEl.dispatchEvent(new Event('input', { bubbles: true }));
+          fillEl.dispatchEvent(new Event('change', { bubbles: true }));
+          sendToParent('step-done', { stepIndex: stepIndex });
+        } else {
+          sendToParent('step-done', { stepIndex: stepIndex });
+        }
+      } catch (err) {
+        sendToParent('step-error', { stepIndex: stepIndex, reason: String(err) });
+      }
     }
   });
 

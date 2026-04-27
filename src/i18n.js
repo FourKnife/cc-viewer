@@ -7793,6 +7793,16 @@ const i18nData = {
     "ko": "왼쪽 패널에서 프로젝트를 시작하거나 포트 번호를 입력하여 미리보기",
     "ja": "左パネルでプロジェクトを起動するか、ポート番号を入力してプレビュー"
   },
+  "visual.sketchPreview": {
+    "zh": "Sketch 预览",
+    "en": "Sketch Preview",
+    "ja": "Sketchプレビュー"
+  },
+  "visual.sketchPreviewEmpty": {
+    "zh": "等待选中图层...",
+    "en": "Waiting for layer selection...",
+    "ja": "レイヤー選択を待機中..."
+  },
   "visual.screenshot": {
     "zh": "截图",
     "en": "Screenshot",
@@ -8004,7 +8014,77 @@ const i18nData = {
     "zh": "可用页面",
     "en": "Available Pages",
     "ja": "利用可能なページ"
-  }
+  },
+  "visual.menuScenarios": {
+    "zh": "场景",
+    "en": "Scenarios"
+  },
+  "visual.scenario.add": {
+    "zh": "新增场景",
+    "en": "Add Scenario"
+  },
+  "visual.scenario.run": {
+    "zh": "运行",
+    "en": "Run"
+  },
+  "visual.scenario.delete": {
+    "zh": "删除",
+    "en": "Delete"
+  },
+  "visual.scenario.edit": {
+    "zh": "编辑",
+    "en": "Edit"
+  },
+  "visual.scenario.empty": {
+    "zh": "暂无场景，点击「新增场景」创建",
+    "en": "No scenarios yet. Click \"Add Scenario\" to create one."
+  },
+  "visual.scenario.name": {
+    "zh": "场景名称",
+    "en": "Name"
+  },
+  "visual.scenario.url": {
+    "zh": "目标 URL",
+    "en": "Target URL"
+  },
+  "visual.scenario.storage": {
+    "zh": "localStorage 注入",
+    "en": "localStorage Inject"
+  },
+  "visual.scenario.storageKey": {
+    "zh": "键",
+    "en": "Key"
+  },
+  "visual.scenario.storageValue": {
+    "zh": "值",
+    "en": "Value"
+  },
+  "visual.scenario.save": {
+    "zh": "保存",
+    "en": "Save"
+  },
+  "visual.scenario.cancel": {
+    "zh": "取消",
+    "en": "Cancel"
+  },
+  "visual.scenario.steps": { "zh": "步骤", "en": "Steps" },
+  "visual.scenario.stepClick": { "zh": "点击", "en": "Click" },
+  "visual.scenario.stepWait": { "zh": "等待", "en": "Wait" },
+  "visual.scenario.stepFill": { "zh": "填写", "en": "Fill" },
+  "visual.scenario.stepSelector": { "zh": "选择器", "en": "Selector" },
+  "visual.scenario.stepMs": { "zh": "毫秒", "en": "ms" },
+  "visual.scenario.stepValue": { "zh": "值", "en": "Value" },
+  "visual.scenario.running": { "zh": "运行中", "en": "Running" },
+  "visual.scenario.batchRun": { "zh": "全部截图", "en": "Batch Screenshot" },
+  "visual.scenario.gallery.title": { "zh": "截图画廊", "en": "Screenshot Gallery" },
+  "visual.scenario.gallery.back": { "zh": "返回", "en": "Back" },
+  "visual.scenario.gallery.empty": { "zh": "暂无截图", "en": "No screenshots yet" },
+  "visual.scenario.gallery.progress": { "zh": "截图进度", "en": "Progress" },
+  "visual.scenario.gallery.download": { "zh": "下载", "en": "Download" },
+  "visual.scenario.gallery.close": { "zh": "关闭", "en": "Close" },
+  "visual.scenario.pin": { "zh": "固定", "en": "Pin" },
+  "visual.scenario.unpin": { "zh": "取消固定", "en": "Unpin" },
+  "visual.scenario.pinned": { "zh": "场景", "en": "Scenario" }
 };
 
 // 将 { key: { lang: text } } 转换为 { lang: { key: text } }

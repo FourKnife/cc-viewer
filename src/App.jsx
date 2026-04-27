@@ -23,7 +23,8 @@ import ElementInfo from './components/VisualEditor/ElementInfo';
 import StatusBar from './components/VisualEditor/StatusBar';
 import SideMenu from './components/VisualEditor/SideMenu';
 import BottomTabPanel from './components/VisualEditor/BottomTabPanel';
-// PromptInput 已移除 — AI 修改通过右侧 ChatView 输入
+import ScenarioPanel from './components/VisualEditor/ScenarioPanel';
+import ScenarioGallery from './components/VisualEditor/ScenarioGallery';
 
 class App extends AppBase {
   constructor(props) {
@@ -41,10 +42,18 @@ class App extends AppBase {
       activeBottomTab: 'element',   // 'element' only — launcher is now a SideMenu entry
       previewUrl: '',          // persisted across viewMode switches
       availablePages: [],
+      pendingScenario: null,
+      scenarioProgress: null,
+      batchQueue: null,       // array of scenarios to run in batch
+      batchProgress: null,    // { current, total }
+      batchScreenshots: [],   // [{ scenarioId, name, dataUrl }]
+      showGallery: false,
+      pinnedScenario: null,  // { id, name, url, storage, steps }
     });
     this.appHeaderRef = React.createRef();
     this._getTokenStatsContent = () => this.appHeaderRef.current?.renderTokenStats?.() ?? null;
     this.visualCenterRef = React.createRef();
+    this._screenshotFn = null; // set by PagePreview via onScreenshotReady
   }
 
   componentDidMount() {
@@ -135,6 +144,84 @@ class App extends AppBase {
 
   handlePreviewUrlChange = (url) => {
     this.setState({ previewUrl: url });
+  };
+
+  handleRunScenario = (scenario) => {
+    this.setState({ pendingScenario: scenario, visualMenuKey: 'ui-edit' });
+  };
+
+  handlePinScenario = (scenario) => {
+    this.setState(prev => ({
+      pinnedScenario: prev.pinnedScenario?.id === scenario?.id ? null : scenario,
+    }));
+  };
+
+  handleStepProgress = (current, total) => {
+    this.setState({ scenarioProgress: total > 0 ? { current, total } : null });
+  };
+
+  handleScreenshotReady = (fn) => {
+    this._screenshotFn = fn;
+  };
+
+  handleBatchRun = async (scenarios) => {
+    if (!scenarios || scenarios.length === 0) return;
+    this.setState({
+      showGallery: true,
+      batchScreenshots: [],
+      batchProgress: { current: 0, total: scenarios.length },
+      batchQueue: scenarios,
+      visualMenuKey: 'ui-edit',
+    });
+    // Run sequentially — each scenario triggers onScenarioDone which advances the queue
+    this._batchScenarios = scenarios;
+    this._batchIndex = 0;
+    this._runNextBatchScenario();
+  };
+
+  _runNextBatchScenario = () => {
+    const scenarios = this._batchScenarios;
+    if (!scenarios || this._batchIndex >= scenarios.length) {
+      this._batchScenarios = null;
+      this._batchIndex = 0;
+      return;
+    }
+    const scenario = scenarios[this._batchIndex];
+    this.setState({ pendingScenario: scenario, visualMenuKey: 'ui-edit' });
+  };
+
+  handleBatchScenarioDone = async () => {
+    const scenarios = this._batchScenarios;
+    if (!scenarios) {
+      this.setState({ pendingScenario: null });
+      return;
+    }
+    const scenario = scenarios[this._batchIndex];
+    // Take screenshot
+    let dataUrl = null;
+    if (this._screenshotFn) {
+      // Small delay to let the page settle after steps complete
+      await new Promise(r => setTimeout(r, 500));
+      dataUrl = await this._screenshotFn();
+    }
+    const newShot = dataUrl ? { scenarioId: scenario.id, name: scenario.name, dataUrl } : null;
+    this._batchIndex++;
+    const current = this._batchIndex;
+    const total = scenarios.length;
+    this.setState(prev => ({
+      pendingScenario: null,
+      scenarioProgress: null,
+      batchProgress: { current, total },
+      batchScreenshots: newShot ? [...prev.batchScreenshots, newShot] : prev.batchScreenshots,
+    }), () => {
+      if (this._batchIndex < scenarios.length) {
+        // Small delay before running next scenario
+        setTimeout(() => this._runNextBatchScenario(), 300);
+      } else {
+        this._batchScenarios = null;
+        this._batchIndex = 0;
+      }
+    });
   };
 
   handleViewRequest = (index) => {
@@ -559,6 +646,12 @@ class App extends AppBase {
                           selectedElement={this.state.selectedElement}
                           sketchMcpStatus={this.state.sketchMcpStatus}
                           onElementScreenshot={this.handleElementScreenshot}
+                          pendingScenario={this.state.pendingScenario}
+                          onScenarioDone={this._batchScenarios ? this.handleBatchScenarioDone : () => this.setState({ pendingScenario: null })}
+                          onStepProgress={this.handleStepProgress}
+                          onScreenshotReady={this.handleScreenshotReady}
+                          pinnedScenario={this.state.pinnedScenario}
+                          onUnpinScenario={() => this.setState({ pinnedScenario: null })}
                         />
                       </div>
                       {/* 折叠时隐藏 resizer */}
@@ -593,6 +686,24 @@ class App extends AppBase {
                         </BottomTabPanel>
                       </div>
                     </>
+                  ) : this.state.visualMenuKey === 'scenarios' ? (
+                    <div className={styles.visualPreviewArea}>
+                      {this.state.showGallery ? (
+                        <ScenarioGallery
+                          screenshots={this.state.batchScreenshots}
+                          batchProgress={this.state.batchProgress}
+                          onBack={() => this.setState({ showGallery: false })}
+                        />
+                      ) : (
+                        <ScenarioPanel
+                          onRunScenario={this.handleRunScenario}
+                          scenarioProgress={this.state.scenarioProgress}
+                          onBatchRun={this.handleBatchRun}
+                          pinnedScenarioId={this.state.pinnedScenario?.id || null}
+                          onPinScenario={this.handlePinScenario}
+                        />
+                      )}
+                    </div>
                   ) : (
                     <div className={styles.visualPipelinePlaceholder}>
                       {t('visual.pipelineComingSoon')}
