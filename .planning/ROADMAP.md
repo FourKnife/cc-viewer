@@ -56,6 +56,25 @@
 Plans:
 - [ ] TBD (promote with /gsd:review-backlog when ready)
 
+### Phase 999.2: Available Pages 快速导航 + 二维码生成 (BACKLOG)
+
+**Goal:** 在可视化编辑器项目启动器中，解析启动日志里的 Available Pages 列表，提供一键跳转 UI 编辑和生成二维码两个快捷操作
+**Description:** 当前用户需要手动复制页面 URL 再粘贴到 UI 编辑器中打开，流程繁琐。需要：①解析启动日志中 "Available Pages:" 后的页面名称与 URL 列表；②在项目启动器 UI 中展示页面列表，点击页面名/链接可自动切换到 UI 编辑模式并填入对应 URL；③新增二维码生成功能：点击页面对应的二维码按钮，通过 `sim <页面名>` stdin 命令触发二维码生成，并在 UI 中展示可扫码的二维码图片，方便真机扫码调试。
+**Context:** 启动日志格式示例：
+```
+Available Pages:
+- demo:                       http://localhost:3002/demo.html
+- transferInCKK:              http://localhost:3002/transferInCKK.html
+Stdin Commands:
+-  sim :  在当前命令行中输入「sim [页面名/启动模式] + 回车」 在 iOS 模拟器中打开
+-  qr :   在当前命令行中输入「qr [页面名/启动模式] + 回车」 生成预览二维码
+```
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
+
 ---
 
 ## 后续迭代方向（M2+）
