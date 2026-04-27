@@ -1,0 +1,28 @@
+{
+  "projectName": "Cleffa",
+  "priority": "mvp",
+  "techStack": {
+    "frontend": "React + TypeScript",
+    "buildTool": "Vite",
+    "styling": "Tailwind CSS",
+    "stateManagement": "Zustand",
+    "backend": "Node.js"
+  },
+  "targetUsers": [
+    "frontend-developers",
+    "fullstack-developers",
+    "designers",
+    "product-managers",
+    "teams"
+  ],
+  "supportedProjects": ["react"],
+  "selectionMechanism": "dom-selector",
+  "communicationMethod": "claude-proxy",
+  "optimizationScope": "cross-file-refactor",
+  "workflow": {
+    "requireResearch": false,
+    "autoCommit": false,
+    "testRequired": false
+  },
+  "createdAt": "2026-04-20"
+}

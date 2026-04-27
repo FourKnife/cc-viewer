@@ -2,13 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: M1.6 Scenario 场景系统
-status: in_progress
-last_updated: "2026-04-27T00:00:00.000Z"
+status: completed
+last_updated: "2026-04-27T04:07:27.121Z"
 progress:
   total_phases: 4
   completed_phases: 4
   total_plans: 4
   completed_plans: 4
+  percent: 100
 ---
 
 # Cleffa - 项目状态
@@ -17,7 +18,7 @@ progress:
 
 ```
 Milestone: M1.6 - Scenario 场景系统
-Status: PLANNING
+Status: COMPLETED ✅
 ```
 
 ## 进度概览
@@ -39,6 +40,7 @@ Status: PLANNING
 | v1.3 | M1.3 优化可视区域 | 2026-04-23 | [ROADMAP](milestones/v1.3-ROADMAP.md) / [REQUIREMENTS](milestones/v1.3-REQUIREMENTS.md) |
 | v1.4 | M1.4 细节修复与上下文结构化 | 2026-04-24 | [ROADMAP](milestones/v1.4-ROADMAP.md) / [REQUIREMENTS](milestones/v1.4-REQUIREMENTS.md) |
 | v1.5 | M1.5 项目启动器 UI 改造 | 2026-04-24 | [ROADMAP](milestones/v1.5-ROADMAP.md) / [REQUIREMENTS](milestones/v1.5-REQUIREMENTS.md) |
+| v1.6 | M1.6 Scenario 场景系统 | 2026-04-27 | [ROADMAP](milestones/v1.6-ROADMAP.md) / [REQUIREMENTS](milestones/v1.6-REQUIREMENTS.md) |
 
 ## 阻塞项
 
@@ -46,4 +48,4 @@ Status: PLANNING
 
 ## 下一步
 
-运行 `/gsd-plan-phase 23` 开始规划 Phase 23（Steps 执行引擎）。
+M1.6 已全部完成。规划下一个 Milestone。
