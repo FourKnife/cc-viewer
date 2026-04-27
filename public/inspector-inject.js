@@ -3,6 +3,8 @@
   window.__ccInspectorInitialized = true;
 
   let enabled = true;
+  let recording = false;
+  let recordingOverlay = null;
   let selectedElement = null;
   var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') &&
     Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -138,6 +140,40 @@
     };
   }
 
+  function generateSelector(el) {
+    if (!el || el === document.body) return 'body';
+    if (el.id) return '#' + el.id;
+    var testId = el.getAttribute('data-testid');
+    if (testId) return '[data-testid="' + testId + '"]';
+    var ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel) return '[aria-label="' + ariaLabel + '"]';
+    // 尝试唯一 class 组合
+    if (el.className && typeof el.className === 'string') {
+      var classes = el.className.trim().split(/\s+/).filter(function(c) { return c && !c.match(/^[0-9]/) && c.length < 40; });
+      for (var i = 0; i < classes.length; i++) {
+        var sel = el.tagName.toLowerCase() + '.' + classes[i];
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      }
+      if (classes.length > 0) {
+        var combined = el.tagName.toLowerCase() + '.' + classes.slice(0, 2).join('.');
+        if (document.querySelectorAll(combined).length === 1) return combined;
+      }
+    }
+    // nth-child 路径兜底
+    var path = [];
+    var cur = el;
+    while (cur && cur !== document.body) {
+      var tag = cur.tagName.toLowerCase();
+      var siblings = cur.parentElement ? Array.from(cur.parentElement.children).filter(function(c) { return c.tagName === cur.tagName; }) : [];
+      if (siblings.length > 1) {
+        tag += ':nth-of-type(' + (siblings.indexOf(cur) + 1) + ')';
+      }
+      path.unshift(tag);
+      cur = cur.parentElement;
+    }
+    return path.join(' > ');
+  }
+
   function sendToParent(type, data) {
     window.parent.postMessage({ source: 'cc-visual-inspector', type: type, data: data }, '*');
   }
@@ -180,6 +216,22 @@
     }
   }
 
+  function onRecordClick(e) {
+    if (!recording) return;
+    var target = e.target;
+    if (target === recordingOverlay) return;
+    var selector = generateSelector(target);
+    sendToParent('recorded-step', { type: 'click', selector: selector, tag: target.tagName.toLowerCase(), text: (target.innerText || '').slice(0, 50) });
+  }
+
+  function onRecordInput(e) {
+    if (!recording) return;
+    var target = e.target;
+    if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') return;
+    var selector = generateSelector(target);
+    sendToParent('recorded-step', { type: 'fill', selector: selector, value: target.value });
+  }
+
   // 接收父窗口指令
   window.addEventListener('message', function(e) {
     if (!e.data || e.data.source !== 'cc-visual-parent') return;
@@ -189,6 +241,24 @@
       hoverOverlay.style.display = 'none';
       selectOverlay.style.display = 'none';
       selectedElement = null;
+    }
+    if (e.data.type === 'start-recording') {
+      recording = true;
+      enabled = false;
+      if (hoverOverlay) hoverOverlay.style.display = 'none';
+      if (selectOverlay) selectOverlay.style.display = 'none';
+      // 录制指示器
+      if (!recordingOverlay) {
+        recordingOverlay = document.createElement('div');
+        recordingOverlay.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;background:#ff4d4f;color:#fff;padding:4px 10px;border-radius:4px;font-size:12px;pointer-events:none;';
+        recordingOverlay.textContent = '● REC';
+        document.body.appendChild(recordingOverlay);
+      }
+      recordingOverlay.style.display = 'block';
+    }
+    if (e.data.type === 'stop-recording') {
+      recording = false;
+      if (recordingOverlay) recordingOverlay.style.display = 'none';
     }
     if (e.data.type === 'run-step') {
       var step = e.data.step;
@@ -228,6 +298,8 @@
   document.addEventListener('mouseover', onMouseOver, true);
   document.addEventListener('mouseout', onMouseOut, true);
   document.addEventListener('click', onClick, true);
+  document.addEventListener('click', onRecordClick, true);
+  document.addEventListener('change', onRecordInput, true);
   document.addEventListener('keydown', onKeyDown, true);
 
   sendToParent('ready');
