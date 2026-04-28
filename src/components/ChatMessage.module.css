@@ -104,6 +104,14 @@
   flex-shrink: 0;
 }
 
+.cacheContextText {
+  font-size: 10px;
+  color: var(--text-gray-light, #b0b0b0);
+  flex-shrink: 0;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
 .labelTextRight {
   font-size: 11px;
   margin-left: auto;

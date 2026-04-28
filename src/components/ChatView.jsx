@@ -89,7 +89,7 @@ class ChatView extends React.Component {
     //
     // ── SubAgent/Teammate 渲染入口 ──
     //   subAgentEntries      : 非 MainAgent 的 Sub/Teammate 消息渲染数据（时序插入到主列表里）
-    this._reqScanCache = { tsToIndex: {}, modelName: null, completedModelName: null, modelNameByReqIdx: [], subAgentEntries: [], processedCount: 0 };
+    this._reqScanCache = { tsToIndex: {}, modelName: null, completedModelName: null, modelNameByReqIdx: [], subAgentEntries: [], processedCount: 0, requestCacheTokenMap: new Map() };
 
     // buildAllItems session 级缓存
     // 每项: { session, msgsLen, subCount, items, tsEntries, lastPendingAskId, lastPendingPlanId }
@@ -399,7 +399,7 @@ class ChatView extends React.Component {
           this._incToolState = null;
           this._incToolProcessedCount = 0;
           this._incToolSessionIdx = -1;
-          this._reqScanCache = { tsToIndex: {}, modelName: null, completedModelName: null, modelNameByReqIdx: [], subAgentEntries: [], processedCount: 0, subAgentProcessedCount: 0 };
+          this._reqScanCache = { tsToIndex: {}, modelName: null, completedModelName: null, modelNameByReqIdx: [], subAgentEntries: [], processedCount: 0, subAgentProcessedCount: 0, requestCacheTokenMap: new Map() };
           this._sessionItemCache = [];
         }
         this._prevSessions = this.props.mainAgentSessions;
@@ -421,6 +421,7 @@ class ChatView extends React.Component {
       this._reqScanCache.processedCount = 0;
       this._reqScanCache.subAgentEntries = [];
       this._reqScanCache.subAgentProcessedCount = 0;
+      this._reqScanCache.requestCacheTokenMap = new Map();
       this.startRender();
     } else if (prevProps.collapseToolResults !== this.props.collapseToolResults || prevProps.expandThinking !== this.props.expandThinking) {
       const rawItems = this.buildAllItems();
@@ -767,7 +768,7 @@ class ChatView extends React.Component {
     }
   }
 
-  renderSessionMessages(messages, keyPrefix, resolveModelInfo, tsToIndex, startIdx = 0) {
+  renderSessionMessages(messages, keyPrefix, resolveModelInfo, tsToIndex, requestCacheTokenMap, startIdx = 0) {
     const { userProfile, collapseToolResults, expandThinking, showFullToolContent, showThinkingSummaries, onViewRequest } = this.props;
     // 增量 / WeakMap 缓存
     let cached = getToolResultCache(messages);
@@ -853,6 +854,11 @@ class ChatView extends React.Component {
       const content = msg.content;
       const ts = msg._timestamp || null;
       const reqIdx = ts ? tsToIndex[ts] : undefined;
+      // cacheTotalTokens 单独传给 assistant 渲染处（不进 viewReqProps），
+      // 避免 user 消息也接到该 prop 触发 SCU streaming 期间的虚假重渲。
+      const cacheTotalTokens = reqIdx != null
+        ? (requestCacheTokenMap?.get(reqIdx) ?? 0)
+        : null;
       const viewReqProps = reqIdx != null && onViewRequest ? { requestIndex: reqIdx, onViewRequest } : EMPTY_OBJ;
       const modelInfo = resolveModelInfo(ts, msg.role);
 
@@ -952,14 +958,14 @@ class ChatView extends React.Component {
           // 只在有非系统内容时才渲染
           if (filteredContent.length > 0) {
             renderedMessages.push(
-              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={filteredContent} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} {...viewReqProps} />
+              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={filteredContent} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} cacheTotalTokens={cacheTotalTokens} {...viewReqProps} />
             );
           }
         } else if (typeof content === 'string') {
           // 过滤字符串类型的系统文本
           if (!isSystemText(content)) {
             renderedMessages.push(
-              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} {...viewReqProps} />
+              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} cacheTotalTokens={cacheTotalTokens} {...viewReqProps} />
             );
           }
         }
@@ -1006,7 +1012,7 @@ class ChatView extends React.Component {
           <Text className={styles.sessionDividerText}>{name}</Text>
         </Divider>
       );
-      const { items: msgs } = this.renderSessionMessages(session.messages, `tm${si}`, nullModelInfoResolver, {});
+      const { items: msgs } = this.renderSessionMessages(session.messages, `tm${si}`, nullModelInfoResolver, {}, this._reqScanCache.requestCacheTokenMap);
       allItems.push(...msgs);
 
       // 渲染 response content（如果有）
@@ -1049,6 +1055,7 @@ class ChatView extends React.Component {
         cache.modelName = null;
         cache.completedModelName = null;
         cache.modelNameByReqIdx = [];
+        cache.requestCacheTokenMap = new Map();
       }
       // carry-over 初值：从上轮末态继承，保证流式追加时非 MainAgent 或无 body.model 的 req 也能拿到"最近活跃模型"
       let lastModelName = cache.modelName;
@@ -1067,6 +1074,17 @@ class ChatView extends React.Component {
           if (req.response) cache.completedModelName = lastModelName;
         }
         cache.modelNameByReqIdx[i] = lastModelName;
+        // 上下文 token 总量（cache_read + cache_creation），用于在 assistant
+        // 消息时间戳旁显示。usage 仅在 response 到达后存在；流式中保持 0。
+        const usage = req?.response?.body?.usage;
+        if (usage) {
+          const total = (usage.cache_read_input_tokens || 0)
+                      + (usage.cache_creation_input_tokens || 0);
+          cache.requestCacheTokenMap.set(i, total);
+        } else {
+          // streaming 中或失败的请求：删除可能存在的旧值，确保 0K 显示而非过期数字
+          cache.requestCacheTokenMap.delete(i);
+        }
       }
       cache.processedCount = requests.length;
 
@@ -1108,6 +1126,7 @@ class ChatView extends React.Component {
       cache.subAgentProcessedCount = requests.length;
     }
     const tsToIndex = cache.tsToIndex;
+    const requestCacheTokenMap = cache.requestCacheTokenMap;
     // globalModelInfo 仅给 line ~1342 的 lastResponse 路径（最新一轮 response 渲染）使用，
     // 1v1 per-message 解析不再回落到此值 —— 避免历史 logo 被最新 entry 模型污染。
     const globalModelInfo = getModelInfo(cache.modelName);
@@ -1194,7 +1213,7 @@ class ChatView extends React.Component {
         lastPendingPlanId = sc.lastPendingPlanId;
       } else if (sc && sc.session === session && session.messages.length > sc.msgsLen) {
         // 增量：session 对象不变但消息增长 → 只渲染新消息，拼接到缓存
-        const result = this.renderSessionMessages(session.messages, `s${si}`, resolveModelInfo, tsToIndex, sc.msgsLen);
+        const result = this.renderSessionMessages(session.messages, `s${si}`, resolveModelInfo, tsToIndex, requestCacheTokenMap, sc.msgsLen);
         msgs = sc.items.concat(result.items);
         lastPendingAskId = result.lastPendingAskId;
         lastPendingPlanId = result.lastPendingPlanId;
@@ -1217,7 +1236,7 @@ class ChatView extends React.Component {
         }
       } else {
         // 缓存未命中 → 全量渲染
-        const result = this.renderSessionMessages(session.messages, `s${si}`, resolveModelInfo, tsToIndex);
+        const result = this.renderSessionMessages(session.messages, `s${si}`, resolveModelInfo, tsToIndex, requestCacheTokenMap);
         msgs = result.items;
         lastPendingAskId = result.lastPendingAskId;
         lastPendingPlanId = result.lastPendingPlanId;
@@ -1236,8 +1255,11 @@ class ChatView extends React.Component {
         while (subIdx < subAgentEntries.length && msgTs && subAgentEntries[subIdx].timestamp <= msgTs) {
           const sa = subAgentEntries[subIdx];
           if (sa.timestamp) tsItemMap[sa.timestamp] = allItems.length;
+          const subCacheTotal = sa.requestIndex != null
+            ? (requestCacheTokenMap?.get(sa.requestIndex) ?? 0)
+            : null;
           allItems.push(
-            <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} requestIndex={sa.requestIndex} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
+            <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} requestIndex={sa.requestIndex} cacheTotalTokens={subCacheTotal} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
           );
           subIdx++;
         }
@@ -1251,8 +1273,11 @@ class ChatView extends React.Component {
         const nextSessionStart = si < mainAgentSessions.length - 1 && mainAgentSessions[si + 1].messages?.[0]?._timestamp;
         if (nextSessionStart && sa.timestamp > nextSessionStart) break;
         if (sa.timestamp) tsItemMap[sa.timestamp] = allItems.length;
+        const subCacheTotal = sa.requestIndex != null
+          ? (requestCacheTokenMap?.get(sa.requestIndex) ?? 0)
+          : null;
         allItems.push(
-          <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} requestIndex={sa.requestIndex} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
+          <ChatMessage key={`sub-${sa.requestIndex}-${sa.timestamp}`} role="sub-agent-chat" content={sa.content} toolResultMap={sa.toolResultMap} label={sa.label} isTeammate={sa.isTeammate} timestamp={sa.timestamp} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} requestIndex={sa.requestIndex} cacheTotalTokens={subCacheTotal} onViewRequest={onViewRequest} onOpenFile={this.handleOpenToolFilePath} />
         );
         subIdx++;
       }
@@ -1332,12 +1357,16 @@ class ChatView extends React.Component {
               return false;
             });
             if (!hasVisibleContent) return;
+            const entryReqIdx = session.entryTimestamp ? tsToIndex[session.entryTimestamp] : undefined;
+            const entryCacheTotal = entryReqIdx != null
+              ? (requestCacheTokenMap?.get(entryReqIdx) ?? 0)
+              : null;
             this._lastResponseItems = (
               <React.Fragment key="last-response-group">
                 <Divider className={styles.lastResponseDivider}>
                   <Text type="secondary" className={styles.lastResponseLabel}>{t('ui.lastResponse')}</Text>
                 </Divider>
-                <ChatMessage key="resp-asst" role="assistant" content={lrContent} timestamp={session.entryTimestamp} modelInfo={globalModelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} toolResultMap={EMPTY_MAP} askAnswerMap={Object.keys(_localAsk).length > 0 ? _localAsk : EMPTY_MAP} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} lastPendingAskId={respLastPendingAskId} lastPendingPlanId={respLastPendingPlanId} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} ptyPrompt={this.state.ptyPrompt} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} cliMode={this.props.cliMode} onAskQuestionSubmit={this.handleAskQuestionSubmit} onOpenFile={this.handleOpenToolFilePath} />
+                <ChatMessage key="resp-asst" role="assistant" content={lrContent} timestamp={session.entryTimestamp} modelInfo={globalModelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} toolResultMap={EMPTY_MAP} askAnswerMap={Object.keys(_localAsk).length > 0 ? _localAsk : EMPTY_MAP} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} lastPendingAskId={respLastPendingAskId} lastPendingPlanId={respLastPendingPlanId} activePlanPrompt={activePlanPrompt} activeDangerousPrompt={activeDangerousPrompt} ptyPrompt={this.state.ptyPrompt} cacheTotalTokens={entryCacheTotal} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} cliMode={this.props.cliMode} onAskQuestionSubmit={this.handleAskQuestionSubmit} onOpenFile={this.handleOpenToolFilePath} />
               </React.Fragment>
             );
           }

@@ -1365,6 +1365,26 @@ const i18nData = {
     "tr": "İsteği görüntüle",
     "uk": "Переглянути запит"
   },
+  "ui.cacheContextTooltip": {
+    "zh": "上下文大小：{{value}} tokens（cache_read + cache_creation）",
+    "en": "Context size: {{value}} tokens (cache_read + cache_creation)",
+    "zh-TW": "上下文大小：{{value}} tokens（cache_read + cache_creation）",
+    "ko": "컨텍스트 크기: {{value}} tokens (cache_read + cache_creation)",
+    "ja": "コンテキストサイズ: {{value}} tokens (cache_read + cache_creation)",
+    "de": "Kontextgröße: {{value}} Tokens (cache_read + cache_creation)",
+    "es": "Tamaño del contexto: {{value}} tokens (cache_read + cache_creation)",
+    "fr": "Taille du contexte : {{value}} tokens (cache_read + cache_creation)",
+    "it": "Dimensione contesto: {{value}} tokens (cache_read + cache_creation)",
+    "da": "Kontekststørrelse: {{value}} tokens (cache_read + cache_creation)",
+    "pl": "Rozmiar kontekstu: {{value}} tokens (cache_read + cache_creation)",
+    "ru": "Размер контекста: {{value}} токенов (cache_read + cache_creation)",
+    "ar": "حجم السياق: {{value}} رمز (cache_read + cache_creation)",
+    "no": "Kontekststørrelse: {{value}} tokens (cache_read + cache_creation)",
+    "pt-BR": "Tamanho do contexto: {{value}} tokens (cache_read + cache_creation)",
+    "th": "ขนาดบริบท: {{value}} tokens (cache_read + cache_creation)",
+    "tr": "Bağlam boyutu: {{value}} token (cache_read + cache_creation)",
+    "uk": "Розмір контексту: {{value}} токенів (cache_read + cache_creation)"
+  },
   "ui.cannotMap": {
     "zh": "无法映射到对话",
     "en": "Cannot map to conversation",

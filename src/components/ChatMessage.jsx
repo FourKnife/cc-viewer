@@ -65,17 +65,38 @@ const ModelAvatar = React.memo(function ModelAvatar({ modelInfo, streaming }) {
   return <img src={defaultModelAvatarUrl} className={styles.avatarImg} alt={modelInfo?.name || 'Agent'} />;
 });
 
-const AssistantLabel = React.memo(function AssistantLabel({ name, extra, timeStr, requestIndex, onViewRequest }) {
+// 上下文 token 总量格式化：始终带 K 单位（与全站 formatTokenCount 行为不同：后者 0/<1000 不带 K）。
+// 用户需求：在 assistant 时间戳旁显示一个稳定的 "X.XK" 标记。
+function formatCacheK(n) {
+  if (n == null) return '';
+  if (!Number.isFinite(n)) return '';
+  if (n === 0) return '0K';
+  if (n >= 1000000) return (n / 1000).toFixed(0) + 'K';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return (n / 1000).toFixed(2) + 'K';
+}
+
+const AssistantLabel = React.memo(function AssistantLabel({ name, extra, timeStr, requestIndex, onViewRequest, cacheTotalTokens, showFullToolContent }) {
   const viewBtn = (requestIndex != null && onViewRequest) ? (
     <span className={styles.viewRequestBtn} onClick={(e) => { e.stopPropagation(); onViewRequest(requestIndex); }}>
       {t('ui.viewRequest')}
     </span>
   ) : null;
+  const showCache = showFullToolContent && cacheTotalTokens != null;
+  const cacheStr = showCache ? formatCacheK(cacheTotalTokens) : '';
   return (
     <div className={styles.labelRow}>
       <Text type="secondary" className={styles.labelText}>{name}{extra || ''}</Text>
       <span className={styles.labelRight}>
         {viewBtn}
+        {showCache && (
+          <Text
+            className={styles.cacheContextText}
+            title={t('ui.cacheContextTooltip', { value: cacheStr })}
+          >
+            {`[${cacheStr}]`}
+          </Text>
+        )}
         {timeStr && <Text className={styles.timeText}>{timeStr}</Text>}
       </span>
     </div>
@@ -109,7 +130,7 @@ class ChatMessage extends React.Component {
       p.ptyPrompt !== n.ptyPrompt || p.cliMode !== n.cliMode ||
       p.lastPendingAskId !== n.lastPendingAskId || p.lastPendingPlanId !== n.lastPendingPlanId ||
       p.activePlanPrompt !== n.activePlanPrompt || p.activeDangerousPrompt !== n.activeDangerousPrompt ||
-      p.requestIndex !== n.requestIndex || p.label !== n.label || p.isTeammate !== n.isTeammate ||
+      p.requestIndex !== n.requestIndex || p.cacheTotalTokens !== n.cacheTotalTokens || p.label !== n.label || p.isTeammate !== n.isTeammate ||
       p.userProfile !== n.userProfile || p.modelInfo !== n.modelInfo ||
       p.resultText !== n.resultText || p.toolName !== n.toolName ||
       p.onViewRequest !== n.onViewRequest || p.onOpenFile !== n.onOpenFile ||
@@ -988,7 +1009,7 @@ class ChatMessage extends React.Component {
   }
 
   renderAssistantMessage() {
-    const { content, toolResultMap = {}, modelInfo, timestamp, requestIndex, onViewRequest, showTrailingCursor } = this.props;
+    const { content, toolResultMap = {}, modelInfo, timestamp, requestIndex, onViewRequest, showTrailingCursor, cacheTotalTokens, showFullToolContent } = this.props;
     const innerContent = this.renderAssistantContent(content, toolResultMap);
 
     if (innerContent.length === 0) return null;
@@ -1002,6 +1023,8 @@ class ChatMessage extends React.Component {
             timeStr={this.formatTime(timestamp)}
             requestIndex={requestIndex}
             onViewRequest={onViewRequest}
+            cacheTotalTokens={cacheTotalTokens}
+            showFullToolContent={showFullToolContent}
           />
           {this.renderHighlightBubble(styles.bubbleAssistant, innerContent)}
         </div>
@@ -1020,15 +1043,25 @@ class ChatMessage extends React.Component {
   }
 
   renderSubAgentChatMessage() {
-    const { content, toolResultMap = {}, label } = this.props;
+    const { content, toolResultMap = {}, label, cacheTotalTokens, showFullToolContent } = this.props;
     const innerContent = this.renderAssistantContent(content, toolResultMap);
 
     if (innerContent.length === 0) return null;
+    const showCache = showFullToolContent && cacheTotalTokens != null;
+    const cacheStr = showCache ? formatCacheK(cacheTotalTokens) : '';
 
     return (
       <div className={styles.messageRowEnd}>
         <div className={styles.contentColLimited}>
           <div className={styles.labelRowEnd}>
+            {showCache && (
+              <Text
+                className={styles.cacheContextText}
+                title={t('ui.cacheContextTooltip', { value: cacheStr })}
+              >
+                {`[${cacheStr}]`}
+              </Text>
+            )}
             {this.formatTime(this.props.timestamp) && <Text className={styles.timeText}>{this.formatTime(this.props.timestamp)}</Text>}
             {this.renderViewRequestBtn()}
             <Text type="secondary" className={styles.labelTextRight}>{label || 'SubAgent'}</Text>
