@@ -164,7 +164,7 @@ function compareStyles(domStyles, sketchData) {
   return diffs;
 }
 
-export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot, pendingScenario, onScenarioDone, onStepProgress, onScreenshotReady, pinnedScenario, onUnpinScenario, isRecording, onRecordedStep }) {
+export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot, pendingScenario, onScenarioDone, onStepProgress, onScreenshotReady, pinnedScenario, onUnpinScenario, isRecording, onRecordedStep, pickingElement, onPickedElement }) {
   const [urlInput, setUrlInput] = useState(externalUrl || '');
   const [iframeSrc, setIframeSrc] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
@@ -354,11 +354,24 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
         case 'recorded-step':
           onRecordedStep?.(e.data.data);
           break;
+        case 'picked-element':
+          onPickedElement?.(e.data.data.selector);
+          break;
       }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [onElementHover, onElementSelect, onElementDeselect, sendInspectorCmd, inspecting, captureElementScreenshot, sendNextStep]);
+  }, [onElementHover, onElementSelect, onElementDeselect, sendInspectorCmd, inspecting, captureElementScreenshot, sendNextStep, onPickedElement]);
+
+  // pick element 模式：通知 iframe 进入选取状态
+  useEffect(() => {
+    if (!pickingElement) return;
+    const iframe = iframeRef.current;
+    if (!iframe?.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      { source: 'cc-visual-parent', type: 'start-pick-element' }, '*'
+    );
+  }, [pickingElement]);
 
   // Sketch 预览自动轮询
   useEffect(() => {

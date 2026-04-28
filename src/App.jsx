@@ -52,6 +52,7 @@ class App extends AppBase {
       pinnedScenario: null,  // { id, name, url, storage, steps }
       isRecording: false,
       recordedSteps: [],
+      pickingElement: false,
     });
     this.appHeaderRef = React.createRef();
     this._getTokenStatsContent = () => this.appHeaderRef.current?.renderTokenStats?.() ?? null;
@@ -178,6 +179,19 @@ class App extends AppBase {
 
   handleStopRecording = () => {
     this.setState({ isRecording: false });
+  };
+
+  handlePickElement = (callback) => {
+    this._pickCallback = callback;
+    this.setState({ pickingElement: true });
+  };
+
+  handlePickedElement = (selector) => {
+    if (this._pickCallback) {
+      this._pickCallback(selector);
+      this._pickCallback = null;
+    }
+    this.setState({ pickingElement: false });
   };
 
   handleRecordedStep = (step) => {
@@ -683,6 +697,8 @@ class App extends AppBase {
                           onUnpinScenario={() => this.setState({ pinnedScenario: null })}
                           isRecording={this.state.isRecording}
                           onRecordedStep={this.handleRecordedStep}
+                          pickingElement={this.state.pickingElement}
+                          onPickedElement={this.handlePickedElement}
                         />
                       </div>
                       {/* 折叠时隐藏 resizer */}
@@ -728,6 +744,7 @@ class App extends AppBase {
                                 onStartRecording={this.handleStartRecording}
                                 onStopRecording={this.handleStopRecording}
                                 recordedSteps={this.state.recordedSteps}
+                                onPickElement={this.handlePickElement}
                               />
                             ),
                           }}
@@ -753,6 +770,7 @@ class App extends AppBase {
                           onStartRecording={this.handleStartRecording}
                           onStopRecording={this.handleStopRecording}
                           recordedSteps={this.state.recordedSteps}
+                          onPickElement={this.handlePickElement}
                         />
                       )}
                     </div>

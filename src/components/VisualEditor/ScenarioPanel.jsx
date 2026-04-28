@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Button, Input, Space, Typography, message } from 'antd';
-import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, EditOutlined, MinusCircleOutlined, CameraOutlined, PushpinOutlined, PushpinFilled } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, EditOutlined, MinusCircleOutlined, CameraOutlined, PushpinOutlined, PushpinFilled, CopyOutlined, AimOutlined, HolderOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import { getScenarios, createScenario, updateScenario, deleteScenario } from '../../utils/scenarioStorage';
 import styles from './styles.module.css';
@@ -40,17 +40,38 @@ function StorageEditor({ pairs, onChange }) {
   );
 }
 
-function StepsEditor({ steps, onChange }) {
+function StepsEditor({ steps, onChange, onPickElement }) {
+  const dragIndex = useRef(null);
+
   const addStep = () => onChange([...steps, { type: 'click', selector: '' }]);
   const removeStep = (i) => onChange(steps.filter((_, idx) => idx !== i));
+  const copyStep = (i) => onChange([...steps.slice(0, i + 1), { ...steps[i] }, ...steps.slice(i + 1)]);
   const updateStep = (i, field, val) => {
-    const next = steps.map((s, idx) => idx === i ? { ...s, [field]: val } : s);
-    onChange(next);
+    onChange(steps.map((s, idx) => idx === i ? { ...s, [field]: val } : s));
   };
+
+  const hasSelector = (type) => ['click', 'fill', 'hover', 'keyboard', 'select', 'assert'].includes(type);
+
   return (
     <div>
       {steps.map((s, i) => (
-        <Space key={i} style={{ display: 'flex', marginBottom: 4, alignItems: 'center' }}>
+        <div
+          key={i}
+          draggable
+          onDragStart={() => { dragIndex.current = i; }}
+          onDragOver={e => e.preventDefault()}
+          onDrop={() => {
+            const from = dragIndex.current;
+            if (from === null || from === i) return;
+            const next = [...steps];
+            const [removed] = next.splice(from, 1);
+            next.splice(i, 0, removed);
+            dragIndex.current = null;
+            onChange(next);
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}
+        >
+          <HolderOutlined style={{ cursor: 'grab', color: 'var(--text-muted)', flexShrink: 0 }} />
           <select
             value={s.type}
             onChange={e => updateStep(i, 'type', e.target.value)}
@@ -59,17 +80,61 @@ function StepsEditor({ steps, onChange }) {
             <option value="click">{t('visual.scenario.stepClick')}</option>
             <option value="wait">{t('visual.scenario.stepWait')}</option>
             <option value="fill">{t('visual.scenario.stepFill')}</option>
+            <option value="scroll">{t('visual.scenario.stepScroll')}</option>
+            <option value="keyboard">{t('visual.scenario.stepKeyboard')}</option>
+            <option value="hover">{t('visual.scenario.stepHover')}</option>
+            <option value="select">{t('visual.scenario.stepSelect')}</option>
+            <option value="assert">{t('visual.scenario.stepAssert')}</option>
           </select>
-          {s.type === 'wait' ? (
+
+          {hasSelector(s.type) && (
+            <>
+              <Input
+                size="small"
+                placeholder={t('visual.scenario.stepSelector')}
+                value={s.selector || ''}
+                onChange={e => updateStep(i, 'selector', e.target.value)}
+                style={{ width: 130 }}
+              />
+              {onPickElement && (
+                <AimOutlined
+                  title={t('visual.scenario.pickElement')}
+                  style={{ cursor: 'pointer', color: 'var(--text-secondary)', flexShrink: 0 }}
+                  onClick={() => onPickElement(selector => updateStep(i, 'selector', selector))}
+                />
+              )}
+            </>
+          )}
+
+          {s.type === 'wait' && (
             <Input size="small" type="number" placeholder={t('visual.scenario.stepMs')} value={s.ms || ''} onChange={e => updateStep(i, 'ms', Number(e.target.value))} style={{ width: 80 }} />
-          ) : (
-            <Input size="small" placeholder={t('visual.scenario.stepSelector')} value={s.selector || ''} onChange={e => updateStep(i, 'selector', e.target.value)} style={{ width: 140 }} />
           )}
           {s.type === 'fill' && (
-            <Input size="small" placeholder={t('visual.scenario.stepValue')} value={s.value || ''} onChange={e => updateStep(i, 'value', e.target.value)} style={{ width: 100 }} />
+            <Input size="small" placeholder={t('visual.scenario.stepValue')} value={s.value || ''} onChange={e => updateStep(i, 'value', e.target.value)} style={{ width: 90 }} />
           )}
-          <MinusCircleOutlined onClick={() => removeStep(i)} style={{ cursor: 'pointer', color: 'var(--text-muted)' }} />
-        </Space>
+          {s.type === 'scroll' && (
+            <>
+              <Input size="small" type="number" placeholder={t('visual.scenario.stepX')} value={s.x || ''} onChange={e => updateStep(i, 'x', Number(e.target.value))} style={{ width: 60 }} />
+              <Input size="small" type="number" placeholder={t('visual.scenario.stepY')} value={s.y || ''} onChange={e => updateStep(i, 'y', Number(e.target.value))} style={{ width: 60 }} />
+            </>
+          )}
+          {s.type === 'keyboard' && (
+            <Input size="small" placeholder={t('visual.scenario.stepKey')} value={s.key || ''} onChange={e => updateStep(i, 'key', e.target.value)} style={{ width: 90 }} />
+          )}
+          {s.type === 'select' && (
+            <Input size="small" placeholder={t('visual.scenario.stepValue')} value={s.value || ''} onChange={e => updateStep(i, 'value', e.target.value)} style={{ width: 90 }} />
+          )}
+          {s.type === 'assert' && (
+            <Input size="small" placeholder={t('visual.scenario.stepExpected')} value={s.expected || ''} onChange={e => updateStep(i, 'expected', e.target.value)} style={{ width: 110 }} />
+          )}
+
+          <CopyOutlined
+            title={t('visual.scenario.stepCopy')}
+            style={{ cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }}
+            onClick={() => copyStep(i)}
+          />
+          <MinusCircleOutlined onClick={() => removeStep(i)} style={{ cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }} />
+        </div>
       ))}
       <Button size="small" icon={<PlusOutlined />} onClick={addStep} type="dashed" style={{ marginTop: 4 }}>
         {t('visual.scenario.steps')}
@@ -78,7 +143,7 @@ function StepsEditor({ steps, onChange }) {
   );
 }
 
-function ScenarioForm({ initial, onSave, onCancel }) {
+function ScenarioForm({ initial, onSave, onCancel, onPickElement }) {
   const [name, setName] = useState(initial?.name || '');
   const [url, setUrl] = useState(initial?.url || '');
   const [pairs, setPairs] = useState(
@@ -148,7 +213,7 @@ function ScenarioForm({ initial, onSave, onCancel }) {
             </Button>
           </Space>
         )}
-        <StepsEditor steps={steps} onChange={setSteps} />
+        <StepsEditor steps={steps} onChange={setSteps} onPickElement={onPickElement} />
         <Space>
           <Button size="small" type="primary" onClick={handleSave}>{t('visual.scenario.save')}</Button>
           <Button size="small" onClick={onCancel}>{t('visual.scenario.cancel')}</Button>
@@ -158,7 +223,7 @@ function ScenarioForm({ initial, onSave, onCancel }) {
   );
 }
 
-export default function ScenarioPanel({ compact = false, onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario, isRecording, onStartRecording, onStopRecording, recordedSteps }) {
+export default function ScenarioPanel({ compact = false, onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario, isRecording, onStartRecording, onStopRecording, recordedSteps, onPickElement }) {
   const [scenarios, setScenarios] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -256,10 +321,11 @@ export default function ScenarioPanel({ compact = false, onRunScenario, scenario
           initial={{ steps: pendingRecordedSteps }}
           onSave={handleSaveRecorded}
           onCancel={() => { setShowRecordSave(false); setPendingRecordedSteps([]); }}
+          onPickElement={onPickElement}
         />
       )}
       {showAdd && (
-        <ScenarioForm onSave={handleAdd} onCancel={() => setShowAdd(false)} />
+        <ScenarioForm onSave={handleAdd} onCancel={() => setShowAdd(false)} onPickElement={onPickElement} />
       )}
 
       {scenarios.length === 0 && !showAdd ? (
@@ -273,7 +339,7 @@ export default function ScenarioPanel({ compact = false, onRunScenario, scenario
             return (
               <div key={s.id} className={`${styles.scenarioItem}${isPinned ? ' ' + styles.scenarioItemPinned : ''}`}>
                 {editingId === s.id ? (
-                  <ScenarioForm initial={s} onSave={(data) => handleEdit(s.id, data)} onCancel={() => setEditingId(null)} />
+                  <ScenarioForm initial={s} onSave={(data) => handleEdit(s.id, data)} onCancel={() => setEditingId(null)} onPickElement={onPickElement} />
                 ) : (
                   <>
                     <div className={styles.scenarioItemInfo}>

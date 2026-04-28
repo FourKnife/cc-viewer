@@ -282,12 +282,57 @@
           fillEl.dispatchEvent(new Event('input', { bubbles: true }));
           fillEl.dispatchEvent(new Event('change', { bubbles: true }));
           sendToParent('step-done', { stepIndex: stepIndex });
+        } else if (step.type === 'scroll') {
+          var scrollTarget = step.selector ? document.querySelector(step.selector) : window;
+          if (step.selector && !scrollTarget) { sendToParent('step-error', { stepIndex: stepIndex, reason: 'selector not found: ' + step.selector }); return; }
+          scrollTarget.scrollBy(step.x || 0, step.y || 0);
+          sendToParent('step-done', { stepIndex: stepIndex });
+        } else if (step.type === 'hover') {
+          var hoverEl2 = document.querySelector(step.selector);
+          if (!hoverEl2) { sendToParent('step-error', { stepIndex: stepIndex, reason: 'selector not found: ' + step.selector }); return; }
+          hoverEl2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+          hoverEl2.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+          sendToParent('step-done', { stepIndex: stepIndex });
+        } else if (step.type === 'keyboard') {
+          var keyTarget = step.selector ? document.querySelector(step.selector) : document.activeElement;
+          ['keydown', 'keypress', 'keyup'].forEach(function(t) {
+            var evt = new KeyboardEvent(t, { key: step.key || '', code: step.key || '', bubbles: true, cancelable: true });
+            (keyTarget || document.body).dispatchEvent(evt);
+          });
+          sendToParent('step-done', { stepIndex: stepIndex });
+        } else if (step.type === 'select') {
+          var selectEl = document.querySelector(step.selector);
+          if (!selectEl) { sendToParent('step-error', { stepIndex: stepIndex, reason: 'selector not found: ' + step.selector }); return; }
+          selectEl.value = step.value || '';
+          selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+          sendToParent('step-done', { stepIndex: stepIndex });
+        } else if (step.type === 'assert') {
+          var assertEl = document.querySelector(step.selector);
+          if (!assertEl) { sendToParent('step-error', { stepIndex: stepIndex, reason: 'selector not found: ' + step.selector }); return; }
+          var actual = assertEl.textContent.trim();
+          var expected = step.expected || '';
+          if (actual.includes(expected)) {
+            sendToParent('step-done', { stepIndex: stepIndex });
+          } else {
+            sendToParent('step-error', { stepIndex: stepIndex, reason: 'assert failed: expected "' + expected + '" in "' + actual + '"' });
+          }
         } else {
           sendToParent('step-done', { stepIndex: stepIndex });
         }
       } catch (err) {
         sendToParent('step-error', { stepIndex: stepIndex, reason: String(err) });
       }
+    }
+    if (e.data.type === 'start-pick-element') {
+      var pickHandler = function(evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        var t = evt.target;
+        if (t === hoverOverlay || t === selectOverlay) return;
+        sendToParent('picked-element', { selector: generateSelector(t) });
+        document.removeEventListener('click', pickHandler, true);
+      };
+      document.addEventListener('click', pickHandler, true);
     }
   });
 
