@@ -6,10 +6,10 @@ status: in_progress
 last_updated: "2026-04-28T14:00:00.000Z"
 progress:
   total_phases: 3
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 33
+  completed_phases: 2
+  total_plans: 2
+  completed_plans: 2
+  percent: 67
 ---
 
 # Cleffa - 项目状态
@@ -26,7 +26,7 @@ Status: IN PROGRESS 🚧
 | Phase | 名称 | 状态 | 完成度 |
 |-------|------|------|--------|
 | 28 | 场景面板底部 Tab 集成 | ✅ Done | 100% |
-| 29 | Step 编辑器全面增强 | 📋 Planned | 0% |
+| 29 | Step 编辑器全面增强 | ✅ Done | 100% |
 | 30 | 录制体验优化 + AI 生成改进 | 📋 Planned | 0% |
 
 ## 版本历史
@@ -49,4 +49,4 @@ Status: IN PROGRESS 🚧
 
 ## 下一步
 
-Phase 29: Step 编辑器全面增强 — 等待规划开始
+Phase 30: 录制体验优化 + AI 生成改进 — 等待规划开始
