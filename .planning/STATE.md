@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.6
-milestone_name: M1.6 Scenario 场景系统
-status: completed
-last_updated: "2026-04-27T04:07:27.121Z"
+milestone: v1.8
+milestone_name: M1.8 可视化编辑-场景优化
+status: planning
+last_updated: "2026-04-28T10:00:00.000Z"
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_phases: 3
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Cleffa - 项目状态
@@ -17,18 +17,17 @@ progress:
 ## 当前状态
 
 ```
-Milestone: M1.6 - Scenario 场景系统
-Status: COMPLETED ✅
+Milestone: M1.8 - 可视化编辑-场景优化
+Status: PLANNING 📋
 ```
 
 ## 进度概览
 
 | Phase | 名称 | 状态 | 完成度 |
 |-------|------|------|--------|
-| 22 | Scenario 数据层 + 面板 UI + 基础运行 | ✅ Done | 100% |
-| 23 | Steps 执行引擎（click/wait/fill） | ✅ Done | 100% |
-| 24 | 批量截图 + 状态画廊 | ✅ Done | 100% |
-| 25 | 固定 Scenario（刷新自动重跑） | ✅ Done | 100% |
+| 28 | 场景面板底部 Tab 集成 | 📋 Planned | 0% |
+| 29 | Step 编辑器全面增强 | 📋 Planned | 0% |
+| 30 | 录制体验优化 + AI 生成改进 | 📋 Planned | 0% |
 
 ## 版本历史
 
@@ -41,6 +40,8 @@ Status: COMPLETED ✅
 | v1.4 | M1.4 细节修复与上下文结构化 | 2026-04-24 | [ROADMAP](milestones/v1.4-ROADMAP.md) / [REQUIREMENTS](milestones/v1.4-REQUIREMENTS.md) |
 | v1.5 | M1.5 项目启动器 UI 改造 | 2026-04-24 | [ROADMAP](milestones/v1.5-ROADMAP.md) / [REQUIREMENTS](milestones/v1.5-REQUIREMENTS.md) |
 | v1.6 | M1.6 Scenario 场景系统 | 2026-04-27 | [ROADMAP](milestones/v1.6-ROADMAP.md) / [REQUIREMENTS](milestones/v1.6-REQUIREMENTS.md) |
+| v1.7 | M1.7 UI 启动体验优化 | 2026-04-27 | [ROADMAP](milestones/v1.7-ROADMAP.md) / [REQUIREMENTS](milestones/v1.7-REQUIREMENTS.md) |
+| v1.8 | M1.8 可视化编辑-场景优化 | — | [ROADMAP](milestones/v1.8-REQUIREMENTS.md) |
 
 ## 阻塞项
 
@@ -48,4 +49,4 @@ Status: COMPLETED ✅
 
 ## 下一步
 
-M1.6 已全部完成。规划下一个 Milestone。
+Phase 28: 场景面板底部 Tab 集成 — 等待规划开始

@@ -7985,6 +7985,11 @@ const i18nData = {
     "en": "Element Info",
     "ja": "要素情報"
   },
+  "visual.tabScenario": {
+    "zh": "场景",
+    "en": "Scenario",
+    "ja": "シナリオ"
+  },
   "visual.pipelineComingSoon": {
     "zh": "Pipeline 功能即将推出",
     "en": "Pipeline coming soon",

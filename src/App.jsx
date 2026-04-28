@@ -701,7 +701,10 @@ class App extends AppBase {
                         }}
                       >
                         <BottomTabPanel
-                          tabs={[{ key: 'element', labelKey: 'visual.tabElement' }]}
+                          tabs={[
+                            { key: 'element', labelKey: 'visual.tabElement' },
+                            { key: 'scenario', labelKey: 'visual.tabScenario' },
+                          ]}
                           activeTab={this.state.activeBottomTab}
                           collapsed={this.state.bottomPanelCollapsed}
                           onTabClick={(key) => {
@@ -712,6 +715,20 @@ class App extends AppBase {
                           {{
                             element: (
                               <ElementInfo element={this.state.selectedElement} />
+                            ),
+                            scenario: (
+                              <ScenarioPanel
+                                compact
+                                onRunScenario={this.handleRunScenario}
+                                scenarioProgress={this.state.scenarioProgress}
+                                onBatchRun={this.handleBatchRun}
+                                pinnedScenarioId={this.state.pinnedScenario?.id || null}
+                                onPinScenario={this.handlePinScenario}
+                                isRecording={this.state.isRecording}
+                                onStartRecording={this.handleStartRecording}
+                                onStopRecording={this.handleStopRecording}
+                                recordedSteps={this.state.recordedSteps}
+                              />
                             ),
                           }}
                         </BottomTabPanel>

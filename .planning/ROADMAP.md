@@ -9,7 +9,8 @@
 - ✅ **[M1.4: 细节修复与上下文结构化](milestones/v1.4-ROADMAP.md)** — 2 phases, iframe URL 持久化 + XML 结构化元素上下文
 - ✅ **[M1.5: 项目启动器 UI 改造](milestones/v1.5-ROADMAP.md)** — 2 phases, Launcher 迁移 SideMenu + PagePreview 常态化 + ANSI 过滤 + Available Pages 快捷导航 (2026-04-24)
 - ✅ **[M1.6: Scenario 场景系统](milestones/v1.6-ROADMAP.md)** — 4 phases, 多页面状态快速导航 + storage 注入 + steps 执行引擎 + 批量截图画廊 + 固定场景
-- 🚧 **M1.7: 可视化编辑器体验改进** — 2 phases, 底部面板 Tab 化 + Available Pages QR 码
+- ✅ **[M1.7: UI 启动体验优化](milestones/v1.7-REQUIREMENTS.md)** — 2 phases, 底部面板 Tab 化 + Available Pages QR 码
+- 🚧 **[M1.8: 可视化编辑-场景优化](milestones/v1.8-REQUIREMENTS.md)** — 3 phases, Step 编辑器增强 + 录制优化 + 底部 Tab 集成 + AI 改进
 
 ---
 
@@ -45,7 +46,7 @@
 
 ---
 
-## M1.7: 可视化编辑器体验改进 🚧
+## M1.7: UI 启动体验优化 ✅
 
 ### Phase 26: 可视化模式底部面板 Tab 化 + 折叠功能
 
@@ -59,7 +60,37 @@
 **Goal:** 在项目启动器的页面列表中，为每个页面新增 QR 码生成按钮，通过 stdin 命令 `sim <pageName>` 触发二维码输出到日志区
 **Description:** 新增 `POST /api/project/stdin` 端点 + `projectManager.writeStdin()`；ProjectLauncher 页面列表每项新增 QR 按钮（QrcodeOutlined），点击发送 stdin；QR 内容展示在日志滚动区
 **Depends on:** Phase 26
-**Status:** 🔲 pending
+**Status:** ✅ completed
+
+---
+
+---
+
+## M1.8: 可视化编辑-场景优化 🚧
+
+**Goal:** 增强 Scenario Step 编辑器和录制体验，将场景面板整合到底部 Tab，扩展 step 类型体系
+**Status:** 🚧 planned
+
+### Phase 28: 场景面板底部 Tab 集成
+
+**Goal:** 将 ScenarioPanel 从全屏独占视图迁移到底部 Tab，支持边预览边编辑场景
+**Description:** BottomTabPanel 新增「场景」Tab，精简版 ScenarioPanel 嵌入 Tab 内容区；保留全屏场景视图入口
+**Depends on:** Phase 27 (M1.7)
+**Status:** 🚧 planned
+
+### Phase 29: Step 编辑器全面增强
+
+**Goal:** 扩展 step 类型体系，提供可视化元素选择器和 step 管理能力
+**Description:** 新增 scroll/keyboard/hover/select/assert 五种 step 类型；可视化元素选择器（iframe 点击选元素）；拖拽排序、复制、分组折叠
+**Depends on:** Phase 28
+**Status:** 🚧 planned
+
+### Phase 30: 录制体验优化 + AI 生成改进
+
+**Goal:** 完善录制交互（暂停/恢复/插入），提升 AI 生成的灵活性和可控性
+**Description:** 录制暂停/恢复、实时步骤预览、手动插入步骤；AI 可配置模型、新 step 类型生成支持、step 精炼
+**Depends on:** Phase 29
+**Status:** 🚧 planned
 
 ---
 
@@ -71,3 +102,16 @@
 - 修改历史和撤销
 - 组件库快速插入
 - 样式可视化编辑
+
+---
+
+## Backlog
+
+### Phase 999.1: iframe 窗口尺寸选择器 (BACKLOG)
+
+**Goal:** 在 iframe 预览区增加窗口尺寸选择器，支持 iPhone 16 Pro Max（430x932）和 375x932 两种固定尺寸，375 为设计稿标准尺寸
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)

@@ -158,7 +158,7 @@ function ScenarioForm({ initial, onSave, onCancel }) {
   );
 }
 
-export default function ScenarioPanel({ onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario, isRecording, onStartRecording, onStopRecording, recordedSteps }) {
+export default function ScenarioPanel({ compact = false, onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario, isRecording, onStartRecording, onStopRecording, recordedSteps }) {
   const [scenarios, setScenarios] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -211,9 +211,9 @@ export default function ScenarioPanel({ onRunScenario, scenarioProgress, onBatch
   return (
     <div className={styles.scenarioPanel}>
       <div className={styles.scenarioPanelHeader}>
-        <Typography.Text strong>{t('visual.menuScenarios')}</Typography.Text>
+        {!compact && <Typography.Text strong>{t('visual.menuScenarios')}</Typography.Text>}
         <Space size={4}>
-          {scenarios.length > 0 && (
+          {!compact && scenarios.length > 0 && (
             <Button size="small" icon={<CameraOutlined />} onClick={() => onBatchRun?.(scenarios)}>
               {t('visual.scenario.batchRun')}
             </Button>
