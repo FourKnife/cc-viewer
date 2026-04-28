@@ -115,3 +115,13 @@
 
 Plans:
 - [ ] TBD (promote with /gsd:review-backlog when ready)
+
+### Phase 999.2: ui-design-verification skill 注入机制 (BACKLOG)
+
+**Goal:** 评估并实现在视觉对比还原流程中自动引用 ui-design-verification skill 的最佳方案
+**Context:** 当前点击视觉对比按钮时，没有指定使用 ui-design-verification skill，导致 Claude 不知道该 skill 的存在。两个候选方案：1) 将 skill 内容作为 prompt 注入到视觉对比请求中；2) 在 cc-viewer 使用过程里手动往项目注入（如写入 CLAUDE.md）
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with /gsd:review-backlog when ready)
