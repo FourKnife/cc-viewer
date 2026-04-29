@@ -8108,7 +8108,16 @@ const i18nData = {
   "visual.scenario.aiGenerate": { "zh": "AI 生成", "en": "AI Generate" },
   "visual.scenario.aiPrompt": { "zh": "描述操作流程（如：点击登录按钮，填写用户名密码）", "en": "Describe the flow (e.g. click login, fill username and password)" },
   "visual.scenario.aiGenerating": { "zh": "AI 生成中...", "en": "Generating..." },
-  "visual.scenario.aiError": { "zh": "AI 生成失败，请检查 API Key 配置", "en": "AI generation failed. Check API Key config." }
+  "visual.scenario.aiError": { "zh": "AI 生成失败，请检查 API Key 配置", "en": "AI generation failed. Check API Key config." },
+  "visual.scenario.pauseRecord": { "zh": "暂停", "en": "Pause", "ja": "一時停止" },
+  "visual.scenario.resumeRecord": { "zh": "恢复", "en": "Resume", "ja": "再開" },
+  "visual.scenario.recordingPaused": { "zh": "已暂停", "en": "Paused", "ja": "一時停止中" },
+  "visual.scenario.insertStep": { "zh": "插入步骤", "en": "Insert step", "ja": "ステップ挿入" },
+  "visual.scenario.refineSelected": { "zh": "精炼选中", "en": "Refine selected", "ja": "選択を精練" },
+  "visual.scenario.refinePlaceholder": { "zh": "描述修改方式（如：把这个 click 改成 hover）", "en": "Describe changes (e.g. change click to hover)", "ja": "変更方法を記述" },
+  "visual.scenario.selectModel": { "zh": "模型", "en": "Model", "ja": "モデル" },
+  "visual.scenario.retry": { "zh": "重试", "en": "Retry", "ja": "再試行" },
+  "visual.scenario.refineError": { "zh": "精炼失败，请重试", "en": "Refine failed. Please retry.", "ja": "精練失敗" }
 };
 
 // 将 { key: { lang: text } } 转换为 { lang: { key: text } }

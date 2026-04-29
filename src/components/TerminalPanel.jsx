@@ -439,30 +439,37 @@ class TerminalPanel extends React.Component {
         this.setState({ isDraggingScratch: false });
       }
     }
-    // Visual Editor: 选中新元素时，在输入行插入 [SelectUI #N] 标记
+    // Visual Editor: 选中新元素 → 捕获上下文快照，立即取消选中，
+    // 后续 onData 拦截 Enter 时注入上下文 + 用户输入到 visual-input。
     if (prevProps.selectedElement !== this.props.selectedElement && this.terminal) {
       if (this.props.selectedElement) {
         const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
-        if (!inAlternateScreen && this.ws && this.ws.readyState === WebSocket.OPEN) {
-          if (!this._selectUiCounter) this._selectUiCounter = 0;
-          this._selectUiCounter += 1;
-          const tag = `[SelectUI #${this._selectUiCounter}] `;
-          // 清空当前行本地回显（如有）并转发 Ctrl+U 到 PTY 清 shell 行缓存
-          if ((this._userInputBuffer || '').length > 0) {
-            this.terminal.write('\r\x1b[2K');
-            this.ws.send(JSON.stringify({ type: 'input', data: '\x15' }));
-            this._userInputBuffer = '';
-          }
-          this._selectUiTag = tag;
-          // 将标记发送到 PTY 输入行（如同用户输入）
-          this.ws.send(JSON.stringify({ type: 'input', data: tag }));
-          // 同步到 _userInputBuffer，确保 Enter 时能正确组合 prompt
-          this._userInputBuffer = tag;
+        if (!inAlternateScreen) {
+          const el = this.props.selectedElement;
+          const pending = this.props.pendingImages;
+          const screenshotPaths = pending?.map(img => img.path) ?? [];
+          if (screenshotPaths.length > 0) this.props.onClearPendingImages?.();
+
+          this._cachedElementContext = buildElementContext(el, screenshotPaths);
+          this._pendingUserBuffer = '';
+
+          // 标记是自触发的取消选中，防止 else 分支清掉刚存好的上下文
+          this._selfTriggeredDeselect = true;
+          this.props.onElementDeselect?.();
         }
       } else {
-        // 取消选中：重置本地回显状态
-        this._selectUiTag = '';
-        this._userInputBuffer = '';
+        // 用户手动取消选中（非自触发）：清理缓存的上下文
+        if (!this._selfTriggeredDeselect) {
+          this._cachedElementContext = null;
+          this._pendingUserBuffer = '';
+        } else {
+          // 自触发取消选中 → 选中元素流程已完成，向终端写入占位符并聚焦
+          // 此时 _cachedElementContext 已就绪，后续 onData 拦截键盘输入做本地回显
+          if (this._cachedElementContext) {
+            this.terminal.focus();
+          }
+        }
+        this._selfTriggeredDeselect = false;
       }
     }
   }
@@ -625,9 +632,9 @@ class TerminalPanel extends React.Component {
       if (e.type === 'keydown' && e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         const pending = this.props.pendingImages;
         const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
-        // Visual Editor: selectedElement 激活时，跳过独立的路径注入，
-        // 由 onData handler 统一组合 截图路径 + 元素上下文 + 用户输入
-        if (pending?.length > 0 && !this.props.selectedElement && !inAlternateScreen && this.ws?.readyState === WebSocket.OPEN) {
+        // Visual Editor: 有缓存的元素上下文时，跳过独立的路径注入，
+        // 路径已在捕获上下文时随 pendingImages 一并清掉
+        if (pending?.length > 0 && !this.props.selectedElement && !this._cachedElementContext && !inAlternateScreen && this.ws?.readyState === WebSocket.OPEN) {
           const paths = pending.map(img => `'${img.path.replace(/'/g, "'\\''")}'`).join(' ');
           this.ws.send(JSON.stringify({ type: 'input', data: paths + ' ' }));
           this.props.onClearPendingImages?.();
@@ -654,67 +661,67 @@ class TerminalPanel extends React.Component {
       return false;
     });
 
-    this._userInputBuffer = '';
-    this._selectUiTag = '';
     this.terminal.onData((data) => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        if (this.props.selectedElement) {
-          // ★ selectedElement 激活时：本地回显 + _userInputBuffer 追踪，
-          //    不再实时转发字符到 PTY，避免 shell 回显与 visual-input 抑制逻辑冲突。
+        if (this._cachedElementContext) {
+          // ★ 有缓存的元素上下文：PTY 转发模式。
+          //    字符直接转发 PTY，让 Claude Code 在其输入框内回显，同时同步本地缓冲区。
+          //    用户按 Enter 时组合 XML 上下文 + 输入通过 visual-input 发送。
           if (data === '\r') {
             const inAlternateScreen = this.terminal?.buffer?.active?.type === 'alternate';
-            if (!inAlternateScreen && this._userInputBuffer) {
-              const userInput = this._userInputBuffer.replace(/\[SelectUI #\d+\]\s*/g, '').trim();
-              this._userInputBuffer = '';
-              if (!userInput) {
-                this.ws.send(JSON.stringify({ type: 'input', data }));
+            if (!inAlternateScreen) {
+              const userInput = (this._pendingUserBuffer || '').trim();
+              const context = this._cachedElementContext;
+              this._cachedElementContext = null;
+              this._pendingUserBuffer = '';
+
+              if (userInput && context) {
+                const fullPrompt = context + '\n用户要求: ' + userInput;
+                this.ws.send(JSON.stringify({ type: 'visual-input', prompt: fullPrompt }));
                 return;
               }
-              const pending = this.props.pendingImages;
-              const screenshotPaths = pending?.map(img => img.path) ?? [];
-              if (screenshotPaths.length > 0) this.props.onClearPendingImages?.();
-              const context = buildElementContext(this.props.selectedElement, screenshotPaths);
-              const fullPrompt = context + '\n用户要求: ' + userInput;
-              // 换行开始新行，避免与本地回显文字重叠
-              this.terminal.write('\r\n');
-              this.ws.send(JSON.stringify({ type: 'visual-input', prompt: fullPrompt }));
+              // 无用户输入：正常回车（转发 PTY）
+              this.ws.send(JSON.stringify({ type: 'input', data }));
               return;
             }
-            this._userInputBuffer = '';
+            // alternate screen（vim/less）：正常回车
             this.ws.send(JSON.stringify({ type: 'input', data }));
             return;
-          } else if (data === '\x7f') {
-            // Backspace: 仅删除本地回显字符（不转发 PTY）
-            if ((this._userInputBuffer || '').length > this._selectUiTag.length) {
-              this.terminal.write('\b\x1b[K');
-              this._userInputBuffer = (this._userInputBuffer || '').slice(0, -1);
+          }
+
+          if (data === '\x7f') {
+            // Backspace：转发 PTY，同步本地缓冲区
+            if ((this._pendingUserBuffer || '').length > 0) {
+              this.ws.send(JSON.stringify({ type: 'input', data }));
+              this._pendingUserBuffer = this._pendingUserBuffer.slice(0, -1);
             }
             return;
           } else if (data === '\x15') {
-            // Ctrl+U: 清除用户输入部分（保留标记），转发 PTY 清空 shell 行缓存
-            const userLen = (this._userInputBuffer || '').length - this._selectUiTag.length;
-            if (userLen > 0) {
-              this.terminal.write(`\x1b[${userLen}D\x1b[K`);
-            }
-            this._userInputBuffer = this._selectUiTag;
+            // Ctrl+U：转发 PTY，清空本地缓冲区
+            this.ws.send(JSON.stringify({ type: 'input', data }));
+            this._pendingUserBuffer = '';
+            return;
+          } else if (data === '\x03') {
+            // Ctrl+C：退出上下文模式，转发 PTY
+            this._cachedElementContext = null;
+            this._pendingUserBuffer = '';
             this.ws.send(JSON.stringify({ type: 'input', data }));
             return;
           } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // 可打印字符：本地回显 + 记录
-            this.terminal.write(data);
-            this._userInputBuffer = (this._userInputBuffer || '') + data;
+            // 可打印字符：转发 PTY，同步本地缓冲区
+            this.ws.send(JSON.stringify({ type: 'input', data }));
+            this._pendingUserBuffer = (this._pendingUserBuffer || '') + data;
             return;
           } else if (data.length > 1 && !data.startsWith('\x1b')) {
-            // 多字节非转义序列（IME 文本）：本地回显 + 记录
-            this.terminal.write(data);
-            this._userInputBuffer = (this._userInputBuffer || '') + data;
+            // 多字节非转义序列（IME 文本）：转发 PTY，同步本地缓冲区
+            this.ws.send(JSON.stringify({ type: 'input', data }));
+            this._pendingUserBuffer = (this._pendingUserBuffer || '') + data;
             return;
           }
-          // 其他控制键（方向键等）转发 PTY
-          this.ws.send(JSON.stringify({ type: 'input', data }));
+          // 其他（方向键/Tab 等）：上下文模式不转发 PTY，丢弃
           return;
         }
-        // 非 selectedElement 模式：原样转发 PTY
+        // 正常模式：原样转发 PTY
         this.ws.send(JSON.stringify({ type: 'input', data }));
       }
     });

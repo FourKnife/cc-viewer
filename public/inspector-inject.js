@@ -2,8 +2,9 @@
   if (window.__ccInspectorInitialized) return;
   window.__ccInspectorInitialized = true;
 
-  let enabled = true;
+  let enabled = false;
   let recording = false;
+  let recordingPaused = false;
   let recordingOverlay = null;
   let selectedElement = null;
   var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') &&
@@ -218,6 +219,7 @@
 
   function onRecordClick(e) {
     if (!recording) return;
+    if (recordingPaused) return;
     var target = e.target;
     if (target === recordingOverlay) return;
     var selector = generateSelector(target);
@@ -226,6 +228,7 @@
 
   function onRecordInput(e) {
     if (!recording) return;
+    if (recordingPaused) return;
     var target = e.target;
     if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') return;
     var selector = generateSelector(target);
@@ -258,7 +261,22 @@
     }
     if (e.data.type === 'stop-recording') {
       recording = false;
+      recordingPaused = false;
       if (recordingOverlay) recordingOverlay.style.display = 'none';
+    }
+    if (e.data.type === 'pause-recording') {
+      recordingPaused = true;
+      if (recordingOverlay) {
+        recordingOverlay.style.background = '#faad14';
+        recordingOverlay.textContent = '⏸ PAUSED';
+      }
+    }
+    if (e.data.type === 'resume-recording') {
+      recordingPaused = false;
+      if (recordingOverlay) {
+        recordingOverlay.style.background = '#ff4d4f';
+        recordingOverlay.textContent = '● REC';
+      }
     }
     if (e.data.type === 'run-step') {
       var step = e.data.step;

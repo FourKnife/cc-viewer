@@ -52,6 +52,7 @@ class App extends AppBase {
       pinnedScenario: null,  // { id, name, url, storage, steps }
       isRecording: false,
       recordedSteps: [],
+      isPaused: false,
       pickingElement: false,
     });
     this.appHeaderRef = React.createRef();
@@ -156,7 +157,7 @@ class App extends AppBase {
       await fetch('/api/project/stdin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: `sim ${pageName}\n` }),
+        body: JSON.stringify({ text: `qr ${pageName}\n` }),
       });
     } catch (_) {
       // 静默忽略网络错误
@@ -174,11 +175,19 @@ class App extends AppBase {
   };
 
   handleStartRecording = () => {
-    this.setState({ isRecording: true, recordedSteps: [], visualMenuKey: 'ui-edit' });
+    this.setState({ isRecording: true, recordedSteps: [], isPaused: false, visualMenuKey: 'ui-edit' });
   };
 
   handleStopRecording = () => {
-    this.setState({ isRecording: false });
+    this.setState({ isRecording: false, isPaused: false });
+  };
+
+  handlePauseRecording = () => {
+    this.setState({ isPaused: true });
+  };
+
+  handleResumeRecording = () => {
+    this.setState({ isPaused: false });
   };
 
   handlePickElement = (callback) => {
@@ -696,6 +705,7 @@ class App extends AppBase {
                           pinnedScenario={this.state.pinnedScenario}
                           onUnpinScenario={() => this.setState({ pinnedScenario: null })}
                           isRecording={this.state.isRecording}
+                          isPaused={this.state.isPaused}
                           onRecordedStep={this.handleRecordedStep}
                           pickingElement={this.state.pickingElement}
                           onPickedElement={this.handlePickedElement}
@@ -741,8 +751,11 @@ class App extends AppBase {
                                 pinnedScenarioId={this.state.pinnedScenario?.id || null}
                                 onPinScenario={this.handlePinScenario}
                                 isRecording={this.state.isRecording}
+                                isPaused={this.state.isPaused}
                                 onStartRecording={this.handleStartRecording}
                                 onStopRecording={this.handleStopRecording}
+                                onPauseRecording={this.handlePauseRecording}
+                                onResumeRecording={this.handleResumeRecording}
                                 recordedSteps={this.state.recordedSteps}
                                 onPickElement={this.handlePickElement}
                               />
@@ -767,8 +780,11 @@ class App extends AppBase {
                           pinnedScenarioId={this.state.pinnedScenario?.id || null}
                           onPinScenario={this.handlePinScenario}
                           isRecording={this.state.isRecording}
+                          isPaused={this.state.isPaused}
                           onStartRecording={this.handleStartRecording}
                           onStopRecording={this.handleStopRecording}
+                          onPauseRecording={this.handlePauseRecording}
+                          onResumeRecording={this.handleResumeRecording}
                           recordedSteps={this.state.recordedSteps}
                           onPickElement={this.handlePickElement}
                         />
@@ -810,6 +826,7 @@ class App extends AppBase {
                     onFilePath={() => {}}
                     onRemovePendingImage={(i) => this.setState(prev => ({ visualPendingImages: prev.visualPendingImages.filter((_, idx) => idx !== i) }))}
                     onClearPendingImages={() => this.setState({ visualPendingImages: [] })}
+                    onElementDeselect={() => this.setState({ selectedElement: null, visualPendingImages: [] })}
                     modelName={this.state.contextWindow?.model}
                     selectedElement={this.state.selectedElement}
                   />

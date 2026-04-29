@@ -164,11 +164,11 @@ function compareStyles(domStyles, sketchData) {
   return diffs;
 }
 
-export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot, pendingScenario, onScenarioDone, onStepProgress, onScreenshotReady, pinnedScenario, onUnpinScenario, isRecording, onRecordedStep, pickingElement, onPickedElement }) {
+export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUrlChange, onElementHover, onElementSelect, onElementDeselect, selectedElement, sketchMcpStatus, onElementScreenshot, pendingScenario, onScenarioDone, onStepProgress, onScreenshotReady, pinnedScenario, onUnpinScenario, isRecording, isPaused, onRecordedStep, pickingElement, onPickedElement }) {
   const [urlInput, setUrlInput] = useState(externalUrl || '');
   const [iframeSrc, setIframeSrc] = useState('');
   const [iframeKey, setIframeKey] = useState(0);
-  const [inspecting, setInspecting] = useState(true);
+  const [inspecting, setInspecting] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [screenshotData, setScreenshotData] = useState(null);
   const [autoComparing, setAutoComparing] = useState(false);
@@ -372,6 +372,21 @@ export default function PagePreview({ port, previewUrl: externalUrl, onPreviewUr
       { source: 'cc-visual-parent', type: 'start-pick-element' }, '*'
     );
   }, [pickingElement]);
+
+  // 暂停/恢复录制：通知 iframe
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe?.contentWindow) return;
+    if (isPaused) {
+      iframe.contentWindow.postMessage(
+        { source: 'cc-visual-parent', type: 'pause-recording' }, '*'
+      );
+    } else {
+      iframe.contentWindow.postMessage(
+        { source: 'cc-visual-parent', type: 'resume-recording' }, '*'
+      );
+    }
+  }, [isPaused]);
 
   // Sketch 预览自动轮询
   useEffect(() => {

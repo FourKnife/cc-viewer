@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Button, Input, Space, Typography, message } from 'antd';
-import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, EditOutlined, MinusCircleOutlined, CameraOutlined, PushpinOutlined, PushpinFilled, CopyOutlined, AimOutlined, HolderOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, PlayCircleFilled, EditOutlined, MinusCircleOutlined, CameraOutlined, PushpinOutlined, PushpinFilled, CopyOutlined, AimOutlined, HolderOutlined, InsertRowBelowOutlined, PauseCircleOutlined } from '@ant-design/icons';
 import { t } from '../../i18n';
 import { getScenarios, createScenario, updateScenario, deleteScenario } from '../../utils/scenarioStorage';
 import styles from './styles.module.css';
@@ -40,12 +40,13 @@ function StorageEditor({ pairs, onChange }) {
   );
 }
 
-function StepsEditor({ steps, onChange, onPickElement }) {
+function StepsEditor({ steps, onChange, onPickElement, selectedIndices, onToggleSelect, onInsertStep }) {
   const dragIndex = useRef(null);
 
   const addStep = () => onChange([...steps, { type: 'click', selector: '' }]);
   const removeStep = (i) => onChange(steps.filter((_, idx) => idx !== i));
   const copyStep = (i) => onChange([...steps.slice(0, i + 1), { ...steps[i] }, ...steps.slice(i + 1)]);
+  const insertStep = (i) => onChange([...steps.slice(0, i + 1), { type: 'click', selector: '' }, ...steps.slice(i + 1)]);
   const updateStep = (i, field, val) => {
     onChange(steps.map((s, idx) => idx === i ? { ...s, [field]: val } : s));
   };
@@ -72,6 +73,14 @@ function StepsEditor({ steps, onChange, onPickElement }) {
           style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}
         >
           <HolderOutlined style={{ cursor: 'grab', color: 'var(--text-muted)', flexShrink: 0 }} />
+              {onToggleSelect && (
+                <input
+                  type="checkbox"
+                  checked={selectedIndices?.includes(i) || false}
+                  onChange={() => onToggleSelect(i)}
+                  style={{ margin: 0, flexShrink: 0 }}
+                />
+              )}
           <select
             value={s.type}
             onChange={e => updateStep(i, 'type', e.target.value)}
@@ -133,6 +142,13 @@ function StepsEditor({ steps, onChange, onPickElement }) {
             style={{ cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }}
             onClick={() => copyStep(i)}
           />
+          {onInsertStep && (
+            <InsertRowBelowOutlined
+              title={t('visual.scenario.insertStep')}
+              style={{ cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }}
+              onClick={() => insertStep(i)}
+            />
+          )}
           <MinusCircleOutlined onClick={() => removeStep(i)} style={{ cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }} />
         </div>
       ))}
@@ -153,6 +169,10 @@ function ScenarioForm({ initial, onSave, onCancel, onPickElement }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [showAiInput, setShowAiInput] = useState(false);
+  const [selectedIndices, setSelectedIndices] = useState([]);
+  const [aiRefineMode, setAiRefineMode] = useState(false);
+  const [aiModel, setAiModel] = useState('claude-haiku-4-5-20251001');
+  const [aiError, setAiError] = useState(null);
 
   const handleSave = () => {
     if (!name.trim() || !url.trim()) { message.warning('Name and URL are required'); return; }
@@ -164,15 +184,32 @@ function ScenarioForm({ initial, onSave, onCancel, onPickElement }) {
   const handleAiGenerate = async () => {
     if (!aiPrompt.trim()) return;
     setAiLoading(true);
+    setAiError(null);
     try {
+      const isRefine = selectedIndices.length > 0;
+      const body = isRefine
+        ? { description: aiPrompt, url, steps: selectedIndices.map(i => steps[i]), model: aiModel }
+        : { description: aiPrompt, url, model: aiModel };
       const res = await fetch('/api/generate-scenario', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: aiPrompt, url: url }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.error) {
-        message.error(t('visual.scenario.aiError'));
+        setAiError(data.error);
+      } else if (isRefine) {
+        const newSteps = [...steps];
+        data.steps.forEach((step, idx) => {
+          if (idx < selectedIndices.length) {
+            newSteps[selectedIndices[idx]] = step;
+          }
+        });
+        setSteps(newSteps);
+        setSelectedIndices([]);
+        setShowAiInput(false);
+        setAiPrompt('');
+        message.success(`已精炼 ${Math.min(data.steps.length, selectedIndices.length)} 个步骤`);
       } else {
         setSteps(data.steps || []);
         setShowAiInput(false);
@@ -180,10 +217,16 @@ function ScenarioForm({ initial, onSave, onCancel, onPickElement }) {
         message.success(`已生成 ${(data.steps || []).length} 个步骤`);
       }
     } catch (e) {
-      message.error(t('visual.scenario.aiError'));
+      setAiError('network_error');
     } finally {
       setAiLoading(false);
     }
+  };
+
+  const handleToggleSelect = (i) => {
+    setSelectedIndices(prev =>
+      prev.includes(i) ? prev.filter(idx => idx !== i) : [...prev, i]
+    );
   };
 
   return (
@@ -195,7 +238,7 @@ function ScenarioForm({ initial, onSave, onCancel, onPickElement }) {
         <StorageEditor pairs={pairs} onChange={setPairs} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('visual.scenario.steps')}</Typography.Text>
-          <Button size="small" type="dashed" onClick={() => setShowAiInput(v => !v)}>
+          <Button size="small" type="dashed" onClick={() => { setShowAiInput(v => !v); setSelectedIndices([]); setAiError(null); }}>
             {t('visual.scenario.aiGenerate')}
           </Button>
         </div>
@@ -204,16 +247,36 @@ function ScenarioForm({ initial, onSave, onCancel, onPickElement }) {
             <Input.TextArea
               size="small"
               rows={2}
-              placeholder={t('visual.scenario.aiPrompt')}
+              placeholder={selectedIndices.length > 0 ? t('visual.scenario.refinePlaceholder') : t('visual.scenario.aiPrompt')}
               value={aiPrompt}
               onChange={e => setAiPrompt(e.target.value)}
             />
-            <Button size="small" type="primary" loading={aiLoading} onClick={handleAiGenerate}>
-              {aiLoading ? t('visual.scenario.aiGenerating') : t('visual.scenario.aiGenerate')}
-            </Button>
+            <Space size={4}>
+              <select
+                value={aiModel}
+                onChange={e => setAiModel(e.target.value)}
+                style={{ fontSize: 12, padding: '1px 4px', height: 24 }}
+                title={t('visual.scenario.selectModel')}
+              >
+                <option value="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001</option>
+              </select>
+              <Button size="small" type="primary" loading={aiLoading} onClick={handleAiGenerate}>
+                {aiLoading ? t('visual.scenario.aiGenerating') : (selectedIndices.length > 0 ? t('visual.scenario.refineSelected') : t('visual.scenario.aiGenerate'))}
+              </Button>
+            </Space>
+            {aiError && (
+              <Space size={4}>
+                <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                  {t('visual.scenario.aiError')}
+                </Typography.Text>
+                <Button size="small" onClick={handleAiGenerate}>
+                  {t('visual.scenario.retry')}
+                </Button>
+              </Space>
+            )}
           </Space>
         )}
-        <StepsEditor steps={steps} onChange={setSteps} onPickElement={onPickElement} />
+        <StepsEditor steps={steps} onChange={setSteps} onPickElement={onPickElement} selectedIndices={selectedIndices} onToggleSelect={handleToggleSelect} onInsertStep={() => {}} />
         <Space>
           <Button size="small" type="primary" onClick={handleSave}>{t('visual.scenario.save')}</Button>
           <Button size="small" onClick={onCancel}>{t('visual.scenario.cancel')}</Button>
@@ -223,7 +286,7 @@ function ScenarioForm({ initial, onSave, onCancel, onPickElement }) {
   );
 }
 
-export default function ScenarioPanel({ compact = false, onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario, isRecording, onStartRecording, onStopRecording, recordedSteps, onPickElement }) {
+export default function ScenarioPanel({ compact = false, onRunScenario, scenarioProgress, onBatchRun, pinnedScenarioId, onPinScenario, isRecording, onStartRecording, onStopRecording, recordedSteps, onPickElement, isPaused, onPauseRecording, onResumeRecording }) {
   const [scenarios, setScenarios] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -306,7 +369,23 @@ export default function ScenarioPanel({ compact = false, onRunScenario, scenario
 
       {isRecording && (
         <div style={{ padding: '6px 12px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-primary)' }}>
-          <Typography.Text type="danger" style={{ fontSize: 12 }}>● {t('visual.scenario.recording')} ({(recordedSteps || []).length} {t('visual.scenario.steps')})</Typography.Text>
+          <Space size={8}>
+            <Typography.Text type={isPaused ? 'warning' : 'danger'} style={{ fontSize: 12 }}>
+              {isPaused ? '⏸' : '●'} {isPaused ? t('visual.scenario.recordingPaused') : t('visual.scenario.recording')} ({(recordedSteps || []).length} {t('visual.scenario.steps')})
+            </Typography.Text>
+            {isPaused ? (
+              <Button size="small" icon={<PlayCircleFilled />} onClick={onResumeRecording}>
+                {t('visual.scenario.resumeRecord')}
+              </Button>
+            ) : (
+              <Button size="small" icon={<PauseCircleOutlined />} onClick={onPauseRecording}>
+                {t('visual.scenario.pauseRecord')}
+              </Button>
+            )}
+            <Button size="small" danger onClick={handleStopAndSave}>
+              {t('visual.scenario.stopRecord')}
+            </Button>
+          </Space>
           <div style={{ maxHeight: 120, overflowY: 'auto', marginTop: 4 }}>
             {(recordedSteps || []).map((s, i) => (
               <div key={i} style={{ fontSize: 11, color: 'var(--text-muted)', padding: '1px 0' }}>

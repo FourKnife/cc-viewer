@@ -2858,7 +2858,7 @@ Be concise - developers need actionable fixes, not lengthy descriptions.`;
     req.on('data', c => { body += c; if (body.length > 64 * 1024) req.destroy(); });
     req.on('end', () => {
       try {
-        const { description, url: pageUrl } = JSON.parse(body);
+        const { description, url: pageUrl, steps: refineSteps, model: requestModel } = JSON.parse(body);
         if (!description) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'missing_description' }));
@@ -2871,7 +2871,23 @@ Be concise - developers need actionable fixes, not lengthy descriptions.`;
           res.end(JSON.stringify({ error: 'no_api_key' }));
           return;
         }
-        const prompt = `You are a frontend test automation expert. Generate a JSON array of scenario steps based on the user's description.
+        const prompt = refineSteps
+          ? `You are a frontend test automation expert. Modify the existing steps according to the user's instructions.
+
+Existing steps:
+${JSON.stringify(refineSteps, null, 2)}
+
+User instructions: ${description}
+
+Rules:
+1. Return ONLY a valid JSON array, no markdown, no explanation.
+2. Each step type reference: click/fill/wait/scroll/keyboard/hover/select/assert.
+3. Return exactly the same number of steps as the existing steps above, only modifying the ones that need to change.
+4. Preserve the order of existing steps unless the user explicitly asks to reorder.
+5. Use specific, stable CSS selectors.
+
+Return only the JSON array.`
+          : `You are a frontend test automation expert. Generate a JSON array of scenario steps based on the user's description.
 
 Page URL: ${pageUrl || 'unknown'}
 User description: ${description}
@@ -2882,6 +2898,11 @@ Rules:
    - { "type": "click", "selector": "CSS_SELECTOR" }
    - { "type": "fill", "selector": "CSS_SELECTOR", "value": "TEXT" }
    - { "type": "wait", "ms": NUMBER }
+   - { "type": "scroll", "selector": "CSS_SELECTOR", "x": NUMBER, "y": NUMBER }
+   - { "type": "keyboard", "key": "KEY_NAME" }
+   - { "type": "hover", "selector": "CSS_SELECTOR" }
+   - { "type": "select", "selector": "CSS_SELECTOR", "value": "OPTION_VALUE" }
+   - { "type": "assert", "selector": "CSS_SELECTOR", "expected": "TEXT" }
 3. Use specific, stable CSS selectors (prefer id, data-testid, aria-label over class names).
 4. Add wait steps (300-500ms) after clicks that trigger navigation or async operations.
 5. Generate 3-10 steps maximum.
@@ -2889,7 +2910,7 @@ Rules:
 Return only the JSON array.`;
 
         const apiBody = JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
+          model: requestModel || 'claude-haiku-4-5-20251001',
           max_tokens: 1024,
           messages: [{ role: 'user', content: prompt }]
         });
