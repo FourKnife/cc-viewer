@@ -2170,12 +2170,14 @@ async function handleRequest(req, res) {
         }
         // 用 named event 'stream-progress' 避免混入 data: 流与 dedup 冲突
         // 精简 payload：前端只需要 timestamp/url/content 渲染 Live overlay
-        sendEventToClients(clients, 'stream-progress', {
+        const _streamChunkPayload = {
           timestamp: entry.timestamp,
           url: entry.url,
           content: entry.response?.body?.content || [],
           model: entry.body?.model,
-        });
+        };
+        sendEventToClients(clients, 'stream-progress', _streamChunkPayload);
+        runParallelHook('onStreamChunk', _streamChunkPayload);
       } catch {}
       try { res.writeHead(204); res.end(); } catch {}
     });
