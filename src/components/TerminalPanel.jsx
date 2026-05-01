@@ -13,6 +13,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 import { t } from '../i18n';
 import { tc, getClaudeConfigDir } from '../utils/tClaude';
+import { TerminalWsContext } from './TerminalWsContext';
 import { apiUrl } from '../utils/apiUrl';
 import { isMobile, isIOS, isPad } from '../env';
 import styles from './TerminalPanel.module.css';
@@ -193,13 +194,33 @@ export async function uploadFileAndGetPath(file) {
 }
 
 class TerminalPanel extends React.Component {
+  // 通过 Context 共享 App 层的单条 /ws/terminal,this.context = { send, isOpen, addMessageHandler, addStateListener }
+  static contextType = TerminalWsContext;
+
+  // 兼容 stub:同 ChatView,getter 模拟旧 this.ws 的 send/readyState API → 映射到 context。
+  // 这样所有 `this.ws.send(JSON.stringify(...))` 和 `this.ws.readyState === WebSocket.OPEN` 不用改。
+  get ws() {
+    const ctx = this.context;
+    if (!ctx || typeof ctx.send !== 'function') return null;
+    return {
+      get readyState() { return ctx.isOpen && ctx.isOpen() ? WebSocket.OPEN : WebSocket.CLOSED; },
+      send: (s) => {
+        let obj;
+        try { obj = JSON.parse(s); } catch { return false; }
+        return ctx.send(obj);
+      },
+    };
+  }
+
   constructor(props) {
     super(props);
     this.containerRef = React.createRef();
     this.fileInputRef = React.createRef();
     this.terminal = null;
     this.fitAddon = null;
-    this.ws = null;
+    // ws 现在是 getter(挂在原型),不在 constructor 上设字段,避免覆盖 getter
+    this._unsubWsHandler = null;
+    this._unsubWsState = null;
     this.resizeObserver = null;
     this.state = {
       terminalFocused: false,
@@ -383,7 +404,17 @@ class TerminalPanel extends React.Component {
 
   componentDidMount() {
     this.initTerminal();
-    this.connectWebSocket();
+    // 注册 ws 消息 + 状态 handler。Provider 已在 App/Mobile 层根据 cliMode/terminalVisible 决定是否建立 ws。
+    if (this.context && this.context.addMessageHandler) {
+      this._unsubWsHandler = this.context.addMessageHandler(this._onTerminalWsMessage);
+    }
+    if (this.context && this.context.addStateListener) {
+      this._unsubWsState = this.context.addStateListener(this._onTerminalWsState);
+    }
+    // 若 ws 已 OPEN(本组件 mount 较 Provider 晚的常见场景),立即 sendResize 让 PTY 用当前 cols/rows。
+    if (this.context && this.context.isOpen && this.context.isOpen()) {
+      this.sendResize();
+    }
     this.setupResizeObserver();
     // 读取 claude settings 判断 Agent Team 是否可用
     fetch(apiUrl('/api/claude-settings')).then(r => r.json()).then(data => {
@@ -482,11 +513,8 @@ class TerminalPanel extends React.Component {
     if (this._stopMobileMomentum) this._stopMobileMomentum();
     if (this._writeTimer) cancelAnimationFrame(this._writeTimer);
     if (this._wsReconnectTimer) clearTimeout(this._wsReconnectTimer);
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
-      this.ws = null;
-    }
+    if (this._unsubWsHandler) { try { this._unsubWsHandler(); } catch {} this._unsubWsHandler = null; }
+    if (this._unsubWsState) { try { this._unsubWsState(); } catch {} this._unsubWsState = null; }
     if (this._resizeDebounceTimer) clearTimeout(this._resizeDebounceTimer);
     if (this._webglRecoveryTimer) clearTimeout(this._webglRecoveryTimer);
     if (this.resizeObserver) {
@@ -773,51 +801,43 @@ class TerminalPanel extends React.Component {
     this._stopMobileMomentum = stopMomentum;
   }
 
-  connectWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal`;
-
-    this.ws = new WebSocket(wsUrl);
-
-    this.ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'data') {
-          this._throttledWrite(msg.data);
-        } else if (msg.type === 'exit') {
+  // 通过 TerminalWsContext 共享 ws — 不再自建。本方法接收 Provider 派发的所有消息,
+  // 自己 switch type;ChatView/TerminalPanel 各自只处理关心的类型,互不干扰。
+  // (原 hook/sdk-* 类消息在合并 ws 后也会进来,但这里不识别 → try/catch 之外也无作用,自然忽略。)
+  _onTerminalWsMessage = (msg) => {
+    try {
+      if (msg.type === 'data') {
+        this._throttledWrite(msg.data);
+      } else if (msg.type === 'exit') {
+        this._flushWrite();
+        this.terminal.write(`\r\n\x1b[33m${t('ui.terminal.exited', { code: msg.exitCode ?? '?' })}\x1b[0m\r\n`);
+        this.terminal.write(`\x1b[90m${t('ui.terminal.pressEnterForShell')}\x1b[0m\r\n`);
+      } else if (msg.type === 'editor-open') {
+        if (this.props.onEditorOpen) {
+          this.props.onEditorOpen(msg.sessionId, msg.filePath);
+        }
+      } else if (msg.type === 'state') {
+        if (!msg.running && msg.exitCode !== null) {
           this._flushWrite();
-          this.terminal.write(`\r\n\x1b[33m${t('ui.terminal.exited', { code: msg.exitCode ?? '?' })}\x1b[0m\r\n`);
+          this.terminal.write(`\x1b[33m${t('ui.terminal.exited', { code: msg.exitCode })}\x1b[0m\r\n`);
           this.terminal.write(`\x1b[90m${t('ui.terminal.pressEnterForShell')}\x1b[0m\r\n`);
-        } else if (msg.type === 'editor-open') {
-          if (this.props.onEditorOpen) {
-            this.props.onEditorOpen(msg.sessionId, msg.filePath);
-          }
-        } else if (msg.type === 'state') {
-          if (!msg.running && msg.exitCode !== null) {
-            this._flushWrite();
-            this.terminal.write(`\x1b[33m${t('ui.terminal.exited', { code: msg.exitCode })}\x1b[0m\r\n`);
-            this.terminal.write(`\x1b[90m${t('ui.terminal.pressEnterForShell')}\x1b[0m\r\n`);
-          }
-        } else if (msg.type === 'toast') {
-          this._flushWrite();
-          this.terminal.write(`\r\n\x1b[33m⚠ ${msg.message}\x1b[0m\r\n`);
         }
-      } catch {}
-    };
+      } else if (msg.type === 'toast') {
+        this._flushWrite();
+        this.terminal.write(`\r\n\x1b[33m⚠ ${msg.message}\x1b[0m\r\n`);
+      }
+    } catch {}
+  };
 
-    this.ws.onclose = () => {
-      this._wsReconnectTimer = setTimeout(() => {
-        if (this.containerRef.current) {
-          this.terminal?.reset();
-          this.connectWebSocket();
-        }
-      }, 2000);
-    };
-
-    this.ws.onopen = () => {
+  // ws 状态变更:open 时 sendResize(原 onopen 行为);close 时 reset xterm(避免残留半截 ANSI)。
+  // 重连本身由 Provider 内部 2s 退避完成,组件无感。
+  _onTerminalWsState = (state) => {
+    if (state === 'open') {
       this.sendResize();
-    };
-  }
+    } else if (state === 'close') {
+      this.terminal?.reset();
+    }
+  };
 
   sendResize() {
     if (this.ws && this.ws.readyState === WebSocket.OPEN && this.terminal) {

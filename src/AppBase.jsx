@@ -294,13 +294,17 @@ class AppBase extends React.Component {
         }
         // Approval modal preferences (defaults already in initial state — only override when persisted).
         if (data.approvalModal && typeof data.approvalModal === 'object') {
-          this.setState(prev => ({
-            approvalPrefs: {
+          this.setState(prev => {
+            const next = {
               modalEnabled: data.approvalModal.modalEnabled !== undefined ? !!data.approvalModal.modalEnabled : prev.approvalPrefs.modalEnabled,
               soundEnabled: data.approvalModal.soundEnabled !== undefined ? !!data.approvalModal.soundEnabled : prev.approvalPrefs.soundEnabled,
               notifyOnlyWhenHidden: data.approvalModal.notifyOnlyWhenHidden !== undefined ? !!data.approvalModal.notifyOnlyWhenHidden : prev.approvalPrefs.notifyOnlyWhenHidden,
-            },
-          }));
+            };
+            // 同步给 electron main 进程,让 maybeNotify 用最新的 notifyOnlyWhenHidden 决策。
+            // 非 electron 环境下 tabBridge 不存在,可选链跳过。
+            try { window.tabBridge?.setApprovalPref?.(next); } catch (e) { console.warn('[approvalPref IPC] hydrate sync failed:', e); }
+            return { approvalPrefs: next };
+          });
         }
         if (data.themeColor) {
           this.setState({ themeColor: data.themeColor });
@@ -1461,6 +1465,8 @@ class AppBase extends React.Component {
     // 同源 next：setState + fetch body 都用同一个 next，避免 rapid toggle 下第二次 POST 读到 stale state 漏 patch
     const next = { ...this.state.approvalPrefs, ...patch };
     this.setState({ approvalPrefs: next });
+    // 同步给 electron main 进程,maybeNotify 立即用新 notifyOnlyWhenHidden 决策。
+    try { window.tabBridge?.setApprovalPref?.(next); } catch (e) { console.warn('[approvalPref IPC] onChange sync failed:', e); }
     fetch(apiUrl('/api/preferences'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

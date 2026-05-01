@@ -7,6 +7,7 @@ import { isMainAgent, isSystemText, classifyUserContent } from './utils/contentF
 import { getModelMaxTokens, getEffectiveModel } from './utils/helpers';
 import ChatView from './components/ChatView';
 import TerminalPanel, { uploadFileAndGetPath } from './components/TerminalPanel';
+import { TerminalWsProvider } from './components/TerminalWsContext';
 import ToolApprovalPanel from './components/ToolApprovalPanel';
 import MobileGitDiff from './components/MobileGitDiff';
 import MobileFileExplorer from './components/MobileFileExplorer';
@@ -344,7 +345,11 @@ class Mobile extends AppBase {
       if (isMainAgent(filteredRequests[i]) && effective) { mobileModelName = effective; break; }
     }
 
+    // 单条 /ws/terminal 的开启条件:与 App 同款,但 mobileTerminalVisible 替代 PC 的 terminalVisible。
+    const wsOpen = !mobileIsLocalLog && !this.state.sdkMode && (this.state.cliMode || this.state.mobileTerminalVisible);
+
     return (
+      <TerminalWsProvider open={wsOpen}>
       <div className={styles.mobileCLIRoot} ref={this._layoutRef} onDragOver={this._onDragOver} onDragLeave={this._onDragLeave} onDrop={this._onDrop}>
         {this.state.isDragging && (
           <div className={styles.dragOverlay}>
@@ -790,6 +795,7 @@ class Mobile extends AppBase {
           />
         )}
       </div>
+      </TerminalWsProvider>
     );
   }
 }

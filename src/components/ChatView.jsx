@@ -23,6 +23,7 @@ import RoleFilterBar from './RoleFilterBar';
 import ChatInputBar from './ChatInputBar';
 import PresetModal from './PresetModal';
 import UltraPlanModal from './UltraPlanModal';
+import { TerminalWsContext } from './TerminalWsContext';
 import CustomUltraplanEditModal from './CustomUltraplanEditModal';
 import { buildLocalUltraplan } from '../utils/ultraplanTemplates';
 import { getModelMaxTokens } from '../utils/helpers';
@@ -59,6 +60,26 @@ function randomInterval() {
 }
 
 class ChatView extends React.Component {
+  // 通过 Context 共享 App 层的单条 /ws/terminal,this.context = { send, isOpen, addMessageHandler, addStateListener }
+  static contextType = TerminalWsContext;
+
+  // 兼容 stub:历史代码大量使用 `this._inputWs.send(JSON.stringify(...))` 和
+  // `this._inputWs.readyState === WebSocket.OPEN`。getter 返回一个轻量对象映射到 context API,
+  // 这样现有发送/状态检查代码无需逐处替换(只删掉 connectInputWs/onclose/close 路径)。
+  // ws 实例由 Provider 持有,readyState 仅区分 OPEN(1) / CLOSED(3),不暴露 CONNECTING/CLOSING 中间态。
+  get _inputWs() {
+    const ctx = this.context;
+    if (!ctx || typeof ctx.send !== 'function') return null;
+    return {
+      get readyState() { return ctx.isOpen && ctx.isOpen() ? WebSocket.OPEN : WebSocket.CLOSED; },
+      send: (s) => {
+        let obj;
+        try { obj = JSON.parse(s); } catch { return false; }
+        return ctx.send(obj);
+      },
+    };
+  }
+
   constructor(props) {
     super(props);
     this.containerRef = React.createRef();
@@ -171,7 +192,9 @@ class ChatView extends React.Component {
     this._scrollFadeTimer = null;
     this._resizing = false;
     this._dragTarget = null; // 'terminal' | 'sidebar'
-    this._inputWs = null;
+    // _inputWs 现在是 getter(挂在原型),不在 constructor 上设字段,避免覆盖 getter
+    this._unsubWsHandler = null;
+    this._unsubWsState = null;
     this._inputRef = React.createRef();
     this._ptyBuffer = '';
     this._ptyDataSeq = 0; // increments on every PTY output event
@@ -291,8 +314,13 @@ class ChatView extends React.Component {
 
   componentDidMount() {
     this.startRender();
-    if (this.props.cliMode) {
-      this.connectInputWs();
+    // 注册 ws 消息 handler。Provider 本身根据 cliMode/terminalVisible 决定何时建立 ws,
+    // ChatView 不再自己 connect/close;handler 在 ws 重连后会自动继续收到新消息。
+    if (this.context && this.context.addMessageHandler) {
+      this._unsubWsHandler = this.context.addMessageHandler(this._onTerminalWsMessage);
+    }
+    if (this.context && this.context.addStateListener) {
+      this._unsubWsState = this.context.addStateListener(this._onTerminalWsState);
     }
     // 检测项目是否有 git（优先多仓库 API，回退旧 API）
     fetch(apiUrl('/api/git-repos')).then(r => r.ok ? r.json() : Promise.reject()).then(data => {
@@ -590,10 +618,7 @@ class ChatView extends React.Component {
         }
       });
     }
-    // cliMode 异步生效后建立 WebSocket 连接
-    if (!prevProps.cliMode && this.props.cliMode) {
-      this.connectInputWs();
-    }
+    // 不再在此建立 ws — Provider 通过 props.open 派生(cliMode || terminalVisible)集中管理
     if (!useVirtuoso) this._rebindStickyEl();
   }
 
@@ -638,10 +663,8 @@ class ChatView extends React.Component {
       cancelAnimationFrame(this._smoothFollowRafId);
       this._smoothFollowRafId = null;
     }
-    if (this._inputWs) {
-      this._inputWs.close();
-      this._inputWs = null;
-    }
+    if (this._unsubWsHandler) { try { this._unsubWsHandler(); } catch {} this._unsubWsHandler = null; }
+    if (this._unsubWsState) { try { this._unsubWsState(); } catch {} this._unsubWsState = null; }
   }
 
   startRender() {
@@ -1910,16 +1933,16 @@ class ChatView extends React.Component {
     this._closeCustomUltraplanEditor();
   };
 
-  connectInputWs() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/terminal`;
-    this._inputWs = new WebSocket(wsUrl);
-    this._inputWs.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'data') {
-          this._appendPtyData(msg.data);
-        } else if (msg.type === 'exit') {
+  // 通过 TerminalWsContext 共享单条 ws,本方法接收消息派发。
+  // 注:`data` 分支不能省 — _appendPtyData → _detectPrompt 解析出的 ptyPrompt state 被多处引用
+  // (renderDangerApproval / SubAgent 兜底权限面板路由 / handlePlanFeedbackSubmit isDanger 检查 /
+  //  _submitViaSequentialQueue 非 danger 类型自检 等)。合并 ws 后 ChatView 仍需要这条解析路径,
+  // CPU 开销保留,但网络层 1 条 ws 是仍有收益(改前 2 条同时收同一份 PTY 流)。
+  _onTerminalWsMessage = (msg) => {
+    try {
+      if (msg.type === 'data') {
+        this._appendPtyData(msg.data);
+      } else if (msg.type === 'exit') {
           this._clearPtyPrompt();
         } else if (msg.type === 'ask-hook-pending') {
           this._askHookActive = true;
@@ -2017,28 +2040,22 @@ class ChatView extends React.Component {
             });
           }
         }
-      } catch {}
-    };
-    this._inputWs.onclose = () => {
-      // 清除可能残留的审批面板（WS 断连后无法响应）
-      // 把当前 pendingPtyPlan.id 加入 _resolvedPlanIds，避免重连后 CDU 派生立刻把 modal 重弹
-      // （新一轮 plan 触发时 lpid 变化会自动从 set 清出过期项）
-      if (this.state.pendingPtyPlan?.id) {
-        this._resolvedPlanIds.add(this.state.pendingPtyPlan.id);
-      }
-      if (this.state.pendingPermission || this.state.pendingPlanApproval || this.state.pendingAsk || this.state.pendingPtyPlan) {
-        this.setState({ pendingPermission: null, permissionQueue: [], pendingPlanApproval: null, pendingAsk: null, pendingPtyPlan: null });
-      }
-      this._sdkAskId = null;
-      this._askHookActive = false;
-      this._askHookQuestions = null;
-      this._wsReconnectTimer = setTimeout(() => {
-        if (!this._unmounted && this.splitContainerRef.current && this.props.cliMode) {
-          this.connectInputWs();
-        }
-      }, 2000);
-    };
-  }
+    } catch {}
+  };
+
+  // ws 状态变更监听:close 时清残留审批面板(原 _inputWs.onclose 行为);Provider 内部已自动 2s 重连。
+  _onTerminalWsState = (state) => {
+    if (state !== 'close') return;
+    if (this.state.pendingPtyPlan?.id) {
+      this._resolvedPlanIds.add(this.state.pendingPtyPlan.id);
+    }
+    if (this.state.pendingPermission || this.state.pendingPlanApproval || this.state.pendingAsk || this.state.pendingPtyPlan) {
+      this.setState({ pendingPermission: null, permissionQueue: [], pendingPlanApproval: null, pendingAsk: null, pendingPtyPlan: null });
+    }
+    this._sdkAskId = null;
+    this._askHookActive = false;
+    this._askHookQuestions = null;
+  };
 
   _stripAnsi(str) {
     // Remove CSI sequences (ESC [ ... final byte), OSC sequences (ESC ] ... ST), and other escape sequences
@@ -2683,8 +2700,8 @@ class ChatView extends React.Component {
    * 自检失败时调 _abortAskSubmitWithRollback 回滚乐观状态、唤回 modal 让用户重试。
    */
   _submitViaSequentialQueue(answer, opts = {}) {
-    const ws = this._inputWs;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const ctx = this.context;
+    if (!ctx || !ctx.isOpen || !ctx.isOpen()) {
       this._abortAskSubmitWithRollback('ws-not-open');
       return;
     }
@@ -2704,21 +2721,23 @@ class ChatView extends React.Component {
     const chunks = buildChunksForAnswer(answer, this.state.ptyPrompt, isMultiQuestion);
     const settleMs = opts.settleMs || 300;
 
-    const onMessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'input-sequential-done') {
-          ws.removeEventListener('message', onMessage);
-          this._finishCurrentAskAnswer();
-        }
-      } catch {}
+    // 单 ws 合并后 server 的 input-sequential-done 仍是 unicast,但 ws 上有多个发送方
+    // (ChatView 的 ask 提交 + TerminalPanel 的 preset/clear-context/UltraPlan)。
+    // 用 seq 区分:发送时带,handler 严格按 seq 匹配,避免被 TerminalPanel 触发的 done 误判。
+    const seq = `cv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let unsub = null;
+    const onceMsg = (msg) => {
+      if (msg && msg.type === 'input-sequential-done' && msg.seq === seq) {
+        if (unsub) { try { unsub(); } catch {} unsub = null; }
+        this._finishCurrentAskAnswer();
+      }
     };
-    ws.addEventListener('message', onMessage);
+    unsub = ctx.addMessageHandler(onceMsg);
 
-    ws.send(JSON.stringify({ type: 'input-sequential', chunks, settleMs }));
+    ctx.send({ type: 'input-sequential', chunks, settleMs, seq });
 
     setTimeout(() => {
-      ws.removeEventListener('message', onMessage);
+      if (unsub) { try { unsub(); } catch {} unsub = null; }
       if (this._askSubmitting) {
         this._finishCurrentAskAnswer();
       }

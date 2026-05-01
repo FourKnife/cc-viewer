@@ -20,7 +20,7 @@ const rootDir = join(__dirname, '..');
 // Windows 下 import(绝对路径) 会被 Node 把 'c:' 当 URL scheme 拒绝 (ERR_UNSUPPORTED_ESM_URL_SCHEME)。
 // pathToFileURL(p).href 在 POSIX 产出 file:///abs/.. 在 Windows 产出 file:///C:/.. —— 两平台 ESM 等价。
 const { t } = await import(pathToFileURL(join(rootDir, 'i18n.js')).href);
-const { getClaudeConfigDir } = await import(pathToFileURL(join(rootDir, 'findcc.js')).href);
+const { getClaudeConfigDir, LOG_DIR } = await import(pathToFileURL(join(rootDir, 'findcc.js')).href);
 
 // --- Resolve shell environment (Finder-launched Electron has minimal env) ---
 // When launched from Finder/dock, process.env lacks shell profile vars (HTTP_PROXY, PATH, LANG, etc.)
@@ -151,6 +151,22 @@ const pendingByTab = new Map();
 // Key form: `${tabId}|${kind}|${id}` — cleared when the same tuple goes through pending-remove.
 const notifiedKeys = new Set();
 let _isFlashing = false;
+// 用户偏好：仅窗口失焦时弹通知。默认 true 保留历史行为(失焦才通知)；
+// 关掉后窗口聚焦时也通知。renderer 通过 set-approval-pref IPC 推过来,首次 mount 也会推一次同步初值。
+// 启动时同步从 preferences.json 读初值,消除"默认 true → renderer hydrate 后才生效"的 race window。
+// 读失败/字段缺失则保留 true(向后兼容旧 preferences.json)。
+let _notifyOnlyWhenHidden = true;
+try {
+  const _prefsPath = join(LOG_DIR, 'preferences.json');
+  if (existsSync(_prefsPath)) {
+    const _prefs = JSON.parse(readFileSync(_prefsPath, 'utf-8'));
+    if (_prefs?.approvalModal && typeof _prefs.approvalModal.notifyOnlyWhenHidden === 'boolean') {
+      _notifyOnlyWhenHidden = _prefs.approvalModal.notifyOnlyWhenHidden;
+    }
+  }
+} catch (e) {
+  console.warn('[main] failed to load notifyOnlyWhenHidden from preferences.json:', e?.message || e);
+}
 
 function _kindCount(tabState) {
   if (!tabState) return 0;
@@ -207,8 +223,8 @@ function maybeNotify(tabId, kind, id, payload) {
   const key = `${tabId}|${kind}|${id}`;
   if (notifiedKeys.has(key)) return; // dedupe across reconnects
   notifiedKeys.add(key);
-  // Only fire OS notification if window is hidden / unfocused — avoids interrupting an attentive user.
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) return;
+  // 受 _notifyOnlyWhenHidden(用户偏好)控制:开启时窗口聚焦则不通知;关掉后聚焦也通知。
+  if (_notifyOnlyWhenHidden && mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) return;
   const projectName = payload?.projectName || pendingByTab.get(tabId)?.projectName || 'CC Viewer';
   // i18n with safe fallback: t() returns the key itself when missing — detect that and substitute defaults.
   const _tr = (key, params, fallback) => {
@@ -649,6 +665,19 @@ ipcMain.on('ask-resolved', (event, msg) => {
   const tabId = _resolveSenderTabId(event.sender) ?? (msg.tabId ?? null);
   if (tabId == null) return;
   recordPendingRemove(tabId, 'ask', String(msg.id));
+});
+
+// Renderer 同步用户偏好(目前仅 notifyOnlyWhenHidden 影响 main 进程的通知行为;
+// 其他字段如 modalEnabled / soundEnabled 仅在 renderer 内消费,这里 forward-compatible 接收但不使用)。
+// 任何 tab 改了都会推同一份(prefs 全局共享单一 preferences.json),最后一次 win;无 tab 隔离需求。
+ipcMain.on('set-approval-pref', (event, prefs) => {
+  // 防御加固:contextIsolation 已经隔离了 renderer/main world,这里再校验 sender 还在/未销毁,
+  // 避免 webview tab 销毁后的延迟事件继续修改全局偏好。
+  if (!event.sender || event.sender.isDestroyed()) return;
+  if (!prefs || typeof prefs !== 'object') return;
+  if (typeof prefs.notifyOnlyWhenHidden === 'boolean') {
+    _notifyOnlyWhenHidden = prefs.notifyOnlyWhenHidden;
+  }
 });
 
 // --- Cleanup ---

@@ -3391,7 +3391,8 @@ async function setupTerminalWebSocket(httpServer) {
       const state = getPtyState();
       ws.send(JSON.stringify({ type: 'state', ...state }));
 
-      // 发送历史输出缓冲
+      // 发送历史输出缓冲(合并 ws 后 ChatView/TerminalPanel 共享一条;TerminalPanel 需要 buffer 来恢复 xterm,
+      // ChatView 自己 _onTerminalWsMessage 不处理 'data',浪费的 send 体积只在初次连接一次)。
       const buffer = getOutputBuffer();
       if (buffer) {
         ws.send(JSON.stringify({ type: 'data', data: buffer }));
@@ -3403,7 +3404,7 @@ async function setupTerminalWebSocket(httpServer) {
       // 注：仅 PTY 已运行时才需要兜底；shell 不在 alternate-screen 不需要。
       let _needRedrawBootstrap = state.running === true;
 
-      // PTY 输出 → WebSocket
+      // PTY 输出 → WebSocket(合并 ws 后客户端自行按 msg.type 分发,server 端不再 role 过滤)
       const removeDataListener = onPtyData((data) => {
         if (ws.readyState === 1) {
           ws.send(JSON.stringify({ type: 'data', data }));
@@ -3466,11 +3467,18 @@ async function setupTerminalWebSocket(httpServer) {
               try { await spawnShell(); } catch {}
             }
             const chunks = msg.chunks;
+            // 把 client 提供的 seq 透传回去 — 合并 ws 后多个发送方共享一条 ws,
+            // 只能靠 client 端按 seq 匹配自己发的请求(client 没传时也兼容,旧客户端不带 seq)。
+            const seq = msg.seq;
             if (Array.isArray(chunks) && chunks.length > 0) {
               writeToPtySequential(chunks, (ok) => {
                 try {
-                  ws.send(JSON.stringify({ type: 'input-sequential-done', ok }));
-                } catch {}
+                  const reply = { type: 'input-sequential-done', ok };
+                  if (seq !== undefined) reply.seq = seq;
+                  ws.send(JSON.stringify(reply));
+                } catch (e) {
+                  console.warn('[server] input-sequential-done send failed:', e?.message || e);
+                }
               }, { settleMs: msg.settleMs || 150 });
             }
           } else if (msg.type === 'ask-hook-answer') {

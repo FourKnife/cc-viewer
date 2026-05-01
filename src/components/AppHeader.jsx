@@ -115,6 +115,9 @@ class AppHeader extends React.Component {
     return reason;
   }
 
+  // 白名单式 SCU：render() 里读到的每个 props 字段都必须在此列出，否则父组件 setState
+  // 不会触发 AppHeader 重渲染（症状：受控控件的 checked/value 卡住不更新）。
+  // 新增传给 AppHeader 的 prop 时，记得同步加进这里。
   shouldComponentUpdate(nextProps, nextState) {
     return (
       nextProps.requests !== this.props.requests ||
@@ -144,6 +147,10 @@ class AppHeader extends React.Component {
       nextProps.proxyProfiles !== this.props.proxyProfiles ||
       nextProps.activeProxyId !== this.props.activeProxyId ||
       nextProps.defaultConfig !== this.props.defaultConfig ||
+      nextProps.approvalPrefs !== this.props.approvalPrefs ||
+      nextProps.approvalGlobal !== this.props.approvalGlobal ||
+      nextProps.approvalDismissedIds !== this.props.approvalDismissedIds ||
+      nextProps.approvalOwnPending !== this.props.approvalOwnPending ||
       nextState !== this.state
     );
   }
@@ -1757,14 +1764,18 @@ class AppHeader extends React.Component {
                     onChange={(checked) => this.props.onApprovalPrefsChange({ soundEnabled: checked })}
                   />
                 </div>
-                <div className={styles.settingsItem}>
-                  <span className={styles.settingsLabel}>{t('ui.approval.settings.notifyOnlyWhenHidden')}</span>
-                  <Switch
-                    size="small"
-                    checked={this.props.approvalPrefs.notifyOnlyWhenHidden !== false}
-                    onChange={(checked) => this.props.onApprovalPrefsChange({ notifyOnlyWhenHidden: checked })}
-                  />
-                </div>
+                {/* notifyOnlyWhenHidden 依赖 electron main 进程的 OS Notification + 窗口聚焦判断,
+                    纯 web 模式下 main.js 路径不存在,开关无效果 → 仅 electron 启动模式显示。 */}
+                {typeof window !== 'undefined' && window.tabBridge && (
+                  <div className={styles.settingsItem}>
+                    <span className={styles.settingsLabel}>{t('ui.approval.settings.notifyOnlyWhenHidden')}</span>
+                    <Switch
+                      size="small"
+                      checked={this.props.approvalPrefs.notifyOnlyWhenHidden !== false}
+                      onChange={(checked) => this.props.onApprovalPrefsChange({ notifyOnlyWhenHidden: checked })}
+                    />
+                  </div>
+                )}
               </>
             )}
           </div>

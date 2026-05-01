@@ -9,6 +9,7 @@ import RequestList from './components/RequestList';
 import DetailPanel from './components/DetailPanel';
 import ChatView from './components/ChatView';
 import ApprovalModal from './components/ApprovalModal';
+import { TerminalWsProvider } from './components/TerminalWsContext';
 import PanelResizer from './components/PanelResizer';
 import OpenFolderIcon from './components/OpenFolderIcon';
 import CountryFlag from './components/CountryFlag';
@@ -299,8 +300,13 @@ class App extends AppBase {
       return this.renderWorkspaceMode();
     }
 
+    // 单条 /ws/terminal 的开启条件:cliMode 或终端面板可见任一为真,且非 SDK 模式 / 非本地日志查看
+    // (后两者无 PTY 与 hook 路径,不需要 ws)。
+    const wsOpen = !this._isLocalLog && !this.state.sdkMode && (this.state.cliMode || this.state.terminalVisible);
+
     return (
       <ConfigProvider theme={this.themeConfig}>
+        <TerminalWsProvider open={wsOpen}>
         <ApprovalModal
           enabled={this.state.approvalPrefs.modalEnabled}
           soundEnabled={this.state.approvalPrefs.soundEnabled}
@@ -606,6 +612,7 @@ class App extends AppBase {
           })()}
         </Modal>
         </ApprovalModal>
+        </TerminalWsProvider>
       </ConfigProvider>
     );
   }

@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.6.226 (2026-05-01) — 偏好开关响应修复 + 通知偏好 IPC 接通 + 单 ws 合并(方案 D)+ input-sequential 跨发送方 race 修复
+
+### 修偏好面板三个 Switch 点击无响应
+
+- Bug (`src/components/AppHeader.jsx:118-159` 白名单式 SCU): "弹出全局审批 Modal / 审批提示音 / 仅窗口失焦时通知" 三个 Switch 点击后 UI 不切换。根因是 `shouldComponentUpdate` 是手动维护的 props 白名单(覆盖 27 个字段),但 `approvalPrefs` 等 4 个 props **不在里面**——父级 setState → AppHeader 收到新 props → SCU 返回 false → 跳过渲染 → Switch checked 卡住。对比白名单内的 `resumeAutoChoice` (行 141)、`autoApproveSeconds` (行 143) 都正常工作。
+- Fix: 白名单追加 4 行引用比较(approvalPrefs / approvalGlobal / approvalDismissedIds / approvalOwnPending);上方加 3 行注释提醒"render() 里读到的每个 props 必须在此列出"防止后续踩坑。这 4 个 state 的所有 setter 已用 immutable update 模式(`{...prev, ...patch}` / `new Set()`),引用比较稳定。
+- 顺带修复同源 bug:`approvalGlobal/DismissedIds/OwnPending` 这三项在 bell badge / 跨 tab approval 路径上也会受 SCU 拦截而延迟更新——本次一并修复。
+
+### `仅窗口失焦时通知` 偏好接通 electron 通知逻辑(原 P2 未实现项)
+
+- 现状:`approvalPrefs.notifyOnlyWhenHidden` UI 开关存在但后端 `electron/main.js:211` 的 `maybeNotify()` 硬编码 `if (mainWindow.isFocused()) return`,**完全没读这个 pref**——用户关掉开关期望"窗口聚焦时也通知",实际行为不变。
+- IPC 接通:`electron/main.js` 加全局 `_notifyOnlyWhenHidden`(默认 true,启动时同步从 `preferences.json` 读初值,消除 hydrate race window),加 `set-approval-pref` IPC handler(挂 `event.sender.isDestroyed()` 防御),`maybeNotify` 行 211 改为 `if (_notifyOnlyWhenHidden && ... isFocused()) return;`。
+- Renderer → main 同步:`electron/tab-content-preload.js` 暴露 `tabBridge.setApprovalPref(prefs)`;`src/AppBase.jsx` 在 `handleApprovalPrefsChange`(用户切换)和 hydrate (`/api/preferences` 拉取)两处都调 `window.tabBridge?.setApprovalPref?.(next)` 推给 main。错误处理用 `console.warn` 而非吞错。
+- Electron-only 显示:`仅窗口失焦时通知` Switch 包了 `typeof window !== 'undefined' && window.tabBridge` 守卫,纯 web/浏览器模式下不渲染该开关(因为它依赖 OS Notification + 窗口焦点判断,web 路径不存在)。
+
+### 方案 D:把两条 `/ws/terminal` 长连接合并为单条(架构优化)
+
+- 现状:DevTools Network 看到 chat view + cliMode=true 时两条 `/ws/terminal` 同时存活。第 1 条由 `ChatView._inputWs`(`connectInputWs()`)创建,主要消费 hook/SDK 类消息 + 发输入;第 2 条由 `TerminalPanel.this.ws`(`connectWebSocket()`)创建,消费 PTY data 渲染 xterm。服务端 `terminalWss` 把所有消息广播给两条 ws → `state/exit` 等元事件**双倍传输**。
+- 架构:新建 `src/components/TerminalWsContext.jsx`(~150 行) — Provider 持单条 ws,内部封装 2s 重连 + handler 派发,暴露 `{ send, isOpen, addMessageHandler, addStateListener }`。`src/App.jsx` 和 `src/Mobile.jsx` 各包一次 Provider,`open` prop 由 `(cliMode || terminalVisible) && !sdkMode && !isLocalLog` 派生(main.jsx 互斥渲染保证两处不会同时实例化)。
+- 兼容 stub:为避免改 75 处旧 send/readyState 调用,ChatView/TerminalPanel 内加 `_inputWs/this.ws` getter,返回 `{ readyState, send }` 轻量 stub 映射到 context API。这样所有 `this._inputWs.send(JSON.stringify(...))` 和 `this._inputWs.readyState === WebSocket.OPEN` 完全不动。
+- Provider 自管 lifecycle:`componentDidUpdate` 根据 `open` prop 切换 connect/disconnect;onclose 后若 `open` 仍为 true 则 2s 后重连;handler 注册返回 unsub 函数,组件 unmount 时清理。
+- server.js:回滚之前 P0 修复中的 `?role=` 过滤(单 ws 不需要 role 区分),保留 `activeWs` 抢占(跨设备 PC+Mobile 仍需要仲裁 resize)。
+- ChatView/TerminalPanel `componentDidMount` 注册 `addMessageHandler` + `addStateListener`,卸载时 unsub。原 `connectInputWs/connectWebSocket/onclose 重连` 全部删除。`onopen` 替代:TerminalPanel 通过 `addStateListener('open')` 调 sendResize;首次 mount 若 ws 已 OPEN 则直接 sendResize 兜底。
+
+### 修 `ChatView.jsx:2730` `ws.addEventListener` 不兼容 stub(实施过程中发现)
+
+- 旧代码 `_submitViaSequentialQueue` 用 `ws.addEventListener('message', onMessage)` 注册临时 handler 等 `input-sequential-done`。stub 不暴露 `addEventListener`,直接调用会抛 TypeError。
+- 改为 `ctx.addMessageHandler` 一次性注册 + 注销函数。同时把发送方式改为 `ctx.send(obj)`,不再走 stub。
+
+### 修 `input-sequential-done` 跨发送方 race(side-effect 评审 ❌ 真问题)
+
+- 现状:server.js 的 `ws.send(JSON.stringify({ type: 'input-sequential-done', ok }))` 是 unicast 给发送方 ws。合并 ws 后 ChatView(ask 提交)和 TerminalPanel(preset / `/clear-context` / UltraPlan)都通过同一 ws 发 `input-sequential` 请求 → server 不知道是谁发的,client 端无法区分自己的 done。ChatView 临时 handler 注册期间若 TerminalPanel 也发了一次,ChatView 会被 TerminalPanel 触发的 done 误判提前完成。
+- Fix:client 发送时生成 unique seq(`cv-${Date.now()}-${Math.random().toString(36).slice(2,8)}`),server 透传到 done 回复(`if (seq !== undefined) reply.seq = seq;`),ChatView 临时 handler 严格按 `msg.seq === seq` 匹配。TerminalPanel 不传 seq(它不监听 done),server 也不回 seq,自然不影响 ChatView 匹配。15s setTimeout 兜底 unsub 不变。
+
+### B' 修复:ChatView 重新接收 `data` 类型(深度 CR 暴露的隐性数据流断裂)
+
+- 用户在 CR 阶段提示"两个接口之间是否还存在差异需要分开状态处理"。grep 后发现 `_appendPtyData(rawData) → _stripAnsi → _ptyBuffer → _detectPrompt() → setState(ptyPrompt)` 整条链上,`state.ptyPrompt` 被 5 处下游消费(`ChatView.jsx:969 / 1648 / 2143 / 2193 / 2711` — renderDangerApproval / SubAgent 兜底权限面板路由 / handlePlanFeedbackSubmit isDanger 检查 / `_submitViaSequentialQueue` 非 danger 类型自检)。
+- 方案 D 第一版误把 `data` 分支当性能优化删除 → `_ptyBuffer` 永远为空 → `_detectPrompt` 解析不出 prompt → 所有 5 处下游静默失效。
+- Fix(B'):在 `_onTerminalWsMessage` 加回 `if (msg.type === 'data') { this._appendPtyData(msg.data); }`,接受 ChatView 仍跑 `_stripAnsi/_detectPrompt` 的 CPU 开销(原本想砍的"性能收益"假设错了),保留方案 D 真正的收益:**网络架构合并**(同设备 1 条 ws 而非 2 条)、Provider 集中管理 lifecycle、`activeWs` 在合并 ws 上抑制频繁切换。
+- 注释加详细说明为何不能省 `data` 分支,防止后续同样误判。
+
+### server.js input-sequential-done 错误日志(P1 编码质量)
+
+- 原 `try { ws.send(...) } catch {}` 吞错无诊断。
+- 改 `catch (e) { console.warn('[server] input-sequential-done send failed:', e?.message || e); }` 便于 debug。
+
+### 4 轮多视角 CR 全过 + 深度数据流复审
+
+- 轮 1(IPC 接通):requirement / side-effect / regression / code-quality 4 视角并行,采纳 IPC catch console.warn + 来源校验 `event.sender.isDestroyed()` + main.js 启动同步读 prefs 消除 race window 三项 P1。
+- 轮 2(方案 D 整体):requirement / side-effect-regression 两视角,❌ 真问题 1 个(input-sequential-done seq race)已修复。
+- 轮 3(累计 9 文件 CR):4 视角全过,识别 1 个误判(regression-reviewer 的 seq 泄漏 + exit 格式化矛盾),发现 ChatView `_ptyBuffer` 死代码假设(实为隐性依赖),触发 B' 修复。
+- 轮 4(深度数据流复审):dataflow-hunter / stub-compat-auditor / lifecycle-auditor / cross-component-state-auditor 4 视角,无新断裂。dataflow-hunter 标的 1 个 CRITICAL + 3 个 MEDIUM 经独立复核**全是误判**(spawnShell 状态广播是 pre-existing 行为非方案 D 引入;ChatView 不依赖 'state' 消息;同条 ws 时 activeWs 不会切换 — reviewer 误以为合并后还有跨发送方 ws 仲裁)。
+
+- Test / Build: `npm run test` 1345/1345 全绿;`npm run build` ✓。
+
 ## 1.6.225 (2026-05-01) — Homebrew 分发渠道 + updater 检测 brew 安装跳过 npm 自更新
 
 ### 新增 Homebrew tap 分发，根治 nvm 用户切 Node 版本后 ccv "消失"问题
