@@ -3765,9 +3765,12 @@ if (!isWorkspaceMode) {
         const busy = clients.length > 0 || ptyRunning || _sdkResolveApproval !== null;
         try {
           const result = await checkAndUpdate({ busy, portRange: [START_PORT, MAX_PORT] });
-          // major_available 和 deferred_busy 都是"有新版但这次不升级"——共用 update_major_available 事件渲染 banner。
-          if (result.status === 'major_available' || result.status === 'deferred_busy') {
-            const payload = JSON.stringify({ version: result.remoteVersion });
+          // major_available / deferred_busy / brew_managed 都是"有新版但这次不升级"——
+          // 共用 update_major_available 事件渲染 banner（前端不区分子类，命令在 i18n 文案里给）。
+          // brew_managed 走这里至关重要：否则 Electron / GUI 用户看不到升级提示，
+          // 仅 stderr 一行 console.error 在桌面模式下不可见。
+          if (result.status === 'major_available' || result.status === 'deferred_busy' || result.status === 'brew_managed') {
+            const payload = JSON.stringify({ version: result.remoteVersion, source: result.status });
             clients.forEach(client => {
               try { client.write(`event: update_major_available\ndata: ${payload}\n\n`); } catch { }
             });

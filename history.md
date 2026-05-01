@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.225 (2026-05-01) — Homebrew 分发渠道 + updater 检测 brew 安装跳过 npm 自更新
+
+### 新增 Homebrew tap 分发，根治 nvm 用户切 Node 版本后 ccv "消失"问题
+
+- Architecture (问题溯源): 现行 npm 全局安装在 nvm 环境下结构性脆弱——nvm 给每个 Node 版本独立 `lib/node_modules`，`nvm use <other>` 后 PATH 切到新版本 bin 目录，原 ccv 文件还在但**不在 PATH 上**。即便重装也只解当前版本，且 zsh hash 缓存、`process.execPath` 漂移、node-pty 跨 ABI、影子安装等 5 类失败叠加；shell 抛 `command not found` 时 ccv 根本来不及自检（诊断盲区）。Homebrew 装到 `<prefix>/Cellar/cc-viewer/` 完全脱离 nvm 的版本目录，wrapper 强绑 brew node 也绕开了 ABI 漂移。
+- Feature (`lib/updater.js` 新增 `detectHomebrewInstall(dirOverride, realpathImpl)` 导出): 通过 realpath 解析 `/Cellar/cc-viewer/<version>/` 的标准 brew 布局，返回 brew prefix（`/opt/homebrew` / `/usr/local` / linuxbrew 自定义）。dirOverride/realpathImpl 双注入参数让单测完全绕开磁盘。校验 Cellar 后必须紧跟版本目录，避免误匹配用户路径中含 "Cellar" 字段的极端情况。
+- Feature (`lib/updater.js` `checkAndUpdate` 新增 `brew_managed` 状态): 检测到 brew 安装时，在跨大版本检查之后、busy 检查之前短路 spawn 路径，改打印 `update.brewManaged` i18n 提示（"运行 brew upgrade cc-viewer"），返回 `{ status: 'brew_managed', currentVersion, remoteVersion, brewPrefix }`。**关键**：避免 npm install -g 写到 brew Cellar 之外的位置，导致 brew 与 npm 双安装并存（`brew uninstall` 后残留、`which -a ccv` 多份、版本号互相打架，与之前讨论过的"影子安装"是同一类故障）。`brewPrefix` 选项用 `hasOwnProperty` 判定让测试可以显式传 `null` 强制走 npm 路径。i18n key `update.brewManaged` 全 18 语言齐全。大版本提示分支（`major_available`）保持原行为不动，brew 用户看到提示后会自然走 brew upgrade。
+- Architecture (`homebrew/Formula/cc-viewer.rb` 参考 formula): tap repo `weiesky/homebrew-cc-viewer` 用的标准 formula。`depends_on "node"`，`std_npm_install_args(libexec)` 处理 npm 安装。**关键**：不用 `bin.install_symlink` 让 npm 默认 shim（`#!/usr/bin/env node` 跟着 PATH 解析 node，nvm 切版本时拿到 nvm 的 node 而非 brew node，导致 node-pty native binding ABI 失配）；改自写 sh wrapper 显式调 `Formula["node"].opt_bin/node`，让 ccv 永远跑在安装时编译的 Node ABI 上。代价：brew node 大版本升级时（v22→v23）需 `brew reinstall cc-viewer` 重 build node-pty，由 brew 自动 revision bump 处理。test 块校验 `ccv -h` 与 `ccv --version` 退出码 0。
+- Feature (`.github/workflows/bump-homebrew.yml` 自动 bump tap repo): 监听本 repo `release: published` 事件（由 release.yml 在 tag 推送后创建 GitHub Release 时触发），按版本号轮询 npm registry（最长 5min 等 CDN 传播），下载 tarball 算 sha256，跨 repo checkout `weiesky/homebrew-cc-viewer`，用 Python 严格 regex 替换 formula 的 url 与 sha256（不动 install/test 块），通过 `peter-evans/create-pull-request` 开 PR。manual `workflow_dispatch` 输入也支持，方便补救/dry-run。版本号严格 semver patch 校验防注入。需要在本 repo Settings 加 `HOMEBREW_TAP_TOKEN` secret（fine-grained PAT 或 GitHub App，作用域 `Contents: Read+Write` + `PRs: Read+Write` on tap repo）。
+- Docs (`homebrew/README.md`): 维护者一次性配置说明（建 tap repo / copy formula / 算首次 sha256 / 配 secret）+ 末端用户 install/upgrade 命令 + wrapper 设计 rationale。
+- Docs (`README.md` 主文 + `docs/README.{ar,da,de,es,fr,it,ja,ko,no,pl,pt-BR,ru,th,tr,uk,zh,zh-TW}.md` 全 18 语言): 在 `npm install` 章节后追加 "Install via Homebrew" 子章节，解释 nvm 痛点 + brew 三行命令 + 自更新会自动识别。各语言独立翻译，关键术语（Homebrew、tap、nvm）保留英文。
+- Tests (`test/updater.test.js` 新增 16 个 case): `detectHomebrewInstall` 12 个（Apple Silicon / Intel / linuxbrew / npm-global / nvm / system /usr/local / Cellar 但非 cc-viewer / 缺版本子目录 / dev clone 含 Cellar/cc-viewer/lib 路径 / Time Machine backup 非 version 段 / symlink 跟随 / realpath 抛出 fallback）；`checkAndUpdate — brew_managed` 4 个（brew 同大版本不 spawn / brew 大版本仍走 major_available / brew 无升级仍 latest / brewPrefix=null 显式走 npm 路径）。47/47 全过。
+- 4 视角 UltraReview 采纳要点（requirements / side-effect / regression / correctness 并行评审）：
+  - **P1 修订（4 项）**：① side-effect 命中 `server.js:3769` SSE banner 不广播 `brew_managed`，brew 用户在 Electron / GUI 模式下看不到提示，仅 stderr 一行——把 `brew_managed` 加入条件，payload 增加 `source` 字段供前端区分；② regression 命中 `lib/updater.js:142` `hasOwnProperty` 让 `{ brewPrefix: undefined }` 误被当显式传值，改用 `!== undefined`，防止未来 caller 用 spread+override 模式误绕过自动检测；③ correctness 命中 `detectHomebrewInstall` regex `[^/]+/` 太松，dev clone 在 `/Users/x/projects/Cellar/cc-viewer/lib/...` 工作时会被误判为 brew 安装而跳过自更新——收紧为 `\d[\w.\-+]*/` 要求版本号样式（数字开头），顺带覆盖 Time Machine backups 误命中场景；④ side-effect 命中 `.github/workflows/bump-homebrew.yml` `${{ inputs.version }}` 在 semver 校验前已被注入到 shell 行（标准 GitHub Actions injection antipattern）——把所有用户/外部输入改用 `env:` 块隔离（INPUT_VERSION / RELEASE_TAG / EVENT_NAME / VER / URL / SHA），shell 通过环境变量引用而非表达式插值。
+  - **P3 顺手**：formula 注释 `std_npm_args` → `std_npm_install_args`（与代码实际调用一致）。
+  - **未采纳**：P2 wrapper sh script quoting（brew 自身拒绝带空格的 prefix，理论问题）；P3 env-disabled brew users 无升级提示（与 `disabled` 状态语义一致，刻意行为）；P3 cache 共享在 brew/npm 双安装场景（最坏 4h 延迟，无数据破坏）；P2 `peter-evans/create-pull-request@v6` 升 v7（v6 仍维护中）；P2 macOS HFS+ 大小写不敏感（brew 始终用 `Cellar` 大写，理论风险）。
+- Test / Build: `npm run test` 1345/1345 全绿；`npm run build` ✓。
+
+### 第二轮 4 视角 UltraReview（独立复核）采纳 P1 + P3 注释
+
+- **P1 修订（多视角一致命中）**: side-effect-auditor + regression-hunter 同时指出 `lib/updater.js` 中 `major_available` 分支早于 `brewPrefix` 检查——brew 用户跨大版本会被 i18n `update.majorAvailable` 文案（"npm i -g cc-viewer@latest"）引导跑 npm，**触发想杜绝的双渠道污染**。把 `brewPrefix` 短路前移到 major 检查之前，brew 用户跨大版本统一走 `brew_managed`（`brew upgrade cc-viewer` 跨大版本同样能用，文案不需特化）。同步翻转 `test/updater.test.js` 中 `major bump on brew install` case：原断言 `major_available`（旧顺序），改为断言 `brew_managed` + `spawnCalled === false`，反向锁定 brew 优先级。47/47 全过。
+- **P3 注释 × 2**: ① `detectHomebrewInstall` regex 上方加 head 守卫文档——cc-viewer formula 当前无 `head do` block，但若未来加，需把 regex 放宽为 `/^(?:\d[\w.\-+]*|HEAD-[\w.\-+]+)\//`，否则 HEAD 用户被静默路由到 npm 分支；② `saveCheckTime()` 上方说明 4h 节流故意覆盖 brew_managed banner 频率，避免刷屏（stderr 是侧通道）。
+- **未采纳**：① P2 删除 `server.js` SSE payload 的 `source: result.status` 字段——确认前端 `src/AppBase.jsx:694-700` 仅读 `data.version` 不分流，技术上是 dead code，但后续如要让 banner 按 source 切 i18n key（"npm i -g..." vs "brew upgrade..."）就用得上，留着不破坏任何功能；② P2 brew_managed 用更短 cache 提速 banner——4h 节流即原意；③ P3 Cellar 大小写假设/Windows 路径正规化/formula assert_match 文档化——理论风险或已自证，No-op。
+- Test / Build: `npm run test` 全绿；`npm run build` ✓。
+
 ## 1.6.224 (2026-04-30) — 全局审批 Modal + ExitPlanMode V2 文件型 plan + LR/messages 双卡去重 + 5 视角 Code Review P0/P1 修订
 
 ### 5 视角 Code Review 后采纳 P0+P1 修订：bell 持久重开 / plan-file LAN token / null-byte 防御 / ownPending 信息流

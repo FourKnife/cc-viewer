@@ -547,6 +547,26 @@ const i18nData = {
     "tr": "Ana sürüm v{version} mevcut, lütfen manuel güncelleyin: npm i -g cc-viewer@latest",
     "uk": "Доступна основна версія v{version}, оновіть вручну: npm i -g cc-viewer@latest"
   },
+  "update.brewManaged": {
+    "zh": "检测到 Homebrew 安装，新版本 v{version} 可用，请运行: brew upgrade cc-viewer",
+    "en": "Homebrew install detected, v{version} available — run: brew upgrade cc-viewer",
+    "zh-TW": "偵測到 Homebrew 安裝，新版本 v{version} 可用，請執行: brew upgrade cc-viewer",
+    "ko": "Homebrew 설치 감지됨, v{version} 사용 가능 — 실행: brew upgrade cc-viewer",
+    "ja": "Homebrew インストールを検出、v{version} が利用可能 — 実行: brew upgrade cc-viewer",
+    "de": "Homebrew-Installation erkannt, v{version} verfügbar — ausführen: brew upgrade cc-viewer",
+    "es": "Instalación Homebrew detectada, v{version} disponible — ejecutar: brew upgrade cc-viewer",
+    "fr": "Installation Homebrew détectée, v{version} disponible — exécuter : brew upgrade cc-viewer",
+    "it": "Installazione Homebrew rilevata, v{version} disponibile — eseguire: brew upgrade cc-viewer",
+    "da": "Homebrew-installation registreret, v{version} tilgængelig — kør: brew upgrade cc-viewer",
+    "pl": "Wykryto instalację Homebrew, v{version} dostępna — uruchom: brew upgrade cc-viewer",
+    "ru": "Обнаружена установка Homebrew, доступна v{version} — выполните: brew upgrade cc-viewer",
+    "ar": "تم اكتشاف تثبيت Homebrew، الإصدار v{version} متاح — قم بتشغيل: brew upgrade cc-viewer",
+    "no": "Homebrew-installasjon oppdaget, v{version} tilgjengelig — kjør: brew upgrade cc-viewer",
+    "pt-BR": "Instalação Homebrew detectada, v{version} disponível — execute: brew upgrade cc-viewer",
+    "th": "ตรวจพบการติดตั้ง Homebrew, v{version} พร้อมใช้งาน — เรียกใช้: brew upgrade cc-viewer",
+    "tr": "Homebrew kurulumu algılandı, v{version} mevcut — çalıştırın: brew upgrade cc-viewer",
+    "uk": "Виявлено встановлення Homebrew, доступна v{version} — виконайте: brew upgrade cc-viewer"
+  },
   "update.failed": {
     "zh": "自动更新失败: {error}",
     "en": "Auto-update failed: {error}",
