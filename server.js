@@ -9,7 +9,8 @@ import { homedir, platform, networkInterfaces } from 'node:os';
 import { execFile, exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
-import { isPathContained, readFileContent, writeFileContent, resolveFilePath, ERROR_STATUS_MAP, validateImportDir } from './lib/file-api.js';
+import { isPathContained, ERROR_STATUS_MAP, validateImportDir } from './lib/file-api.js';
+import { isReadAllowed, reasonToStatus } from './lib/file-access-policy.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -309,6 +310,31 @@ async function handleRequest(req, res) {
     }
   }
 
+  // DNS rebinding 防护:即使带了正确 token,Host header 必须落在 allowlist 里。
+  // 默认放行 localhost/127.0.0.1/IPv6 loopback;LAN 用户通过 CCV_ALLOWED_HOSTS=192.168.1.10,localhost 添加。
+  // 设为 '*' 显式关闭(用户自担风险);静态资源和 OPTIONS 预检不挡。
+  if (!isStaticAsset && method !== 'OPTIONS') {
+    const allowedHosts = (process.env.CCV_ALLOWED_HOSTS
+      || 'localhost,127.0.0.1,::1,[::1]').split(',').map(s => s.trim()).filter(Boolean);
+    if (!allowedHosts.includes('*')) {
+      const hostHeader = (req.headers.host || '').toLowerCase();
+      // 端口剥离:RFC 3986 要求 IPv6 Host 必须带 brackets `[::1]:port`,bare `::1` 末尾 `\d` 会被错剥成 `:`。
+      // 含 `::` 但无 `]` 闭合的视为 bare IPv6,不剥端口。
+      const isBareIPv6 = hostHeader.includes('::') && !hostHeader.includes(']');
+      const hostNoPort = isBareIPv6 ? hostHeader : hostHeader.replace(/:\d+$/, '');
+      const stripBrackets = hostNoPort.replace(/^\[|\]$/g, '');
+      const ok = allowedHosts.some(h => {
+        const hl = h.toLowerCase();
+        return hl === hostNoPort || hl === stripBrackets || hl === `[${stripBrackets}]`;
+      });
+      if (!ok) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'host-not-allowed', host: hostNoPort }));
+        return;
+      }
+    }
+  }
+
   // Plugin hook: intercept HTTP requests (after auth, before routing)
   try {
     const hookResult = await runWaterfallHook('beforeRequest', {
@@ -507,7 +533,8 @@ async function handleRequest(req, res) {
   }
 
   // 读取 ~/.claude/plans/*.md 文件内容（用于 ExitPlanMode V2 input.planFilePath 的兜底显示）
-  // 严格白名单：只允许读 ~/.claude/plans/ 下 .md 文件，realpath 双向校验防符号链接逃逸，体积 ≤ 2MB
+  // 自身保留:.md 后缀、绝对路径、null-byte、2MB 体积。
+  // 路径前缀 / realpath / 敏感拦截委托 lib/file-access-policy.js(allowlist 已含 ~/.claude/)。
   if (url === '/api/plan-file' && method === 'GET') {
     try {
       const raw = parsedUrl.searchParams.get('path') || '';
@@ -516,61 +543,37 @@ async function handleRequest(req, res) {
         res.end(JSON.stringify({ ok: false, error: 'missing path' }));
         return;
       }
-      // null-byte 注入显式拒绝（path.resolve('\x00...') 在 Linux 不抛 → 仅靠 startsWith 比对副作用兜底过于隐蔽）
       if (raw.indexOf('\x00') !== -1) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'invalid path (null byte)' }));
         return;
       }
-      const plansDir = join(homedir(), '.claude', 'plans');
-      const isWin = platform() === 'win32';
-      const norm = (p) => isWin ? p.toLowerCase() : p;
-      // 后缀白名单（.md，大小写不敏感）
       if (!raw.toLowerCase().endsWith('.md')) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'invalid extension' }));
         return;
       }
-      // 拒绝相对路径（前端永远应发送 SDK 注入的绝对 planFilePath）
-      // path.isAbsolute 在 win32 同时识别 'C:\' 和 '/' 起头
       const isAbs = /^([a-zA-Z]:[\\/]|[\\/])/.test(raw);
       if (!isAbs) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'absolute path required' }));
         return;
       }
-      // 原始路径必须落在 plansDir 内（先做这层廉价检查，挡掉 ../../../etc/passwd 类路径）
-      const resolved = resolve(raw);
-      const plansDirSep = plansDir.endsWith('/') || plansDir.endsWith('\\') ? plansDir : plansDir + (isWin ? '\\' : '/');
-      if (!norm(resolved).startsWith(norm(plansDirSep))) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+
+      // 委托 policy:realpath + allowlist + denylist + 项目内豁免一气呵成
+      const policy = isReadAllowed(raw);
+      if (!policy.ok) {
+        // 兼容旧测试断言:plan-file 历史用 'forbidden' / 'not found' 大类,reason 携带细节
+        const status = policy.reason === 'realpath-failed' ? 404 : 403;
+        const errLabel = policy.reason === 'realpath-failed' ? 'not found' : 'forbidden';
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: errLabel, reason: policy.reason }));
         return;
       }
-      // 文件不存在 → 404
-      if (!existsSync(resolved)) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'not found' }));
-        return;
-      }
-      // realpath 双向校验：防止 plansDir 下放符号链接指向外部目录
-      let realResolved, realPlansDir;
-      try {
-        realResolved = realpathSync(resolved);
-        realPlansDir = realpathSync(plansDir);
-      } catch {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'realpath failed' }));
-        return;
-      }
-      const realPlansDirSep = realPlansDir.endsWith('/') || realPlansDir.endsWith('\\')
-        ? realPlansDir : realPlansDir + (isWin ? '\\' : '/');
-      if (!norm(realResolved).startsWith(norm(realPlansDirSep))) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'forbidden (symlink)' }));
-        return;
-      }
-      const st = statSync(realResolved);
+
+      // 用 policy 返回的 real 读,避免 TOCTOU
+      const real = policy.real;
+      const st = statSync(real);
       if (!st.isFile()) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'not a file' }));
@@ -581,7 +584,7 @@ async function handleRequest(req, res) {
         res.end(JSON.stringify({ ok: false, error: 'too large' }));
         return;
       }
-      const content = readFileSync(realResolved, 'utf-8');
+      const content = readFileSync(real, 'utf-8');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, content }));
     } catch (e) {
@@ -2297,15 +2300,56 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // 读取文件内容 API
+  // 读取文件内容 API —— 走 file-access-policy 统一校验
+  // 历史 isEditorSession 后门已收敛:绝对路径全部走 policy(allowlist 已含 ~/.claude/、CCV_PROJECT_DIR、
+  // 已注册 workspaces、上传/持久化目录),前端无需再传 editorSession=true。
   if (url === '/api/file-content' && method === 'GET') {
     const reqPath = parsedUrl.searchParams.get('path');
-    const isEditorSession = parsedUrl.searchParams.get('editorSession') === 'true';
     const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
     try {
-      const result = readFileContent(cwd, reqPath, isEditorSession);
+      if (!reqPath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid path' }));
+        return;
+      }
+      // 相对路径含 .. → 直接拒(历史契约;绕过项目目录的明确攻击)
+      const isAbs = /^([a-zA-Z]:[\\/]|[\\/])/.test(reqPath);
+      if (!isAbs && reqPath.includes('..')) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid path' }));
+        return;
+      }
+      // 相对路径在项目目录拼接;绝对路径直接送 policy
+      const absPath = isAbs ? reqPath : resolve(cwd, reqPath);
+      const policy = isReadAllowed(absPath);
+      if (!policy.ok) {
+        const status = reasonToStatus(policy.reason);
+        const errLabel = status === 404 ? 'File not found'
+          : status === 400 ? 'Invalid path'
+          : 'Forbidden';
+        const body = { error: errLabel, reason: policy.reason };
+        if (policy.allowedRoots) body.allowedRoots = policy.allowedRoots;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+        return;
+      }
+      // 用 policy 返回的 real 读,杜绝 TOCTOU
+      const real = policy.real;
+      const st = statSync(real);
+      if (!st.isFile()) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not a file' }));
+        return;
+      }
+      if (st.size > 5 * 1024 * 1024) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'File too large' }));
+        return;
+      }
+      const content = readFileSync(real, 'utf-8');
+      // path 字段回返原始入参,前端用它做路径展示与后续 POST 引用
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(result));
+      res.end(JSON.stringify({ path: reqPath, content, size: st.size }));
     } catch (err) {
       const status = ERROR_STATUS_MAP[err.code] || 500;
       const message = status === 500 ? `Cannot read file: ${err.message}` : err.message;
@@ -2315,47 +2359,46 @@ async function handleRequest(req, res) {
     return;
   }
 
-  // 返回文件原始二进制内容（用于图片预览等）
+  // 返回文件原始二进制内容（用于图片预览等）—— 走 file-access-policy 统一校验
+  // 历史 isEditorSession 后门 + uploadPrefix/persistPrefix 硬编码豁免已收敛:
+  // policy 的 allowlist 已含 /tmp/cc-viewer-uploads/、tmpdir()/cc-viewer-uploads/、
+  // ~/.claude/cc-viewer/<project>/images/、CCV_PROJECT_DIR、~/.claude/、registered workspaces。
   if (url === '/api/file-raw' && (method === 'GET' || method === 'HEAD')) {
     const reqPath = parsedUrl.searchParams.get('path');
-    const isEditorSession = parsedUrl.searchParams.get('editorSession') === 'true';
     const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
     try {
-      // 上传图片路径（/tmp/cc-viewer-uploads/ 或持久化目录）直接使用，跳过项目目录安全检查
-      const uploadPrefix = '/tmp/cc-viewer-uploads/';
-      const pName = _projectName || 'default';
-      const persistPrefix = join(getClaudeConfigDir(), 'cc-viewer', pName, 'images') + '/';
-      let targetFile;
-      if (reqPath && reqPath.startsWith(uploadPrefix)) {
-        targetFile = resolve(reqPath);
-        // 路径穿越防护：resolve 后必须仍在 upload 目录内
-        if (!targetFile.startsWith(uploadPrefix)) {
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Path traversal denied' }));
-          return;
-        }
-        // /tmp 原文件不存在时，回退到持久化副本
-        if (!existsSync(targetFile)) {
-          const fileName = targetFile.split('/').pop();
-          const persistFile = join(persistPrefix, fileName);
-          if (existsSync(persistFile)) targetFile = persistFile;
-        }
-      } else if (reqPath && reqPath.startsWith(persistPrefix)) {
-        targetFile = resolve(reqPath);
-        // 路径穿越防护：resolve 后必须仍在持久化目录内
-        if (!targetFile.startsWith(persistPrefix)) {
-          res.writeHead(403, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Path traversal denied' }));
-          return;
-        }
-      } else {
-        targetFile = resolveFilePath(cwd, reqPath, isEditorSession);
-      }
-      if (!existsSync(targetFile)) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `File not found: ${targetFile}` }));
+      if (!reqPath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid path' }));
         return;
       }
+      const isAbs = /^([a-zA-Z]:[\\/]|[\\/])/.test(reqPath);
+      const absPath = isAbs ? reqPath : resolve(cwd, reqPath);
+
+      // /tmp 原文件不存在时回退到持久化副本(保留原 fallback 语义,但用 policy 守卫)
+      let policy = isReadAllowed(absPath);
+      if (!policy.ok && policy.reason === 'realpath-failed' && isAbs) {
+        const pName = _projectName || 'default';
+        const persistPrefix = join(getClaudeConfigDir(), 'cc-viewer', pName, 'images');
+        const fileName = absPath.split('/').pop();
+        if (fileName) {
+          const persistFile = join(persistPrefix, fileName);
+          const fallbackPolicy = isReadAllowed(persistFile);
+          if (fallbackPolicy.ok) policy = fallbackPolicy;
+        }
+      }
+      if (!policy.ok) {
+        const status = reasonToStatus(policy.reason);
+        const errLabel = status === 404 ? 'File not found'
+          : status === 400 ? 'Invalid path'
+          : 'Forbidden';
+        const body = { error: errLabel, reason: policy.reason };
+        if (policy.allowedRoots) body.allowedRoots = policy.allowedRoots;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+        return;
+      }
+      const targetFile = policy.real;
       const stat = statSync(targetFile);
       if (!stat.isFile()) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -2406,11 +2449,74 @@ async function handleRequest(req, res) {
         return;
       }
       try {
-        const { path: reqPath, content, editorSession } = JSON.parse(body);
+        const { path: reqPath, content } = JSON.parse(body);
         const cwd = process.env.CCV_PROJECT_DIR || process.cwd();
-        const result = writeFileContent(cwd, reqPath, content, editorSession);
+        if (!reqPath) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid path' }));
+          return;
+        }
+        if (typeof content !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Content must be a string' }));
+          return;
+        }
+        const isAbs = /^([a-zA-Z]:[\\/]|[\\/])/.test(reqPath);
+        const absPath = isAbs ? reqPath : resolve(cwd, reqPath);
+
+        // 写路径同样走 policy(收敛 editorSession 后门):允许覆盖现有文件;
+        // 新文件场景递归向上找最近存在的祖先目录,只要它在 allowlist 内即放行。
+        // (旧实现只查 immediate parent,父目录也不存在时误拒嵌套新建。)
+        let targetReal;
+        const policy = isReadAllowed(absPath);
+        if (policy.ok) {
+          targetReal = policy.real;
+        } else if (policy.reason === 'realpath-failed') {
+          // 递归向上找最近存在的祖先;若 allowlist 命中即允许新建,从该祖先 real 重建目标路径。
+          let cursor = resolve(absPath, '..');
+          let ancestorPolicy = null;
+          let descent = [basename(absPath)];
+          for (let depth = 0; depth < 32; depth++) {
+            const ap = isReadAllowed(cursor);
+            if (ap.ok) { ancestorPolicy = ap; break; }
+            if (ap.reason !== 'realpath-failed') {
+              // sensitive-prefix / outside-allowlist 等明确拒绝 → 直接 403
+              ancestorPolicy = ap;
+              break;
+            }
+            // 当前祖先也不存在,继续上溯
+            const parent = resolve(cursor, '..');
+            if (parent === cursor) break; // 抵达根,停止
+            descent.unshift(basename(cursor));
+            cursor = parent;
+          }
+          if (!ancestorPolicy || !ancestorPolicy.ok) {
+            const reason = (ancestorPolicy && ancestorPolicy.reason) || 'outside-allowlist';
+            const status = reasonToStatus(reason);
+            const body = { error: 'Forbidden', reason };
+            if (ancestorPolicy && ancestorPolicy.allowedRoots) body.allowedRoots = ancestorPolicy.allowedRoots;
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(body));
+            return;
+          }
+          // 在祖先 real 路径下重建目标。Denylist 已在祖先 prefix 层生效,
+          // 这里相信 allowlist 祖先的合法性(项目目录 / ~/.claude/cc-viewer 等)。
+          targetReal = join(ancestorPolicy.real, ...descent);
+          // 父目录可能不存在,递归 mkdir
+          try { mkdirSync(dirname(targetReal), { recursive: true }); } catch {}
+        } else {
+          const status = reasonToStatus(policy.reason);
+          const body = { error: 'Forbidden', reason: policy.reason };
+          if (policy.allowedRoots) body.allowedRoots = policy.allowedRoots;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(body));
+          return;
+        }
+
+        writeFileSync(targetReal, content, 'utf-8');
+        const stat = statSync(targetReal);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, size: result.size }));
+        res.end(JSON.stringify({ ok: true, size: stat.size }));
       } catch (err) {
         const status = ERROR_STATUS_MAP[err.code] || 500;
         const message = status === 500 ? `Cannot save file: ${err.message}` : err.message;

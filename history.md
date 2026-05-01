@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.227 (2026-05-01) — 单 ws 合并 ask 提交回归修复 + 统一文件访问策略 + DNS rebinding 守护
+
+### 单 ws 合并 wsOpen 条件过严回归
+
+- Fix (P0 — `src/App.jsx:305` / `src/Mobile.jsx:349` wsOpen 条件): 合并前 ChatView 的 `_inputWs` 始终连 ws,合并后 wsOpen 一度绑到 `cliMode || terminalVisible`。在 mobile 隐藏终端 / web-only 浏览 / terminalVisible toggle 切换间隙等场景下 Provider 不连 ws,hook bridge `_submitViaHookBridge` (行 2785) 与 PTY fallback `_submitViaSequentialQueue` (行 2702) 都拿到 `ctx.isOpen()=false`,后者触发 `_abortAskSubmitWithRollback('ws-not-open')` → "请求未送达,请重试" toast,消息根本没进 ws。改回退到「非本地日志 + 非 SDK 模式都连」,与合并前 _inputWs 永远连的语义对齐。
+- Fix (P1 — `src/components/ChatView.jsx:2702-2745` `_submitViaSequentialQueue` send 守护): readyState 检查 (2704) 与实际 send (旧 2737) 之间存在 ws.onclose 触发的 race 窗口,旧代码不校验 `ctx.send()` 返回值且先挂 handler 再发,失败时孤儿 handler 等满 15s `_finishCurrentAskAnswer` 误标"已答"。改为先 send、send 返回 false 同步走 `_abortAskSubmitWithRollback('ws-send-failed')`,与 ws-not-open 同回滚路径,UX 一致;成功才挂 handler 避免孤儿。
+- Fix (P1 — `src/components/ChatView.jsx:2575` 死代码 `this.connectInputWs()`): 方案 D 重构后该方法已删 (仅注释 line 68 提及),调用点遗留。一旦 PTY fallback 走到 `!ws || readyState !== OPEN` 分支即抛 `TypeError: this.connectInputWs is not a function`,无 try/catch 兜底崩 React handler。删该行,Provider `props.open=true` 时自管 2s 退避重连,`_waitForWsAndSubmit` 轮询到 OPEN 自然继续。
+- Known issue (本次不修): `sdkMode` 下 wsOpen 仍为 false,但 server `sdk-ask-answer` 实际走 `/ws/terminal` (server.js:3533),SDK ask-submit 静默 no-op (ChatView.jsx:2510-2516 else 分支)。pre-existing latent bug,后续单独追查。
+- Test: 新增 `test/single-ws-submit.test.js` 5 个 case (ws closed / send failed / send ok+matched done / wrong-seq done 不消费 / pty-prompt-invalid),inline-logic 抽取策略不引 ChatView/JSX/i18n 依赖。
+
+### 统一文件访问策略:放开项目外文件读取 + DNS rebinding 守护
+
+- Feature (P0 — 新增 `lib/file-access-policy.js`): 项目外文件(如 Read/Edit/Write 工具结果中的绝对路径 `/Users/x/another-project/foo.py`、`~/.claude/plans/*.md`、上传图片等)以前一律 400 `Invalid path`。引入统一 `isReadAllowed(absPath) → {ok, real?, reason?, allowedRoots?}`:① **Allowlist roots**(CCV_PROJECT_DIR、`~/.claude/`、tmpdir+`/tmp`/cc-viewer-uploads、`~/.claude/cc-viewer/`、注册的 workspaces、启动 cwd 快照),`realpath` 后 startsWith 比对;② **Denylist 后备**(`~/.ssh/`/`.aws/`/`.gnupg/`/`.docker/`/`.kube/`/`.netrc`/`.config/{gh,git,google-chrome}/`、`/etc/`、`/private/etc/`、Library/Keychains 等;文件名 `id_rsa`/`*.pem`/`*.key`/`.env`(放行 `.example`)/`credentials`/`*.tfstate` 等);③ **`~/.claude/` 子拦** `.credentials.json`/`settings.json`/`settings.local.json`(含 OAuth token,无项目内豁免);④ **项目内豁免**:CCV_PROJECT_DIR 内的 sensitive 文件名照常允许(`tests/fixtures/cert.pem` 等合法 fixture);⑤ 返回 `real` 路径,调用方用 real 读 → 杜绝 TOCTOU。
+- Feature (P0 — `server.js` 三个端点委托 policy): `/api/plan-file` 保留 .md/2MB/null-byte/绝对路径 自身约束,realpath+allowlist 委托 policy(测试断言全部继续 pass);`/api/file-content` GET/POST 收敛 `editorSession=true` 后门,绝对路径全部走 policy;`/api/file-raw` 删除硬编码 uploadPrefix/persistPrefix 豁免(已纳入 allowlist),保留 MIME 校验/CSP/size。错误响应统一 `{error, reason, allowedRoots?}`,UI 据 reason 展示具体原因。
+- Feature (P1 — `server.js:300-336` DNS rebinding Host 守护): 仅靠 token+loopback 不够(参考 CVE-2025-66414/66416 MCP DNS rebinding 类),浏览器恶意页面可借 DNS rebinding 把请求假冒成 localhost 抵达本地 ws/HTTP。新增一行 `Host` header 校验:默认 allowlist `localhost,127.0.0.1,::1,[::1]`,LAN 用户用 `CCV_ALLOWED_HOSTS=192.168.1.10,localhost` env 添加,`*` 显式关闭(用户自担风险)。静态资源与 OPTIONS 预检免校验。
+- Refactor (P1 — `workspace-registry.js`): register/remove 后 lazy import `lib/file-access-policy.js#bumpWorkspacesVersion` 失效缓存,policy 的 allowlist roots 计算只发生在首次访问 + workspace 变更。避免循环依赖。
+- UX (`src/components/FileContentView.jsx:559` / `src/components/ImageViewer.jsx:50`): 失败响应 `j.reason` 走新 i18n key `ui.fileLoadError.reason.<reason>`(zh/en/zh-TW/ko/ja/de/es/fr/it/da/pl/ru/ar/no/pt-BR/th/tr/uk 18 语言全译),用户能看到具体原因(`outside-allowlist` / `sensitive-prefix` / `sensitive-filename` / `sensitive-claude-config` / `realpath-failed` / `null-byte` / `invalid`)而非"Failed to load"。ImageViewer HEAD 失败时再发一次 GET 拿 reason JSON 显示。
+- Test: 新增 `test/file-access-policy.test.js` 16 个 case(allowlist 命中 / 项目内豁免 / `~/.claude/` 子拦 / symlink denylist / outside / null-byte / invalid input / realpath-failed / TOCTOU 合同);保留并验证 `test/plan-file-api.test.js` 全部继续 pass。`npm run test` 1366 全绿。
+- Known issue (本次不修): `~/.claude/projects/*.jsonl` 仍可读(用户日志,可能含敏感对话),设计上视为"用户自查内容"。如未来需要拦,可加 `~/.claude/projects/` 或 `*.jsonl` 子拦。
+
 ## 1.6.226 (2026-05-01) — 偏好开关响应修复 + 通知偏好 IPC 接通 + 单 ws 合并(方案 D)+ input-sequential 跨发送方 race 修复
 
 ### 修偏好面板三个 Switch 点击无响应

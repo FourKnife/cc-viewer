@@ -45,10 +45,24 @@ export default function ImageViewer({ filePath, onClose, editorSession }) {
     }).catch(() => { setError('Failed to load SVG'); setLoading(false); });
   }, [isSvg, imgSrc]);
 
-  // Fetch file size
+  // Fetch file size + 校验访问权限。HEAD 失败时再发 GET 拿 JSON reason,显示具体原因。
   useEffect(() => {
     fetch(imgSrc, { method: 'HEAD' })
       .then(r => {
+        if (!r.ok) {
+          // 403 sensitive / 404 not found 等:再发 GET 取详细 reason 显示给用户
+          fetch(imgSrc).then(rr => rr.json()).then(err => {
+            const reasonMsg = err && err.reason
+              ? (i18n(`ui.fileLoadError.reason.${err.reason}`) || err.error)
+              : (err && err.error) || `HTTP ${r.status}`;
+            setError(reasonMsg);
+            setLoading(false);
+          }).catch(() => {
+            setError(`HTTP ${r.status}`);
+            setLoading(false);
+          });
+          return;
+        }
         const len = r.headers.get('content-length');
         if (len) setFileSize(parseInt(len, 10));
       })

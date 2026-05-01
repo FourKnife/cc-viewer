@@ -345,8 +345,9 @@ class Mobile extends AppBase {
       if (isMainAgent(filteredRequests[i]) && effective) { mobileModelName = effective; break; }
     }
 
-    // 单条 /ws/terminal 的开启条件:与 App 同款,但 mobileTerminalVisible 替代 PC 的 terminalVisible。
-    const wsOpen = !mobileIsLocalLog && !this.state.sdkMode && (this.state.cliMode || this.state.mobileTerminalVisible);
+    // 单条 /ws/terminal 的开启条件:与 App 同款,回退到「非本地日志 + 非 SDK 模式都连」,
+    // 修 mobile 隐藏终端时 ChatView 的 hook bridge / PTY 提交失败回归(参看 App.jsx:305 注释)。
+    const wsOpen = !mobileIsLocalLog && !this.state.sdkMode;
 
     return (
       <TerminalWsProvider open={wsOpen}>

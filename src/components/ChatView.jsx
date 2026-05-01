@@ -2567,12 +2567,13 @@ class ChatView extends React.Component {
   _submitViaPty(answers) {
     const ws = this._inputWs;
 
-    // Lazily connect WebSocket if not connected
+    // ws 暂时不可用 → 准备 queue 后等 Provider 自动重连。
+    // (历史:此处曾调 this.connectInputWs() 主动连;方案 D 重构后该方法已删,保留调用会抛 TypeError。
+    // Provider 在 props.open=true 时自管 2s 退避重连,_waitForWsAndSubmit 轮询到 OPEN 自然继续。)
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       this._askAnswerQueue = this._planSubmissionSteps(answers);
       this._askSubmitting = true;
       this._isMultiQuestionForm = answers.length > 1;
-      this.connectInputWs();
       this._askWsRetries = 0;
       this._waitForWsAndSubmit();
       return;
@@ -2725,6 +2726,16 @@ class ChatView extends React.Component {
     // (ChatView 的 ask 提交 + TerminalPanel 的 preset/clear-context/UltraPlan)。
     // 用 seq 区分:发送时带,handler 严格按 seq 匹配,避免被 TerminalPanel 触发的 done 误判。
     const seq = `cv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // 先 send,只有发送成功才挂 handler——避免孤儿 handler 等满 15s。
+    // ctx.send() 在 readyState 检查后到实际 send 之间可能因 ws.onclose 触发返回 false,
+    // 同步回滚等价于"还没真正提交",和 ws-not-open 同回滚路径,UX 一致。
+    const sent = ctx.send({ type: 'input-sequential', chunks, settleMs, seq });
+    if (!sent) {
+      this._abortAskSubmitWithRollback('ws-send-failed');
+      return;
+    }
+
     let unsub = null;
     const onceMsg = (msg) => {
       if (msg && msg.type === 'input-sequential-done' && msg.seq === seq) {
@@ -2733,8 +2744,6 @@ class ChatView extends React.Component {
       }
     };
     unsub = ctx.addMessageHandler(onceMsg);
-
-    ctx.send({ type: 'input-sequential', chunks, settleMs, seq });
 
     setTimeout(() => {
       if (unsub) { try { unsub(); } catch {} unsub = null; }

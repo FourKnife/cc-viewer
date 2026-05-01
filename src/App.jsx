@@ -300,9 +300,11 @@ class App extends AppBase {
       return this.renderWorkspaceMode();
     }
 
-    // 单条 /ws/terminal 的开启条件:cliMode 或终端面板可见任一为真,且非 SDK 模式 / 非本地日志查看
-    // (后两者无 PTY 与 hook 路径,不需要 ws)。
-    const wsOpen = !this._isLocalLog && !this.state.sdkMode && (this.state.cliMode || this.state.terminalVisible);
+    // 单条 /ws/terminal 的开启条件:非本地日志查看且非 SDK 模式即开。
+    // (历史:合并前 ChatView 的 _inputWs 始终连;v1.6.226 一度绑到 cliMode || terminalVisible,
+    // 在 mobile 隐藏终端 / web-only 浏览等场景下 hook bridge / PTY 提交全失败,触发"请求未送达"toast。
+    // 回退到与合并前 _inputWs 始终连等价的语义。SDK 模式 ws 缺失是 latent issue,本次不处理。)
+    const wsOpen = !this._isLocalLog && !this.state.sdkMode;
 
     return (
       <ConfigProvider theme={this.themeConfig}>

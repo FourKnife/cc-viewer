@@ -562,9 +562,17 @@ export default function FileContentView({ filePath, onClose, editorSession, scro
           return r
             .json()
             .then((err) => {
-              throw new Error(err.error || 'Failed to load');
+              // 服务端 file-access-policy 现在统一返回 {error, reason, allowedRoots?}
+              // reason 取值见 lib/file-access-policy.js:isReadAllowed,前端解析后展示具体原因
+              const reasonMsg = err.reason
+                ? (i18n(`ui.fileLoadError.reason.${err.reason}`) || err.error)
+                : (err.error || 'Failed to load');
+              const e = new Error(reasonMsg);
+              if (err.allowedRoots) e.allowedRoots = err.allowedRoots;
+              throw e;
             })
-            .catch(() => {
+            .catch((parsedErr) => {
+              if (parsedErr && parsedErr.message) throw parsedErr;
               throw new Error(`HTTP ${r.status}`);
             });
         }
