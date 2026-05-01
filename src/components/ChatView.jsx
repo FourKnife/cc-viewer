@@ -17,6 +17,8 @@ import { buildChunksForAnswer } from '../utils/ptyChunkBuilder';
 import { isPlanApprovalPrompt, isDangerousOperationPrompt, parseToolInfoFromBuffer } from '../utils/promptClassifier';
 import { isImageFile, isMutatingCommand } from '../utils/commandValidator';
 import { createEmptyToolState, appendToolResultMap, cachedBuildToolResultMap, getToolResultCache, setToolResultCache } from '../utils/toolResultBuilder';
+import { refreshPlanApprovalOnCachedItems } from '../utils/refreshPlanApprovalCache';
+import { refreshAskAnswerOnCachedItems } from '../utils/refreshAskAnswerCache';
 import { TeamButton, TeamModal } from './TeamSessionPanel';
 import SnapLineOverlay from './SnapLineOverlay';
 import RoleFilterBar from './RoleFilterBar';
@@ -929,6 +931,52 @@ class ChatView extends React.Component {
     }
   }
 
+  // 派生 per-keyPrefix 的 _mergedAskAnswerMap：cached.askAnswerMap 是原地 mutate 的，引用永远不变；
+  // 用 _askDirty + localAsk 引用 + 上一轮 cache 引用做三信号失效判断。
+  // localAsk（用户乐观更新缓存）每次提交都换新引用，要并入失效信号，否则用户答题后到 server ack 之间 UI 会闪回 pending。
+  // 永远 spread 创建新引用，让下游 ChatMessage SCU 检测到 askAnswerMap 变化（修老 bug：local 空时复用 cached 引用导致 SCU 不命中）。
+  _getMergedAskAnswerMap(messages, keyPrefix, localAsk) {
+    const cached = getToolResultCache(messages);
+    const askMap = cached?.askAnswerMap || EMPTY_MAP;
+    const askDirty = cached?._askDirty || 0;
+    if (!this._mergedAskAnswerMapByKey) this._mergedAskAnswerMapByKey = {};
+    if (!this._prevAskCacheByKey) this._prevAskCacheByKey = {};
+    if (!this._prevAskDirtyByKey) this._prevAskDirtyByKey = {};
+    if (!this._prevAskLocalByKey) this._prevAskLocalByKey = {};
+    if (this._prevAskCacheByKey[keyPrefix] !== askMap
+        || this._prevAskDirtyByKey[keyPrefix] !== askDirty
+        || this._prevAskLocalByKey[keyPrefix] !== localAsk) {
+      const hasLocal = localAsk && Object.keys(localAsk).length > 0;
+      this._mergedAskAnswerMapByKey[keyPrefix] = hasLocal
+        ? { ...askMap, ...localAsk }
+        : { ...askMap };
+      this._prevAskCacheByKey[keyPrefix] = askMap;
+      this._prevAskDirtyByKey[keyPrefix] = askDirty;
+      this._prevAskLocalByKey[keyPrefix] = localAsk;
+    }
+    return this._mergedAskAnswerMapByKey[keyPrefix];
+  }
+
+  // 派生 per-session 的 _mergedPlanApprovalMap：cached.planApprovalMap 是原地 mutate 的，引用永远不变；
+  // 用 _planDirty + 上一轮 cache 引用做失效判断，每次内容变化时创建一个新引用 {} 覆盖。
+  // keyPrefix 区分 main session（s${si}）vs sub-agent（tm${si}），避免互相覆盖。
+  // FULL HIT 路径（_sessionItemCache 命中）和内部 renderSessionMessages 都调用此方法，引用保持一致。
+  _getMergedPlanApprovalMap(messages, keyPrefix) {
+    const cached = getToolResultCache(messages);
+    if (!cached) return EMPTY_MAP;
+    const planDirty = cached._planDirty || 0;
+    if (!this._mergedPlanApprovalMapByKey) this._mergedPlanApprovalMapByKey = {};
+    if (!this._prevPlanCacheByKey) this._prevPlanCacheByKey = {};
+    if (!this._prevPlanDirtyByKey) this._prevPlanDirtyByKey = {};
+    if (this._prevPlanCacheByKey[keyPrefix] !== cached.planApprovalMap
+        || this._prevPlanDirtyByKey[keyPrefix] !== planDirty) {
+      this._mergedPlanApprovalMapByKey[keyPrefix] = { ...cached.planApprovalMap };
+      this._prevPlanCacheByKey[keyPrefix] = cached.planApprovalMap;
+      this._prevPlanDirtyByKey[keyPrefix] = planDirty;
+    }
+    return this._mergedPlanApprovalMapByKey[keyPrefix];
+  }
+
   renderSessionMessages(messages, keyPrefix, resolveModelInfo, tsToIndex, requestCacheTokenMap, startIdx = 0) {
     const { userProfile, collapseToolResults, expandThinking, showFullToolContent, showThinkingSummaries, onViewRequest } = this.props;
     // 增量 / WeakMap 缓存
@@ -952,15 +1000,9 @@ class ChatView extends React.Component {
       setToolResultCache(messages, cached);
     }
     const { toolUseMap, toolResultMap, readContentMap, editSnapshotMap, askAnswerMap, latestPlanContent } = cached;
-    // planApprovalMap 是同一对象引用被原地修改，需要在 _planDirty 变化时创建新引用
-    // 以触发 ChatMessage shouldComponentUpdate 检测到变化
-    const _planDirty = cached._planDirty || 0;
-    if (this._prevPlanCache !== cached.planApprovalMap || this._prevPlanDirty !== _planDirty) {
-      this._mergedPlanApprovalMap = { ...cached.planApprovalMap };
-      this._prevPlanCache = cached.planApprovalMap;
-      this._prevPlanDirty = _planDirty;
-    }
-    const planApprovalMap = this._mergedPlanApprovalMap || cached.planApprovalMap;
+    // planApprovalMap 派生统一走 _getMergedPlanApprovalMap（per keyPrefix），保证 FULL HIT 路径与 cache miss 路径
+    // 拿到同一引用，prop diff 才能正确触发 ExitPlanMode 卡片重渲。
+    const planApprovalMap = this._getMergedPlanApprovalMap(messages, keyPrefix);
 
     const activePlanPrompt = this.props.cliMode
       ? this.state.ptyPromptHistory.slice().reverse().find(p => isPlanApprovalPrompt(p) && p.status === 'active') || null
@@ -975,19 +1017,11 @@ class ChatView extends React.Component {
     let lastPendingAskId = null;
     // 收集历史中所有 AskUserQuestion block ID，用于 Last Response 去重
     const historyAskIds = new Set();
-    // 合并 localAskAnswers 到历史 askAnswerMap，使提交后立即显示已回答
-    // 缓存引用：只在 _localAsk 或 askAnswerMap 变化时重建，避免每次创建新对象导致 shouldComponentUpdate 级联触发
+    // 合并 localAskAnswers 到历史 askAnswerMap，使提交后立即显示已回答。
+    // 派生统一走 _getMergedAskAnswerMap（per keyPrefix），保证 FULL HIT 路径与 cache miss 路径
+    // 拿到同一引用，prop diff 才能正确触发 AskUserQuestion 卡片重渲。
     const _localAsk = this.state.localAskAnswers || {};
-    const _askDirty = cached?._askDirty || 0;
-    if (this._prevAskCache !== askAnswerMap || this._prevLocalAsk !== _localAsk || this._prevAskDirty !== _askDirty) {
-      this._mergedAskAnswerMap = Object.keys(_localAsk).length > 0
-        ? { ...askAnswerMap, ..._localAsk }
-        : askAnswerMap;
-      this._prevAskCache = askAnswerMap;
-      this._prevLocalAsk = _localAsk;
-      this._prevAskDirty = _askDirty;
-    }
-    const mergedAskAnswerMap = this._mergedAskAnswerMap;
+    const mergedAskAnswerMap = this._getMergedAskAnswerMap(messages, keyPrefix, _localAsk);
     // 记录"持有 lastPendingAskId/PlanId 的 message 索引"——streaming 期间同一 toolId 可能出现在
     // 多条 assistant message（增量 push 而不是 mutate），若每条 message 都拿到 msgLastAskId=X，
     // 会让多个 ChatMessage 都进 isInteractive=true 路径，把多份 AskQuestionForm portal 到 modal askSlot。
@@ -1349,6 +1383,22 @@ class ChatView extends React.Component {
     if (this._sessionItemCache.length > mainAgentSessions.length) {
       this._sessionItemCache.length = mainAgentSessions.length;
     }
+    // 清理 _getMergedXxxMap 的 byKey 字典中已不存在的 main session 条目（s${si}），
+    // 否则用户切换/删除 session 后旧 keyPrefix 永不释放（每条 entry 占 ~8 引用，重 session 用户累积可见内存）。
+    // tm${si} (sub-agent) 的清理由各自 render 周期短，不在此处处理。
+    const _validS = mainAgentSessions.length;
+    const _byKeyDicts = [
+      this._mergedPlanApprovalMapByKey, this._prevPlanCacheByKey, this._prevPlanDirtyByKey,
+      this._mergedAskAnswerMapByKey, this._prevAskCacheByKey, this._prevAskDirtyByKey, this._prevAskLocalByKey,
+    ];
+    for (const dict of _byKeyDicts) {
+      if (!dict) continue;
+      for (const k of Object.keys(dict)) {
+        if (!k.startsWith('s')) continue;
+        const idx = parseInt(k.slice(1), 10);
+        if (Number.isFinite(idx) && idx >= _validS) delete dict[k];
+      }
+    }
 
     // Server-side pagination: "load earlier conversations" button
     if (this.props.hasMoreHistory || this.props.loadingMore) {
@@ -1410,6 +1460,10 @@ class ChatView extends React.Component {
       // renderSessionMessages 内 L906 也基于 cached 派生 planApprovalMap，但其作用域只在 renderSessionMessages，
       // 这里的引用必须独立从 toolResultCache 取，与 LR 路径 L1508 的 _cachedLR.planApprovalMap 同源。
       const sessionPlanApprovalMap = (getToolResultCache(session.messages) || {}).planApprovalMap || {};
+      // FULL HIT / INCREMENTAL 路径下用本派生 map 做 prop diff，与 renderSessionMessages 内 L955 同源（同一 keyPrefix）。
+      const mergedPlanApprovalMap = this._getMergedPlanApprovalMap(session.messages, `s${si}`);
+      const _localAskForSession = this.state.localAskAnswers || {};
+      const mergedAskAnswerMap = this._getMergedAskAnswerMap(session.messages, `s${si}`, _localAskForSession);
 
       // === 预判：Last Response 是否将持有 ask / plan 交互权 ===
       // 防 messages-side ChatMessage 与 LR <ChatMessage key="resp-asst"> 同时进入 isInteractive 路径，
@@ -1441,16 +1495,14 @@ class ChatView extends React.Component {
               }
             }
             const _localAsk = this.state.localAskAnswers || {};
-            // 内联 merged askAnswerMap：cache 命中分支不走 renderSessionMessages，
-            // 此时 this._mergedAskAnswerMap 可能 stale（同 render 内服务端 ack 写入 _toolCache.askAnswerMap 而 mergedAskAnswerMap 缓存条件未变化）。
-            // 改为直接从 WeakMap 取最新 askAnswerMap 合 _localAsk，与下面 LR 实际判定 (line 1515) 维持一致来源（同样的 stale 但本预判与 LR 同源 → 无错判）。
-            const _toolCache = getToolResultCache(session.messages);
-            const _askAnswerMap = _toolCache?.askAnswerMap || {};
+            // 用本 session 的派生 mergedAskAnswerMap（含 localAsk）做预判，与下面 LR 实际判定（L1675）同源。
+            // 旧版直接读 raw cache 不含 localAsk → 用户快速答题、ack 还没到时预判会误认 LR 持有 ask，
+            // 导致 messages-side 与 LR 同时 isInteractive，双 portal 进 ApprovalModal askSlot。
             for (const b of _resp) {
               if (b.type !== 'tool_use') continue;
               if (b.name === 'AskUserQuestion') {
                 if (lrHistoryAskIds.has(b.id)) continue;
-                const merged = _askAnswerMap[b.id];
+                const merged = mergedAskAnswerMap[b.id];
                 if (merged && Object.keys(merged).length > 0) continue;
                 const la = _localAsk[b.id];
                 if (!la || Object.keys(la).length === 0) { lrWillOwnAsk = true; }
@@ -1468,14 +1520,19 @@ class ChatView extends React.Component {
       }
 
       if (sc && sc.session === session && sc.msgsLen === session.messages.length) {
-        // 完全命中：session 对象不变且消息数不变 → 直接复用
-        msgs = sc.items;
+        // 完全命中：session 对象不变且消息数不变 → 直接复用。
+        // 但 planApprovalMap / askAnswerMap 引用变化时（ExitPlanMode 审批落盘 / AskUserQuestion 答完），
+        // 刷新持有相应 tool_use 的旧 element 的 prop，避免 React 因 element 引用未变跳过 SCU 让卡片永远停在 pending 视图。
+        msgs = refreshPlanApprovalOnCachedItems(sc.items, sc.planApprovalMap, mergedPlanApprovalMap);
+        msgs = refreshAskAnswerOnCachedItems(msgs, sc.askAnswerMap, mergedAskAnswerMap);
         lastPendingAskId = sc.lastPendingAskId;
         lastPendingPlanId = sc.lastPendingPlanId;
       } else if (sc && sc.session === session && session.messages.length > sc.msgsLen) {
         // 增量：session 对象不变但消息增长 → 只渲染新消息，拼接到缓存
         const result = this.renderSessionMessages(session.messages, `s${si}`, resolveModelInfo, tsToIndex, requestCacheTokenMap, sc.msgsLen);
-        msgs = sc.items.slice();
+        // 旧段同样要刷新 planApprovalMap / askAnswerMap prop（同 FULL HIT 理由）
+        msgs = refreshPlanApprovalOnCachedItems(sc.items, sc.planApprovalMap, mergedPlanApprovalMap).slice();
+        msgs = refreshAskAnswerOnCachedItems(msgs, sc.askAnswerMap, mergedAskAnswerMap);
         lastPendingAskId = result.lastPendingAskId;
         lastPendingPlanId = result.lastPendingPlanId;
         // 增量 result 范围内若无新 pending plan/ask，但 sc 旧值仍未 resolved → 保留 sc 值，
@@ -1487,7 +1544,7 @@ class ChatView extends React.Component {
           }
         }
         if (!lastPendingAskId && sc.lastPendingAskId) {
-          const prevAns = this._mergedAskAnswerMap?.[sc.lastPendingAskId];
+          const prevAns = mergedAskAnswerMap?.[sc.lastPendingAskId];
           if (!prevAns || Object.keys(prevAns).length === 0) {
             lastPendingAskId = sc.lastPendingAskId;
           }
@@ -1541,6 +1598,9 @@ class ChatView extends React.Component {
       this._sessionItemCache[si] = {
         session, msgsLen: session.messages.length,
         items: msgs, lastPendingAskId, lastPendingPlanId,
+        // 记下本轮 planApprovalMap / askAnswerMap 引用，下轮 FULL HIT / INCREMENTAL 据此判断是否要刷新旧 element 的 prop。
+        planApprovalMap: mergedPlanApprovalMap,
+        askAnswerMap: mergedAskAnswerMap,
       };
       // LR 持有交互权 → 派生新的 msgs 数组（不污染 cache.items），让 messages-side 同 toolId 卡降级成静态展示，
       // 保证唯一交互点是 LR <ChatMessage key="resp-asst">。
@@ -1629,7 +1689,7 @@ class ChatView extends React.Component {
                 if (historyAskIds.has(block.id)) continue;
                 // 已应答（服务端 ack 写入 mergedAskAnswerMap，或本地乐观 _localAsk）→ 不视为 pending
                 // 与主历史 L924-928 对齐，防 reload 时 LR 残留已答 ask 误触发 modal
-                const merged = this._mergedAskAnswerMap?.[block.id];
+                const merged = mergedAskAnswerMap?.[block.id];
                 if (merged && Object.keys(merged).length > 0) continue;
                 const la = _localAsk[block.id];
                 if (!la || Object.keys(la).length === 0) {

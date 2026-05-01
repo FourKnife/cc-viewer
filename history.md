@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.229 (2026-05-02) — ExitPlanMode/AskUserQuestion 卡片审批/答完不切状态修复（_sessionItemCache prop 刷新）
+
+### 卡片状态卡 pending：cached React Element 持有过期 prop 引用
+
+- Fix (P0 — `src/components/ChatView.jsx` + 新增 `src/utils/refreshPlanApprovalCache.js` / `src/utils/refreshAskAnswerCache.js`): ExitPlanMode 卡片用户审批后 / AskUserQuestion 答完后，UI 上卡片仍显示「等待审批」/「pending 表单」+ 三按钮 + 蓝虚线框，即使后续 assistant 已经在跑工具。根因：`_sessionItemCache` 失效条件只看 `msgsLen`，FULL HIT / INCREMENTAL 路径直接复用旧 React Element 数组，React reconciler 看到相同元素引用就跳过 diff，ChatMessage SCU 根本不被调用，元素创建时冻结的旧 `planApprovalMap` / `askAnswerMap` 引用永远不刷新。修复用两个对称 helper 仅 patch 持有 ExitPlanMode/AskUserQuestion tool_use 的 assistant element 的对应 prop（cloneElement，引用全等时零分配快路径），加 `_getMergedPlanApprovalMap(messages, keyPrefix)` / `_getMergedAskAnswerMap(messages, keyPrefix, localAsk)` 两个 per-keyPrefix 派生方法（main `s${si}` vs sub-agent `tm${si}`），保证 FULL HIT 与 cache miss 用同一引用做 prop diff。AskUserQuestion 还把 `localAskAnswers`（乐观更新）作为额外失效信号，用户答完到 server ack 之间 UI 不闪回 pending。被动修一个老 bug：旧 `_mergedAskAnswerMap` 当 localAsk 空时直接复用 `cached.askAnswerMap` raw 引用，新答案落盘后下游 SCU 检测不到变化 → 改为永远 spread 创建新引用。
+- Fix (P1 — `ChatView.jsx:1481` LR 预判用 mergedAskAnswerMap 替代 raw cache): LR 是否持有 ask 交互权的预判块旧版直接读 `_toolCache.askAnswerMap`（不含 localAsk），用户快速答题、ack 还没到时预判会误认 LR 持有 ask，导致 messages-side 与 LR 同时 isInteractive，双 portal 进 ApprovalModal askSlot。改为读外层派生的 mergedAskAnswerMap（含 localAsk），预判与 L1675 实际判定同源。
+- Fix (P2 — `ChatView.jsx:1383-1399` byKey 字典清理): 新加的 `_mergedPlanApprovalMapByKey` / `_mergedAskAnswerMapByKey` 等 7 个 by-keyPrefix 字典与 `_sessionItemCache` 同周期失效，但旧 `s${si}` keyPrefix 在 session 数收缩时永不删除。在 `_sessionItemCache.length` 同步逻辑后加显式清理（按 `idx >= mainAgentSessions.length` 删除）。tm${si} (sub-agent) 短周期 render 不在此处理。
+- 这是 1.6.224 V2 文件型 plan + 1.6.226 lastPendingPlanId 算法重写的正交补全（V2 plan 让 `cached.planApprovalMap` 原地 mutate 引用稳定，但上游 ChatView `_sessionItemCache` 没跟上 prop 引用刷新），不涉及反向修改。
+- Test: 新增 `test/refresh-plan-approval-cache.test.js` + `test/refresh-ask-answer-cache.test.js` 各 7 条用例（零分配快路径 / 无持有者保留原数组 / 单+多持有者 cloneElement / 非 assistant 排除 / 空数组 / 异常 element），1381/1381 全绿；build 成功。
+
 ## 1.6.228 (2026-05-02) — LAN 移动端访问 403 修复 + QR Popover 一点就关修复 + lastPendingPlanId 算法重写
 
 ### lastPendingPlanId 算法:历史 plan/ask 永远 pending 误弹
