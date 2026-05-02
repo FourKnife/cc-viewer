@@ -3260,7 +3260,7 @@ export async function startViewer() {
           // interceptor.js runs in this same process (via proxy.js → setupInterceptor).
           // Inject live-port via module-level setter instead of process.env to avoid
           // polluting env of child_process.spawn descendants (Bash tools / MCP / Electron tabs).
-          setLivePort(port);
+          setLivePort(port, serverProtocol);
           const url = `${serverProtocol}://127.0.0.1:${port}`;
           if (!isCliMode) {
             console.error(t('server.started'));

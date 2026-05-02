@@ -8,6 +8,7 @@ const _ccvSkip = _ccvSkipArgs.includes(process.argv[2]);
 import './lib/proxy-env.js';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync, statSync, renameSync, unlinkSync, existsSync, watchFile } from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, basename } from 'node:path';
@@ -23,7 +24,8 @@ const __dirname = dirname(__filename);
 // 不用 process.env.CCVIEWER_PORT 是为了避免主进程 env 污染被 child_process.spawn
 // 继承到 Bash 工具子进程 / MCP server / Electron tab-worker 等无关进程。
 let _livePort = null;
-export function setLivePort(port) { _livePort = port ? String(port) : null; }
+let _liveProtocol = 'http';
+export function setLivePort(port, protocol) { _livePort = port ? String(port) : null; _liveProtocol = protocol || 'http'; }
 
 // 流式请求的实时状态（供 server.js SSE 推送）
 export const streamingState = { active: false, requestId: null, startTime: null, model: null, bytesReceived: 0, chunksReceived: 0 };
@@ -403,7 +405,8 @@ export function sendStreamChunk(entry, chunkSeq, onDone) {
   if (!port) return;
   try {
     const payload = JSON.stringify({ ...entry, _chunkSeq: chunkSeq });
-    const req = http.request({
+    const mod = _liveProtocol === 'https' ? https : http;
+    const req = mod.request({
       hostname: '127.0.0.1',
       port: Number(port),
       path: '/api/stream-chunk',
@@ -414,6 +417,7 @@ export function sendStreamChunk(entry, chunkSeq, onDone) {
         'x-cc-viewer-internal': '1',
       },
       timeout: 500,
+      rejectUnauthorized: false,
     }, (res) => {
       // 413 = payload too large → notify caller to stop sending further chunks
       if (onDone) onDone(res.statusCode !== 413);
