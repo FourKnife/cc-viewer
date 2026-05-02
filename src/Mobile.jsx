@@ -9,6 +9,7 @@ import ChatView from './components/ChatView';
 import TerminalPanel, { uploadFileAndGetPath } from './components/TerminalPanel';
 import { TerminalWsProvider } from './components/TerminalWsContext';
 import ToolApprovalPanel from './components/ToolApprovalPanel';
+import ApprovalModal from './components/ApprovalModal';
 import MobileGitDiff from './components/MobileGitDiff';
 import MobileFileExplorer from './components/MobileFileExplorer';
 import MobileStats from './components/MobileStats';
@@ -351,6 +352,15 @@ class Mobile extends AppBase {
 
     return (
       <TerminalWsProvider open={wsOpen}>
+      <ApprovalModal
+        enabled={isPad && this.state.approvalPrefs.modalEnabled}
+        soundEnabled={this.state.approvalPrefs.soundEnabled}
+        approvalGlobal={this.state.approvalGlobal}
+        dismissedIds={this.state.approvalDismissedIds}
+        onDismiss={this.handleApprovalDismiss}
+        onJumpTab={this.handleApprovalJumpTab}
+        otherTabs={this.state.approvalOtherTabs}
+      >
       <div className={styles.mobileCLIRoot} ref={this._layoutRef} onDragOver={this._onDragOver} onDragLeave={this._onDragLeave} onDrop={this._onDrop}>
         {this.state.isDragging && (
           <div className={styles.dragOverlay}>
@@ -548,6 +558,10 @@ class Mobile extends AppBase {
                     onLoadSession={(sid) => this.loadSession(sid)}
                     onPendingPermission={this.handlePendingPermission}
                     onPendingPlanApproval={this.handlePendingPlanApproval}
+                    onPendingAsk={this.handleApprovalAsk}
+                    onPendingPtyPlan={this.handleApprovalPtyPlan}
+                    ownTabId={this.state.ownTabId}
+                    projectName={this.state.projectName}
                     suppressInlineApprovalPanels={true}
                     pendingUploadPaths={this.state.pendingUploadPaths}
                     onUploadPathsConsumed={this.handleUploadPathsConsumed}
@@ -714,6 +728,26 @@ class Mobile extends AppBase {
                   style={{ width: 100 }}
                 />
               </div>
+              {isPad && this.state.approvalPrefs && (
+                <>
+                  <div className={styles.mobileSettingsRow}>
+                    <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.modalEnabled')}</span>
+                    <Switch
+                      size="small"
+                      checked={this.state.approvalPrefs.modalEnabled !== false}
+                      onChange={(checked) => this.handleApprovalPrefsChange({ modalEnabled: checked })}
+                    />
+                  </div>
+                  <div className={styles.mobileSettingsRow}>
+                    <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.soundEnabled')}</span>
+                    <Switch
+                      size="small"
+                      checked={!!this.state.approvalPrefs.soundEnabled}
+                      onChange={(checked) => this.handleApprovalPrefsChange({ soundEnabled: checked })}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
           <div className={`${styles.mobilePromptOverlay} ${this.state.mobilePromptVisible ? styles.mobilePromptOverlayVisible : ''}`}>
@@ -796,6 +830,7 @@ class Mobile extends AppBase {
           />
         )}
       </div>
+      </ApprovalModal>
       </TerminalWsProvider>
     );
   }

@@ -551,10 +551,18 @@ class AppBase extends React.Component {
 
   async loadMoreHistory() {
     if (!this.state.hasMoreHistory || this._loadingMore) return;
+    // 防御 _hasMoreHistory=true 而 _oldestTs 为 null 的不一致状态：
+    // 没有锚点时间戳就别去拼 before=null，否则服务端 400。把 hasMoreHistory 同步
+    // 关掉避免上层 loader 反复触发。
+    if (!this._oldestTs) {
+      this.setState({ hasMoreHistory: false });
+      return;
+    }
     this._loadingMore = true;
     this.setState({ loadingMore: true });
     try {
       const res = await fetch(apiUrl(`/api/entries/page?before=${encodeURIComponent(this._oldestTs)}&limit=100`));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data.entries) && data.entries.length > 0) {
         const reconstructed = reconstructEntries(data.entries);
@@ -584,14 +592,14 @@ class AppBase extends React.Component {
             requests: hotEntries,
             mainAgentSessions: allSessions,
             sessionIndex: fullIndex,
-            hasMoreHistory: !!data.hasMore,
+            hasMoreHistory: !!data.hasMore && !!data.oldestTimestamp,
             loadingMore: false,
           });
         } else {
           this.setState({
             requests: merged,
             mainAgentSessions,
-            hasMoreHistory: !!data.hasMore,
+            hasMoreHistory: !!data.hasMore && !!data.oldestTimestamp,
             loadingMore: false,
           });
           if (isMobile && this.state.projectName) {
@@ -604,6 +612,7 @@ class AppBase extends React.Component {
     } catch (e) {
       console.error('loadMoreHistory failed:', e);
       this.setState({ loadingMore: false });
+      message.error(t('ui.loadMoreHistoryFailed'));
     }
     this._loadingMore = false;
   }
@@ -798,7 +807,8 @@ class AppBase extends React.Component {
               fileLoadingCount: 0,
             };
             // 增量模式保留缓存恢复时设的 hasMoreHistory；非增量（limit）模式用服务端的值
-            if (!isIncremental) newState.hasMoreHistory = !!this._hasMoreHistory;
+            // hasMoreHistory 必须 AND 上 _oldestTs 非空，否则后续 loadMoreHistory() 会拼 before=null 触发 400
+            if (!isIncremental) newState.hasMoreHistory = !!this._hasMoreHistory && !!this._oldestTs;
             this.setState(newState);
           } else {
             const newState = {
@@ -808,7 +818,7 @@ class AppBase extends React.Component {
               fileLoading: false,
               fileLoadingCount: 0,
             };
-            if (!isIncremental) newState.hasMoreHistory = !!this._hasMoreHistory;
+            if (!isIncremental) newState.hasMoreHistory = !!this._hasMoreHistory && !!this._oldestTs;
             this.setState(newState);
             if (isMobile && this.state.projectName) {
               saveEntries(this.state.projectName, entries);

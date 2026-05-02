@@ -7066,6 +7066,26 @@ const i18nData = {
     "tr": "Eski konuşmaları yükle",
     "uk": "Завантажити попередні розмови"
   },
+  "ui.loadMoreHistoryFailed": {
+    "zh": "加载更早对话失败，请重试",
+    "en": "Failed to load earlier conversations, please retry",
+    "zh-TW": "載入更早對話失敗，請重試",
+    "ko": "이전 대화 로드 실패, 재시도해주세요",
+    "ja": "以前の会話の読み込みに失敗、再試行してください",
+    "de": "Laden früherer Unterhaltungen fehlgeschlagen, bitte erneut versuchen",
+    "es": "Error al cargar conversaciones anteriores, vuelva a intentarlo",
+    "fr": "Échec du chargement des conversations précédentes, veuillez réessayer",
+    "it": "Caricamento conversazioni precedenti non riuscito, riprova",
+    "da": "Kunne ikke indlæse ældre samtaler, prøv igen",
+    "pl": "Nie udało się załadować wcześniejszych rozmów, spróbuj ponownie",
+    "ru": "Не удалось загрузить ранние разговоры, попробуйте снова",
+    "ar": "فشل تحميل المحادثات الأقدم، يرجى المحاولة مرة أخرى",
+    "no": "Kunne ikke laste eldre samtaler, prøv igjen",
+    "pt-BR": "Falha ao carregar conversas anteriores, tente novamente",
+    "th": "โหลดบทสนทนาก่อนหน้าไม่สำเร็จ กรุณาลองใหม่",
+    "tr": "Eski konuşmalar yüklenemedi, lütfen tekrar deneyin",
+    "uk": "Не вдалося завантажити попередні розмови, спробуйте знову"
+  },
   "ui.loadingMoreHistory": {
     "zh": "加载中...",
     "en": "Loading...",

@@ -409,7 +409,7 @@ class ChatMessage extends React.Component {
       }
 
       const checkSvg = (
-        <svg className={styles.askCheckSvg} width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <svg className={styles.askCheckSvg} width="1em" height="1em" viewBox="0 0 16 16" fill="none">
           <path d="M3 8.5L6.5 12L13 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       );
@@ -436,14 +436,20 @@ class ChatMessage extends React.Component {
                     const selected = isOptionMatch(opt.label);
                     return (
                       <div key={oi} className={`${styles.askOptionItem}${selected ? ' ' + styles.askOptionSelected : ''}`}>
-                        {selected ? checkSvg : '○'} {opt.label}
-                        {opt.description && <span className={styles.optionDesc}>— {opt.description}</span>}
+                        <span className={styles.askRadioDot}>{selected ? checkSvg : '○'}</span>
+                        <span className={styles.askOptionBody}>
+                          <span className={styles.askOptionLabel}>{opt.label}</span>
+                          {opt.description && <span className={styles.askOptionDesc}>{opt.description}</span>}
+                        </span>
                       </div>
                     );
                   })}
                   {isOtherAnswer && (
                     <div className={`${styles.askOptionItem} ${styles.askOptionSelected}`}>
-                      {checkSvg} {answer}
+                      <span className={styles.askRadioDot}>{checkSvg}</span>
+                      <span className={styles.askOptionBody}>
+                        <span className={styles.askOptionLabel}>{answer}</span>
+                      </span>
                     </div>
                   )}
                 </div>

@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.6.231 (2026-05-02) — AskUserQuestion 双行选项卡片重构 + iPad 全局审批 Modal 接通 + 加载更多历史失败兜底
+
+### AskUserQuestion 选项卡片：双行版式 + 1.8× 大图标 + preview 自适应
+
+- Refactor (P0 — `src/components/AskQuestionForm.jsx` + `src/components/ChatMessage.module.css`): 交互态选项行从单行 `dot + label — desc` 重排为 `dot + flex-column(label, desc)` 双行结构，避免窄屏拥挤；新增 `.askOptionBody / .askOptionLabel / .askOptionDesc` 三类（与已答态 `.optionDesc` 错开类名，dead code 一并删除）。`.askRadioDot` 桌面 23px / 移动 32px / pad-mode 23px，配 `inline-flex + align-items:center + height:17/22px` 行盒锁定与 label 第一行光学居中（解决 1.8× 后图标偏离基线问题）。`.askRadioItem` 加 `border-radius:6px + transition:background 0.12s`，hover 用 `--color-primary-bg-extra-faint`、selected 加 `--color-primary-bg-faint`，两态可叠加不互吃。
+- Refactor (P1 — `src/components/ChatMessage.jsx` 已答态选项): 同步重构成 `<.askRadioDot>{checkSvg|○}</span><.askOptionBody><.askOptionLabel>{label}</span>{desc && <.askOptionDesc>{desc}</span>}</span>`；checkSvg 改 `width="1em" height="1em"` 跟 `.askRadioDot` 字号自适应，桌面 23px、移动 32px、pad-mode 23px 三档。`.askOptionItem` 改 `align-items:flex-start; gap:8px; padding:3px 0` 配合双行；`.askOptionSelected .optionDesc` 重命名为 `.askOptionSelected .askOptionDesc`。
+- Feature (P1 — 无障碍): 选项 div 加 `role="radio"/"checkbox"` + `aria-checked` + `aria-label="{label}: {description}"` + `tabIndex={0}` + `onKeyDown` 处理 Enter/Space（`preventDefault` 防 Space 滚页）；`.askRadioGroup` 加 `role="radiogroup"`、`.askCheckboxGroup` 加 `role="group"`，符合 WAI-ARIA 自定义控件规范。`.askRadioItem:focus-visible` 主色 box-shadow outline，键盘可达。
+- Feature (P1 — preview 重排): JSX 把 `header + question` 从 `optionsContent` 拆出当 `.askMarkdownLayout` 兄弟节点；`.askMarkdownLayout` 加 `min-width:0` + `.askOptionsBody` 包裹 options/otherInput；新增 `@media (max-width: 750px) { flex-direction: column-reverse; }` —— 桌面侧仍是 options-left / preview-right，≤750px 视觉顺序变成 `header → question → preview → options → submit`（DOM 顺序不变，screen reader 仍按 options→preview 念）。预览框加 `box-sizing: border-box` 修右侧 1px 边框 + 10px padding 导致的 `width:100%` 溢出。
+- Fix (P1 — "Other" 输入框去蓝): `.askOtherInput :global(.ant-input) { background: var(--bg-elevated); }` 替换原 `var(--color-selection-bg)`（亮色主题下是浅蓝），`:focus / .ant-input-focused` 加主色边框 + `box-shadow: 0 0 0 2px var(--color-primary-bg-light)` 微光晕补偿失去的蓝底辨识度。
+- Test: 两轮 UltraReview 团队审（requirements / regression / code-quality），第一轮 code-quality 提单行 label 纵向居中问题已通过行盒高度锁定修复；第二轮 3 视角全过。
+
+### iPad 模式接通全局审批 Modal
+
+- Feature (P0 — `src/Mobile.jsx` import + render wrap): Mobile.jsx 之前完全没用 `<ApprovalModal>` 包裹，iPad 模式下 AskUserQuestion / ExitPlanMode 永远走 inline 卡片，体验与 PC 不一致。新加 `import ApprovalModal from './components/ApprovalModal'`，render 顶部 `<TerminalWsProvider>` 内层包一层 `<ApprovalModal enabled={isPad && approvalPrefs.modalEnabled} ...>`。`enabled` 用 `isPad &&` 保证手机 mobile 永远关（保留 inline 路径），iPad 跟随用户偏好（默认 true，与 PC 一致）。AppBase 已有的 `approvalGlobal / approvalDismissedIds / approvalOtherTabs / approvalPrefs` 状态和 `handleApprovalDismiss / handleApprovalJumpTab` 方法 Mobile 直接继承，零新 state。
+- Fix (P0 — `src/Mobile.jsx` ChatView 接 4 个 prop): 仅包 `<ApprovalModal>` 不够 —— Mobile 的 `<ChatView>` 之前只接 `onPendingPermission / onPendingPlanApproval`（inline 路径），没接 `onPendingAsk / onPendingPtyPlan`（modal 路径），导致 `approvalGlobal.ask` 永远 null、`visibleKinds=[]`、modal 永不渲染。新加 `onPendingAsk={this.handleApprovalAsk}` + `onPendingPtyPlan={this.handleApprovalPtyPlan}` + `ownTabId={this.state.ownTabId}` + `projectName={this.state.projectName}`（后两者用来填 modal header 的 chip + 跨 tab IPC 跳转）。`ApprovalPortalContext` 默认值 `{askSlot:null, ptyPlanSlot:null}` 保证手机 mobile 的 inline 路径零回归（ChatMessage Consumer 看到 null slot 直接走 inline）。
+- Feature (P1 — `src/Mobile.jsx` 设置面板): mobile 设置抽屉新增 2 个开关，`{isPad && this.state.approvalPrefs && (...)}` 守卫，仅 iPad 显示——`ui.approval.settings.modalEnabled`（弹出全局审批 Modal）+ `ui.approval.settings.soundEnabled`（审批提示音）。复用 `handleApprovalPrefsChange` 走同一份 `/api/preferences` POST + `setApprovalPref` IPC，PC 与 iPad 共享一个状态源。i18n key 已存在（5367/5375），无需新增。
+
+### loadMoreHistory：`before=null` 400 报错 + 失败 toast 兜底
+
+- Fix (P0 — `src/AppBase.jsx:557+ loadMoreHistory()` 入口加 `_oldestTs` 防御 guard): `_hasMoreHistory=true` 但 `_oldestTs=null` 的不一致状态（SSE `load_start` 给 `hasMore: true` 同时 `oldestTs` 缺失/null 时触发）会让点击「加载更早的对话」拼出 `/api/entries/page?before=null&limit=100` —— `encodeURIComponent(null)` 返回字符串 `"null"`，server.js:1076 `new Date('null').getTime()` 得 NaN → 400 Bad Request。`loadMoreHistory()` 里在 `_loadingMore = true` 之前先 `if (!this._oldestTs) { setState({ hasMoreHistory: false }); return; }`，把按钮一次性藏掉避免上层 loader 反复触发同一个坏请求。
+- Fix (P0 — 4 处 hasMoreHistory 写入与 oldestTs 联动): `:587 / :594`（loadMoreHistory 成功路径）改 `hasMoreHistory: !!data.hasMore && !!data.oldestTimestamp`；`:801 / :811`（SSE `load_done` 非增量分支）改 `newState.hasMoreHistory = !!this._hasMoreHistory && !!this._oldestTs`，与 `:401 / :410` 已有的稳妥写法对齐 —— `oldestTs` 缺失时一致地把"还有更多"翻成 false。`fetch` 后加 `if (!res.ok) throw new Error('HTTP ${res.status}')`，把 4xx/5xx（业务返回 JSON 但 status 非 2xx）统一翻成异常进 catch。
+- Feature (P1 — 失败 toast `src/AppBase.jsx` + `src/i18n.js`): catch 块加 `message.error(t('ui.loadMoreHistoryFailed'))`，给用户明确的失败反馈。i18n 新增 `ui.loadMoreHistoryFailed` key 覆盖项目支持的全部 18 语言（中/英/繁中/韩/日/德/西/法/意/丹/波兰/俄/阿/挪/葡-巴/泰/土/乌克兰）。「点击像没点」的体感（spinner 50-100ms 闪一下、按钮没消失、无错误反馈）现在变成「按钮藏掉」或「toast 失败」二选一，确定可见。
+
 ## 1.6.230 (2026-05-02) — MdxEditor 工具栏 18 语言 i18n + Ctrl+S/Cmd+S 保存快捷键
 
 ### MdxEditor 工具栏 tooltip 18 语言全覆盖
