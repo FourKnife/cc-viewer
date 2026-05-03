@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased — 性能优化（antd cssVar / 热路径 Tooltip 原生化 / scrollHeight 缓存）
+## 1.6.232 (2026-05-03) — terminal 写缓冲 O(n²) 修复 + 持久记忆 popover + cssVar 回退 / 热路径 Tooltip 原生化
+
+### 性能优化（terminal 写缓冲 / cssVar 回退 / 热路径 Tooltip 原生化 / scrollHeight 缓存）
 
 基于 5 路 reviewer 评估（保留：cssVar / 热路径 Tooltip 替换 / scrollHeight 缓存；否决：Typography ellipsis 整改、消息列表 React.memo 拆分），按 ROI 落 3 项独立可回滚优化。
 
@@ -9,9 +11,7 @@
 - Perf (P0 — `src/components/TeamSessionPanel.jsx` + `src/components/RequestList.jsx`): 3 处热路径 `<Tooltip>` 替换为原生 `<span title="...">` —— gantt 段钻石（leadSegments 钻石 + agent 行事件钻石，每会话可渲 100+ 个）+ RequestList cache-loss dot（每请求一个）。trace 显示 `antd/es/tooltip/index.js:27` total 756ms，每个 Tooltip wrapper 即使 popup 不显示也跑 useToken/useStyleRegister/useZIndex/useMemo(getPlacements)/useComponentConfig 5 hook，列表 N 倍放大。原生 `title` 渲染零成本（浏览器自带 ~700ms hover 延迟，对探索性提示可接受）。RequestList 多 reason `\n` 改成「; 」分隔（原生 title 不支持跨行）；`tooltipPreLine` CSS 类一并删。冷路径 Tooltip（按钮单点说明、Modal 内 chip 等共 7 处）保留。
 - Perf (P1 — `src/components/ChatView.jsx`): 加 `_followTarget` 实例字段缓存 `scrollHeight - clientHeight`。原 `_startSmoothStickyFollow` 的 rAF step 每帧读 3 次 layout（`scrollHeight + clientHeight + scrollTop`），加上前一帧写了 scrollTop 触发 forced reflow，trace 显示 56ms self / `get scrollHeight` 179ms self。改后：step 内仅读 `scrollTop`，target 在 `_startSmoothStickyFollow` 入口（双 rAF 等 layout 完成后）刷新；`_onStickyScroll` 也改用缓存 target（用户滚动不改 scrollHeight，缓存值有效）。新增 ResizeObserver 在容器尺寸变化（window resize / 容器缩放）时刷新 target，`_unbindStickyScroll` 同步释放 observer。流式 chunk 续约时自动重新进 `_startSmoothStickyFollow` → 重新刷 target，缓动逻辑无回退。预期热点 169ms（113+56） → <30ms，1947 次/25.5s 的 layout count 同步下降。
 
-## Unreleased — 项目上下文 popover 新增「持久记忆」区块
-
-### 持久记忆：解析 `~/.claude/projects/<encoded>/memory/MEMORY.md` 入口 + 链接打开明细
+### 项目上下文 popover 新增「持久记忆」区块（解析 `~/.claude/projects/<encoded>/memory/MEMORY.md` 入口 + 链接打开明细）
 
 - Feature (P0 — `server.js`): 新增 `GET /api/project-memory`（带可选 `?file=<basename>.md`）返回当前项目持久记忆。路径编码与 Claude Code 当前规范一致：`cwd.replace(/[/\\]+$/,'').replace(/[^a-zA-Z0-9-]/g,'-')`，落到 `~/.claude/projects/<encoded>/memory/MEMORY.md`。**已知不兼容**：早期 Claude Code 版本写入的目录保留了下划线（如 `-Users-sky--npm-global-lib-node_modules-cc-viewer`），与新规范全转 `-` 不一致；本端点只识别新规范目录，旧目录的 MEMORY 不会被读到（也无 fallback 重试，避免误命中）。安全分层：`?file=` 仅接受单段 basename + `.md` 后缀（拒绝 `/`、`\`、`..`、`.开头`、其它扩展名），`realpath` 收紧到 `realpathSync(memoryDir)+sep` 之内，再过一遍 `isReadAllowed`（`~/.claude/` 已在 allowlist）；512KB 大小上限。入口缺失返回 `{exists:false, dir, indexPath}`，前端拿 dir 做提示。
 - Feature (P0 — `src/components/AppHeader.jsx`): popover 在 Skills 区块下方新增「持久记忆」加框区块。state 新增 `_memory: null|false|{...}` 与 `_memoryDetail`，沿用 `_fsSkills` 的 seq + projectName-change 失效模式。`onOpenChange(open=true)` 触发 `loadMemory()` 按需拉取；`renderMarkdown()` 复用 src/utils/markdown.js 的 marked + DOMPurify 管线渲染入口内容。点击事件代理拦截 `<a>`：拒绝任何 URI scheme（`/^[a-z][a-z0-9+.-]*:/i` —— `javascript:` / `data:` / `file:` 全拦），拒绝绝对路径与含路径分隔符 / `..` / 隐藏前缀的相对路径，仅对单段 `.md` basename 触发明细 Modal。Modal 用 `zIndex:1100` 跨过 popover 的 `1030`，`destroyOnClose` 防内容残留。
