@@ -1366,3 +1366,106 @@
   line-height: 1;
 }
 
+/* ─── 持久记忆区块 ────────────────────────────────
+   入口 MEMORY.md 内联渲染：复用 marked + DOMPurify 管线（src/utils/markdown.js）。
+   Modal（明细）也使用同一 className，因此样式一份代替两份。
+
+   设计要点：
+   - 字号 12.5px，比工具 chip(11px) 略大，方便阅读但不会和上方 MCP/Skill 抢视觉重心；
+   - 段落/列表与项目其它 markdown 渲染（如 ConceptHelp Modal）保持一致的 line-height: 1.55；
+   - 链接颜色复用 --primary-color，鼠标悬停 underline，明确"可点击"暗示；
+   - 代码块走 var(--bg-surface) + 无边框，避免在 popover 里分量过重。
+*/
+.memoryMarkdown {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.memoryMarkdown p {
+  margin: 0 0 6px 0;
+}
+
+.memoryMarkdown ul,
+.memoryMarkdown ol {
+  margin: 4px 0 6px 0;
+  padding-left: 20px;
+}
+
+.memoryMarkdown li {
+  margin: 2px 0;
+}
+
+.memoryMarkdown h1,
+.memoryMarkdown h2,
+.memoryMarkdown h3,
+.memoryMarkdown h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 8px 0 4px 0;
+  color: var(--text-primary);
+}
+
+.memoryMarkdown h1 { font-size: 14px; }
+
+.memoryMarkdown a {
+  color: var(--primary-color, #1677ff);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.memoryMarkdown a:hover {
+  text-decoration: underline;
+}
+
+.memoryMarkdown code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.memoryMarkdown pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  overflow-x: auto;
+}
+
+.memoryMarkdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+.memoryMarkdown blockquote {
+  margin: 4px 0;
+  padding: 2px 8px;
+  border-left: 3px solid var(--border-hover);
+  color: var(--text-secondary);
+}
+
+.memoryMarkdown hr {
+  margin: 8px 0;
+  border: none;
+  border-top: 1px solid var(--border-secondary);
+}
+
+/* 加载/空态/错误三态共享：减小内边距、灰一点字 */
+.memoryStatus {
+  padding: 6px 4px;
+}
+
+.memoryDirHint {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  word-break: break-all;
+  user-select: text;
+}
+

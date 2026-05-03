@@ -23,6 +23,7 @@ import { buildBracketPasteSubmitChunks, BRACKET_PASTE_SUBMIT_SETTLE_MS } from '.
 import { getModelMaxTokens } from '../utils/helpers';
 import ConceptHelp from './ConceptHelp';
 import CustomUltraplanEditModal from './CustomUltraplanEditModal';
+import { TerminalWriteQueue } from '../utils/terminalWriteQueue';
 import ImageLightbox from './ImageLightbox';
 import ConfirmRemoveButton from './ConfirmRemoveButton';
 import ScratchTerminal from './ScratchTerminal';
@@ -511,7 +512,12 @@ class TerminalPanel extends React.Component {
     window.removeEventListener('ccv-presets-changed', this._onPresetsChanged);
     window.removeEventListener('ccv-focus-terminal', this._onFocusTerminal);
     if (this._stopMobileMomentum) this._stopMobileMomentum();
-    if (this._writeTimer) cancelAnimationFrame(this._writeTimer);
+    // unmount 前同步排空 buffer 给 xterm，防最后 16ms 数据丢失（既有 bug 缓解）。
+    // dispose 后 push 静默忽略、rAF 取消，与 terminal.dispose 顺序无关。
+    if (this._writeQ) {
+      try { this._writeQ.drain(); } catch {}
+      this._writeQ.dispose();
+    }
     if (this._wsReconnectTimer) clearTimeout(this._wsReconnectTimer);
     if (this._unsubWsHandler) { try { this._unsubWsHandler(); } catch {} this._unsubWsHandler = null; }
     if (this._unsubWsState) { try { this._unsubWsState(); } catch {} this._unsubWsState = null; }
@@ -573,9 +579,12 @@ class TerminalPanel extends React.Component {
       this._loadWebglAddon(false);
     }
 
-    // 写入节流：批量合并高频输出，避免逐条触发渲染
-    this._writeBuffer = '';
-    this._writeTimer = null;
+    // 写入节流：批量合并高频输出，避免逐条触发渲染。
+    // 用 TerminalWriteQueue 替代原「string += / slice」实现，消除大流量时
+    // O(n²) 字符串切片热点（trace3 显示 _flushWrite 794ms self），同时
+    // 修复 UTF-16 surrogate 边界切碎、unmount 16ms 数据丢失等隐患。
+    // 节奏与原实现等价：每帧 1 个 chunk（≤32KB），不做激进 multi-chunk drain。
+    this._writeQ = new TerminalWriteQueue(() => this.terminal);
 
     if (isMobile && !isPad) {
       // 移动端：基于屏幕尺寸一次性计算固定 cols/rows，避免动态 fit 导致渲染抖动
@@ -949,42 +958,19 @@ class TerminalPanel extends React.Component {
   }
 
   /**
-   * 写入节流：将高频数据合并到缓冲区，每 16ms（一帧）批量写入一次，
-   * 避免大量输出时逐条触发 xterm 渲染导致卡顿。
-   * 当数据量超过 CHUNK_SIZE 时分帧写入，防止 /resume 等场景阻塞主线程。
+   * 写入节流：委托给 TerminalWriteQueue（src/utils/terminalWriteQueue.js）。
+   * 行为与原实现等价 —— 每帧最多 write 一个 32KB chunk，rAF 续约。
+   * 收益：消除原 `_writeBuffer = _writeBuffer.slice(N)` 的 O(n²) 字符串切片
+   *       + UTF-16 surrogate 守卫 + 异常时不死循环 + drain 修 unmount 数据丢失。
    */
   _throttledWrite(data) {
-    this._writeBuffer += data;
-    if (!this._writeTimer) {
-      this._writeTimer = requestAnimationFrame(() => {
-        this._flushWrite();
-      });
-    }
+    this._writeQ.push(data);
   }
 
+  // 同步排空（exit/state/toast 路径在自身 write 前调用，保留既有顺序语义）。
+  // 注：与原实现一样，这里只 drain 已积累 buffer，不影响 xterm 内部 parser 异步队列。
   _flushWrite() {
-    if (this._writeTimer) {
-      cancelAnimationFrame(this._writeTimer);
-      this._writeTimer = null;
-    }
-    if (!this._writeBuffer || !this.terminal) return;
-
-    const CHUNK_SIZE = 32768; // 32KB per frame
-    if (this._writeBuffer.length <= CHUNK_SIZE) {
-      // 正常小数据：直接写入，无额外开销
-      const buf = this._writeBuffer;
-      this._writeBuffer = '';
-      this.terminal.write(buf);
-    } else {
-      // 大数据分帧：每帧写 32KB，剩余排入下一帧
-      const chunk = this._writeBuffer.slice(0, CHUNK_SIZE);
-      this._writeBuffer = this._writeBuffer.slice(CHUNK_SIZE);
-      this.terminal.write(chunk);
-      // 还有剩余数据，排入下一帧继续写
-      this._writeTimer = requestAnimationFrame(() => {
-        this._flushWrite();
-      });
-    }
+    this._writeQ.drain();
   }
 
   _handlePaste = (e) => {

@@ -9,6 +9,7 @@ import { classifyRequest } from '../utils/requestType';
 import { resolveTeammateNames } from '../utils/contentFilter';
 import { t, getLang, setLang } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { renderMarkdown } from '../utils/markdown';
 import ConceptHelp from './ConceptHelp';
 import OpenFolderIcon from './OpenFolderIcon';
 import appConfig from '../config.json';
@@ -46,10 +47,17 @@ class AppHeader extends React.Component {
     this.state = { countdownText: '', promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false, cacheHighlightIdx: null, cacheHighlightFading: false, cdnModalVisible: false, cdnUrl: '', cdnLoading: false, calibrationModel: (v => CALIBRATION_MODELS.some(m => m.value === v) ? v : 'auto')(localStorage.getItem('ccv_calibrationModel') || 'auto'), proxyModalVisible: false, editingProxy: null, editForm: { name: '', baseURL: '', apiKey: '', models: '', activeModel: '' }, logDirDraft: null, qrPopoverOpen: false, _skillsModal: { open: false, loading: false, skills: [], error: null, toggling: new Set() },
       // 文件系统权威的 skill 列表（/api/skills 返回）；live-tail 下作为 popover chip 和管理弹窗的共享数据源。
       // null=未加载 / false=失败 / [] 或 Array=加载结果。workspace 切换由 componentDidUpdate + seq 控制。
-      _fsSkills: null };
+      _fsSkills: null,
+      // 当前项目「持久记忆」入口 MEMORY.md：null=未加载 / false=失败 / { exists, dir, indexPath, content }。
+      // 与 _fsSkills 同样依赖 projectName 切换作废 + seq 防回包污染。
+      _memory: null,
+      // 点击记忆链接时拉起的明细 Modal 状态：null=关 / { name, content?, error?, loading? }
+      _memoryDetail: null };
     this._countdownTimer = null;
     this._expiredTimer = null;
     this._fsSkillsSeq = 0;
+    this._memorySeq = 0;
+    this._memoryDetailSeq = 0;
     this.updateCountdown = this.updateCountdown.bind(this);
   }
 
@@ -77,6 +85,9 @@ class AppHeader extends React.Component {
       this._fsSkillsSeq++;
       this.setState({ _fsSkills: null });
       if (!this.props.isLocalLog && this.props.projectName) this.reloadFsSkills();
+      // _memory 同样作废 —— 沿用 _fsSkills 的失效策略，下次 popover 打开时按需重拉。
+      this._memorySeq++;
+      this.setState({ _memory: null, _memoryDetail: null });
     }
   }
 
@@ -103,6 +114,77 @@ class AppHeader extends React.Component {
       }
       return { ok: false, reason: e.message || 'network' };
     }
+  };
+
+  // 拉取当前项目入口 MEMORY.md。沿用 _fsSkills 的 seq + 静默回退模式。
+  // 三态契约:null=loading / false=失败 / 对象=成功(消费方在 815-855 / 1636 行依赖此契约)。
+  // 与 loadMemoryDetail 不同:Detail 把错误暴露到 UI(_memoryDetail.error),需要 catch (e);
+  // 入口 popover 失败时只显示通用文案(memoryLoadError),无需 e 详情,故 catch 不带形参。
+  loadMemory = async () => {
+    const seq = ++this._memorySeq;
+    try {
+      const r = await fetch(apiUrl('/api/project-memory'));
+      const data = await r.json();
+      if (seq !== this._memorySeq) return;
+      if (!r.ok) {
+        this.setState({ _memory: false });
+        return;
+      }
+      this.setState({ _memory: data });
+    } catch {
+      if (seq === this._memorySeq) this.setState({ _memory: false });
+    }
+  };
+
+  // 加载明细文件：name 必须是单段 .md basename（前端先校验，server 再校验一遍）。
+  // seq 防快速连点：用户连点两个不同明细时，慢的回包不应覆盖快的（否则用户最后看到的是错的内容）。
+  loadMemoryDetail = async (name) => {
+    const seq = ++this._memoryDetailSeq;
+    this.setState({ _memoryDetail: { name, loading: true } });
+    try {
+      const r = await fetch(apiUrl(`/api/project-memory?file=${encodeURIComponent(name)}`));
+      const data = await r.json();
+      if (seq !== this._memoryDetailSeq) return;
+      if (!r.ok) {
+        this.setState({ _memoryDetail: { name, error: data.error || `http:${r.status}` } });
+        return;
+      }
+      this.setState({ _memoryDetail: { name, content: data.content || '' } });
+    } catch (e) {
+      if (seq === this._memoryDetailSeq) {
+        this.setState({ _memoryDetail: { name, error: e.message || 'network' } });
+      }
+    }
+  };
+
+  // 拦截记忆区块内的 <a> 点击：拒绝任何 URI scheme / 绝对路径 / 含 ".." 段，
+  // 仅对单段 .md basename 触发明细 Modal。其它链接放过（让浏览器默认行为处理）。
+  handleMemoryLinkClick = (e) => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    const hrefRaw = a.getAttribute('href') || '';
+    if (!hrefRaw) return;
+    // 任何 scheme（javascript:/data:/file:/http:/...）→ 直接拒绝（避免 XSS / 越权读）
+    if (/^[a-z][a-z0-9+.-]*:/i.test(hrefRaw)) {
+      e.preventDefault();
+      return;
+    }
+    // 锚点链接（#section）放过
+    if (hrefRaw.startsWith('#')) return;
+    e.preventDefault();
+    // 去掉 query/hash + URL 解码 → 得到候选 basename
+    let candidate;
+    try {
+      candidate = decodeURIComponent(hrefRaw.split('#')[0].split('?')[0]);
+    } catch {
+      return;
+    }
+    // 绝对路径 / 任意路径分隔符 / ".." 段 / 空值 → 拒绝
+    if (!candidate || candidate.startsWith('/') || candidate.startsWith('\\')) return;
+    if (candidate.includes('/') || candidate.includes('\\')) return;
+    if (candidate === '..' || candidate.startsWith('.')) return;
+    if (!/\.md$/i.test(candidate)) return;
+    this.loadMemoryDetail(candidate);
   };
 
   // 把 reloadFsSkills 的 reason code 映射成用户可读文案。
@@ -163,9 +245,12 @@ class AppHeader extends React.Component {
     if (this._cacheAutoFadeTimer) clearTimeout(this._cacheAutoFadeTimer);
     if (this._cacheHighlightDelayTimer) clearTimeout(this._cacheHighlightDelayTimer);
     this._cacheUnbindScrollFade();
-    // 让任何在途的 reloadFsSkills / fetch 回包 seq 校验失败 → 不会 setState 到已卸载组件。
-    // React 18 下 setState-on-unmounted 本身是静默 no-op，但明确标记更稳妥。
+    // 让任何在途的 reloadFsSkills / loadMemory / loadMemoryDetail 回包 seq 校验失败
+    // → 不会 setState 到已卸载组件。React 18 下 setState-on-unmounted 本身是静默 no-op，
+    // 但明确标记更稳妥（也保证三个 seq 处理一致，code review 一致性诉求）。
     this._fsSkillsSeq++;
+    this._memorySeq++;
+    this._memoryDetailSeq++;
   }
 
   startCountdown() {
@@ -727,6 +812,51 @@ class AppHeader extends React.Component {
       </Button>
     );
 
+    // 持久记忆区块：始终显示在 popover 中（即使为空，也展示一个空态提示，让用户知道"已加载"）。
+    // 三态：null=loading / false=失败 / { exists, content, dir, indexPath }。
+    // exists:false 也展示 dir 路径，方便用户复制去手工创建/查看。
+    const memData = this.state._memory;
+    // 标题尾部 (N)：与 MCP/Skills 视觉一致。N = entry 内点向 .md 文件的 markdown 链接条数（去重）。
+    // 仅对 [text](file.md) 形式计数；外链/锚点不计。无内容时不显示。
+    const memoryCount = (() => {
+      if (!memData || !memData.exists || !memData.content) return null;
+      const matches = memData.content.match(/\]\(\s*([^)\s]+\.md)(?:\s+"[^"]*")?\s*\)/gi);
+      if (!matches) return 0;
+      const set = new Set();
+      for (const m of matches) {
+        const inner = m.match(/\(\s*([^)\s]+\.md)/i);
+        if (inner) set.add(inner[1].toLowerCase());
+      }
+      return set.size;
+    })();
+    const memoryBody = (() => {
+      if (memData === null) return <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>{t('ui.memoryLoading')}</div>;
+      if (memData === false) return <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>{t('ui.memoryLoadError')}</div>;
+      if (!memData.exists) {
+        return (
+          <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>
+            <div>{t('ui.memoryNotFound')}</div>
+            <div className={styles.memoryDirHint} title={memData.dir}>{memData.dir}</div>
+          </div>
+        );
+      }
+      if (!memData.content || !memData.content.trim()) {
+        return (
+          <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>
+            <div>{t('ui.memoryEmpty')}</div>
+            <div className={styles.memoryDirHint} title={memData.indexPath}>{memData.indexPath}</div>
+          </div>
+        );
+      }
+      return (
+        <div
+          className={styles.memoryMarkdown}
+          onClick={this.handleMemoryLinkClick}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(memData.content) }}
+        />
+      );
+    })();
+
     const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
     return (
       <div className={styles.cachePopover}>
@@ -744,52 +874,95 @@ class AppHeader extends React.Component {
             />
           </div>
         </div>
-        {(hasBuiltin || hasMcp || hasSkills) && (
-          <div className={styles.cacheScrollArea}>
-            {hasBuiltin && renderGroup('tools_builtin', 'ui.builtinTools', builtin.length, true, builtinBody)}
-            {hasMcp && (
-              // MCP 工具一进来就要看（常用且量不大），去掉折叠控件走静态标签 + 视觉分组框
-              <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
+        <div className={styles.cacheScrollArea}>
+          {hasBuiltin && renderGroup('tools_builtin', 'ui.builtinTools', builtin.length, true, builtinBody)}
+          {hasMcp && (
+            // MCP 工具一进来就要看（常用且量不大），去掉折叠控件走静态标签 + 视觉分组框
+            <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
+              <div className={styles.cacheSectionLabel}>
+                {t('ui.mcpTools')} ({Array.from(mcpByServer.values()).reduce((n, arr) => n + arr.length, 0)})
+              </div>
+              {mcpBody}
+            </div>
+          )}
+          {hasSkills && (
+            // 已载入 Skill 同样去折叠 + 加框；「管理」按钮放标题右侧（space-between + 蓝色 primary）。
+            // skill 数量 >10 黄色提示"浪费 token 幻觉"、>20 红色提示"上下文污染"——插在 label 和 action 之间，
+            // flex:1 填充中间空白。阈值只按展示 chip 数（已排除 builtin）来算，builtin 是系统自带不计。
+            <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
+              <div className={styles.cacheSectionHeader}>
                 <div className={styles.cacheSectionLabel}>
-                  {t('ui.mcpTools')} ({Array.from(mcpByServer.values()).reduce((n, arr) => n + arr.length, 0)})
+                  {t('ui.loadedSkills')} ({skills.length})
                 </div>
-                {mcpBody}
+                {skills.length > 20 ? (
+                  <Alert
+                    type="error"
+                    showIcon
+                    banner
+                    message={t('ui.skillsWarnPollution')}
+                    style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
+                  />
+                ) : skills.length > 10 ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    banner
+                    message={t('ui.skillsWarnOveruse')}
+                    style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
+                  />
+                ) : null}
+                {skillsAction}
               </div>
-            )}
-            {hasSkills && (
-              // 已载入 Skill 同样去折叠 + 加框；「管理」按钮放标题右侧（space-between + 蓝色 primary）。
-              // skill 数量 >10 黄色提示"浪费 token 幻觉"、>20 红色提示"上下文污染"——插在 label 和 action 之间，
-              // flex:1 填充中间空白。阈值只按展示 chip 数（已排除 builtin）来算，builtin 是系统自带不计。
-              <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
-                <div className={styles.cacheSectionHeader}>
-                  <div className={styles.cacheSectionLabel}>
-                    {t('ui.loadedSkills')} ({skills.length})
-                  </div>
-                  {skills.length > 20 ? (
-                    <Alert
-                      type="error"
-                      showIcon
-                      banner
-                      message={t('ui.skillsWarnPollution')}
-                      style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
-                    />
-                  ) : skills.length > 10 ? (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      banner
-                      message={t('ui.skillsWarnOveruse')}
-                      style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
-                    />
-                  ) : null}
-                  {skillsAction}
-                </div>
-                {skillsBody}
-              </div>
-            )}
+              {skillsBody}
+            </div>
+          )}
+          {/* 持久记忆区块：与 MCP/Skill 同样的加框样式；空态/加载态/错误态都给出可读提示。 */}
+          <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
+            <div className={styles.cacheSectionLabel}>
+              {t('ui.persistentMemory')}{memoryCount !== null ? ` (${memoryCount})` : ''}
+            </div>
+            {memoryBody}
           </div>
-        )}
+        </div>
       </div>
+    );
+  }
+
+  // 渲染明细 Modal（zIndex 1100 跨过 popover 的 1030 —— 不需要先关 popover）。
+  // 内容复用同一个 markdown 渲染管线 + 链接拦截器，明细里点其它 .md 链接会原地切到对应明细
+  // （loadMemoryDetail 走 seq 防止快慢回包乱序）。非 .md / 含 scheme / 绝对路径的 href 一律拒绝。
+  renderMemoryDetailModal() {
+    const detail = this.state._memoryDetail;
+    if (!detail) return null;
+    const { name, content, error, loading } = detail;
+    let body;
+    if (loading) {
+      body = <div className={styles.cachePopoverEmpty}>{t('ui.memoryLoading')}</div>;
+    } else if (error) {
+      body = <div className={styles.cachePopoverEmpty}>{t('ui.memoryLoadError')}: {error}</div>;
+    } else if (!content || !content.trim()) {
+      body = <div className={styles.cachePopoverEmpty}>{t('ui.memoryEmpty')}</div>;
+    } else {
+      body = (
+        <div
+          className={styles.memoryMarkdown}
+          onClick={this.handleMemoryLinkClick}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+        />
+      );
+    }
+    return (
+      <Modal
+        open={true}
+        title={name}
+        onCancel={() => this.setState({ _memoryDetail: null })}
+        footer={null}
+        width={720}
+        zIndex={1100}
+        destroyOnClose
+      >
+        {body}
+      </Modal>
     );
   }
 
@@ -1462,6 +1635,8 @@ class AppHeader extends React.Component {
                   if (!open) this._cacheScrollInited = false;
                   // 首次打开 + 未加载 + live-tail → 拉一次文件系统权威数据
                   if (open && this.state._fsSkills === null && !this.props.isLocalLog) this.reloadFsSkills();
+                  // 持久记忆同样按需拉取（不区分 live-tail / local-log，记忆始终对应当前 cwd）
+                  if (open && this.state._memory === null) this.loadMemory();
                 }}
               >
                 <span className={styles.liveTag} style={{ borderColor: ctxColor, color: ctxColor }}>
@@ -1632,6 +1807,7 @@ class AppHeader extends React.Component {
             {viewMode === 'raw' ? t('ui.chatMode') : t('ui.rawMode')}
           </Button>
         </Space>
+        {this.renderMemoryDetailModal()}
         <Modal
           title={`${t('ui.userPrompt')} (${this.state.promptData.length}${t('ui.promptCountUnit')})`}
           open={this.state.promptModalVisible}

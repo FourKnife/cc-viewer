@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — 性能优化（antd cssVar / 热路径 Tooltip 原生化 / scrollHeight 缓存）
+
+基于 5 路 reviewer 评估（保留：cssVar / 热路径 Tooltip 替换 / scrollHeight 缓存；否决：Typography ellipsis 整改、消息列表 React.memo 拆分），按 ROI 落 3 项独立可回滚优化。
+
+- Perf (P0 — 新文件 `src/utils/terminalWriteQueue.js` + `src/components/TerminalPanel.jsx` + `src/components/ScratchTerminal.jsx`): xterm 写缓冲改造。trace3 显示 TerminalPanel `_flushWrite` 在 cc-viewer 自己代码中独占 794ms self（GC +56% / 主线程 idle 从 16% 崩到 0.5%）。根因：原 `_writeBuffer = _writeBuffer.slice(CHUNK_SIZE)` 每帧复制整段剩余 buffer，1MB /resume 场景 O(n²)。抽 `TerminalWriteQueue` utility（string[] queue + offset 指针 + 周期压缩），TerminalPanel 与 ScratchTerminal 共享。**节奏与原实现 100% 等价**（每帧 1 chunk ≤32KB，rAF 续约），只把字符串切片从 O(n²) 降到 O(n)。顺带修 3 个既有缺陷：(1) UTF-16 surrogate pair 在 32KB 边界硬切导致 emoji 显示成 �（cut 末位检测高代理优先回退、回退会变 0 时改前进 1 把整对带出）；(2) `terminal.write` 抛异常后 buf 已清的数据丢失（try/catch 内回滚 head/offset 并停续约 rAF 防死循环）；(3) unmount 时最后 16ms 数据丢（`drain()` 同步排空再 dispose）。**5 路独立 reviewer 评审**（行业调研 / 架构 / 风险 / 静态代码审查 / 行为差异）+ **2 轮回归 review**，砍掉了原方案里会引入新 bug 的 callback flow control / single-frame multi-chunk drain / MAX_BYTES_PER_FRAME（这三项会让 /resume 滚动从平滑变跳顿、tab 切回主线程暴吃 200ms）。新增 14 用例单测覆盖 surrogate 边界、回滚、drain、dispose 等所有边界。
+- ~~Perf — `src/AppBase.jsx` cssVar:true~~ **已回退**：实测对比 trace 显示是性能**负优化**。开启后 cssinjs 自身耗时 +170%（608ms → 1643ms）、`flattenToken` +1426%（19.9ms → 303.4ms）、`Cache.value` +396%（100.8ms → 500ms）、GC +56%、主线程 idle 从 16% 崩到 0.5%、dropped frames +64%。原因：启用 cssVar 后每个 token 多走一层 `CSSVarRegister.path` + `flattenToken`；本项目 4 处 ConfigProvider + 主题切换 + 大量 antd 组件叠加，cache miss 路径被放大。antd 宣传的 20-35% 收益假设「单 ConfigProvider + 主题不切换」，本仓库不符合。getter 注释已更新警告未来不要再开。
+- Perf (P0 — `src/components/TeamSessionPanel.jsx` + `src/components/RequestList.jsx`): 3 处热路径 `<Tooltip>` 替换为原生 `<span title="...">` —— gantt 段钻石（leadSegments 钻石 + agent 行事件钻石，每会话可渲 100+ 个）+ RequestList cache-loss dot（每请求一个）。trace 显示 `antd/es/tooltip/index.js:27` total 756ms，每个 Tooltip wrapper 即使 popup 不显示也跑 useToken/useStyleRegister/useZIndex/useMemo(getPlacements)/useComponentConfig 5 hook，列表 N 倍放大。原生 `title` 渲染零成本（浏览器自带 ~700ms hover 延迟，对探索性提示可接受）。RequestList 多 reason `\n` 改成「; 」分隔（原生 title 不支持跨行）；`tooltipPreLine` CSS 类一并删。冷路径 Tooltip（按钮单点说明、Modal 内 chip 等共 7 处）保留。
+- Perf (P1 — `src/components/ChatView.jsx`): 加 `_followTarget` 实例字段缓存 `scrollHeight - clientHeight`。原 `_startSmoothStickyFollow` 的 rAF step 每帧读 3 次 layout（`scrollHeight + clientHeight + scrollTop`），加上前一帧写了 scrollTop 触发 forced reflow，trace 显示 56ms self / `get scrollHeight` 179ms self。改后：step 内仅读 `scrollTop`，target 在 `_startSmoothStickyFollow` 入口（双 rAF 等 layout 完成后）刷新；`_onStickyScroll` 也改用缓存 target（用户滚动不改 scrollHeight，缓存值有效）。新增 ResizeObserver 在容器尺寸变化（window resize / 容器缩放）时刷新 target，`_unbindStickyScroll` 同步释放 observer。流式 chunk 续约时自动重新进 `_startSmoothStickyFollow` → 重新刷 target，缓动逻辑无回退。预期热点 169ms（113+56） → <30ms，1947 次/25.5s 的 layout count 同步下降。
+
+## Unreleased — 项目上下文 popover 新增「持久记忆」区块
+
+### 持久记忆：解析 `~/.claude/projects/<encoded>/memory/MEMORY.md` 入口 + 链接打开明细
+
+- Feature (P0 — `server.js`): 新增 `GET /api/project-memory`（带可选 `?file=<basename>.md`）返回当前项目持久记忆。路径编码与 Claude Code 当前规范一致：`cwd.replace(/[/\\]+$/,'').replace(/[^a-zA-Z0-9-]/g,'-')`，落到 `~/.claude/projects/<encoded>/memory/MEMORY.md`。**已知不兼容**：早期 Claude Code 版本写入的目录保留了下划线（如 `-Users-sky--npm-global-lib-node_modules-cc-viewer`），与新规范全转 `-` 不一致；本端点只识别新规范目录，旧目录的 MEMORY 不会被读到（也无 fallback 重试，避免误命中）。安全分层：`?file=` 仅接受单段 basename + `.md` 后缀（拒绝 `/`、`\`、`..`、`.开头`、其它扩展名），`realpath` 收紧到 `realpathSync(memoryDir)+sep` 之内，再过一遍 `isReadAllowed`（`~/.claude/` 已在 allowlist）；512KB 大小上限。入口缺失返回 `{exists:false, dir, indexPath}`，前端拿 dir 做提示。
+- Feature (P0 — `src/components/AppHeader.jsx`): popover 在 Skills 区块下方新增「持久记忆」加框区块。state 新增 `_memory: null|false|{...}` 与 `_memoryDetail`，沿用 `_fsSkills` 的 seq + projectName-change 失效模式。`onOpenChange(open=true)` 触发 `loadMemory()` 按需拉取；`renderMarkdown()` 复用 src/utils/markdown.js 的 marked + DOMPurify 管线渲染入口内容。点击事件代理拦截 `<a>`：拒绝任何 URI scheme（`/^[a-z][a-z0-9+.-]*:/i` —— `javascript:` / `data:` / `file:` 全拦），拒绝绝对路径与含路径分隔符 / `..` / 隐藏前缀的相对路径，仅对单段 `.md` basename 触发明细 Modal。Modal 用 `zIndex:1100` 跨过 popover 的 `1030`，`destroyOnClose` 防内容残留。
+- Feature (P1 — `src/components/AppHeader.module.css`): 新增 `.memoryMarkdown` 内联渲染样式（段落 6px / 列表 padding-left 20px / 链接走 `--primary-color` + hover underline / code 走 `--bg-surface` 弱化），与 `.memoryStatus` / `.memoryDirHint` 三态文案样式。无 `!important`（项目硬性约束）。
+- i18n (P1 — `src/i18n.js`): 新增 5 key × 18 语言 —— `ui.persistentMemory` / `ui.memoryLoading` / `ui.memoryLoadError` / `ui.memoryNotFound` / `ui.memoryEmpty`。
+- Test (P1 — `test/api-project-memory.test.js`): 8 用例，`mkdtempSync` 隔离 `CLAUDE_CONFIG_DIR` + `CCV_PROJECT_DIR`，覆盖入口缺失/存在、明细文件读取、`?file=` 含 `/` `\` 非 `.md` 隐藏前缀的 400 拒绝、不存在的 404。
+
 ## 1.6.231 (2026-05-02) — AskUserQuestion 双行选项卡片重构 + iPad 全局审批 Modal 接通 + 加载更多历史失败兜底
 
 ### AskUserQuestion 选项卡片：双行版式 + 1.8× 大图标 + preview 自适应

@@ -661,6 +661,11 @@ class ChatView extends React.Component {
     this._pendingHookAnswers = null;
     this._unbindScrollFade();
     if (!useVirtuoso) this._unbindStickyScroll();
+    if (this._virtuosoResizeObserver) {
+      try { this._virtuosoResizeObserver.disconnect(); } catch {}
+      this._virtuosoResizeObserver = null;
+      this._virtuosoBoundEl = null;
+    }
     if (this._smoothFollowRafId) {
       cancelAnimationFrame(this._smoothFollowRafId);
       this._smoothFollowRafId = null;
@@ -758,8 +763,37 @@ class ChatView extends React.Component {
     }
   }
 
+  // 缓存 scrollHeight - clientHeight（贴底缓动的目标 scrollTop）。
+  // step (60fps rAF) + scroll handler 共用此缓存，每帧只读 scrollTop 一次，避免 forced layout。
+  // 失效点：_startSmoothStickyFollow 入口（流式 chunk 抵达，DOM 已增长）/ container ResizeObserver
+  // （window resize / 容器尺寸变化）/ 初次 _rebindStickyEl 绑定。
+  // 流式之外 DOM 不增长（用户滚动不会改 scrollHeight），缓存值期间始终有效。
+  _refreshFollowTarget = (scroller) => {
+    if (!scroller) return;
+    this._followTarget = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  };
+
+  // Virtuoso 模式下也对 scroller 接 ResizeObserver。修复:移动端键盘弹起 / 横竖屏切换 /
+  // window resize 后 _followTarget 缓存失准（原本只在 _startSmoothStickyFollow 入口刷一次）。
+  // scrollerRef 会被 Virtuoso 多次回调（mount=el / unmount=null），需对应切换。
+  _bindVirtuosoResizeObserver = (el) => {
+    if (el === this._virtuosoBoundEl) return;
+    if (this._virtuosoResizeObserver) {
+      try { this._virtuosoResizeObserver.disconnect(); } catch {}
+      this._virtuosoResizeObserver = null;
+    }
+    this._virtuosoBoundEl = el;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    try {
+      this._virtuosoResizeObserver = new ResizeObserver(() => this._refreshFollowTarget(el));
+      this._virtuosoResizeObserver.observe(el);
+      this._refreshFollowTarget(el);
+    } catch {}
+  };
+
   _bindStickyScroll() {
     this._stickyScrollRafId = null;
+    this._followTarget = 0;
     this._onStickyScroll = () => {
       if (this._stickyScrollLock) return;
       if (this._stickyScrollRafId) return;
@@ -767,7 +801,9 @@ class ChatView extends React.Component {
         this._stickyScrollRafId = null;
         const el = this.containerRef.current;
         if (!el) return;
-        const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+        // gap 用缓存的 _followTarget 算 —— 用户滚动不改 scrollHeight，缓存值有效。
+        // 仅当容器尺寸变化（ResizeObserver）或新 chunk 到达（_startSmoothStickyFollow）才需刷新。
+        const gap = this._followTarget - el.scrollTop;
         if (this.state.stickyBottom && gap > 50) {
           this.setState({ stickyBottom: false });
         } else if (!this.state.stickyBottom && gap <= 10) {
@@ -783,9 +819,23 @@ class ChatView extends React.Component {
     if (el === this._stickyBoundEl) return;
     if (this._stickyBoundEl) {
       this._stickyBoundEl.removeEventListener('scroll', this._onStickyScroll);
+      if (this._stickyResizeObserver) {
+        try { this._stickyResizeObserver.disconnect(); } catch {}
+        this._stickyResizeObserver = null;
+      }
     }
     this._stickyBoundEl = el;
-    if (el) el.addEventListener('scroll', this._onStickyScroll, { passive: true });
+    if (el) {
+      el.addEventListener('scroll', this._onStickyScroll, { passive: true });
+      // 初次刷新 + 容器尺寸变化时重算 target（clientHeight 随窗口缩放变化）
+      this._refreshFollowTarget(el);
+      if (typeof ResizeObserver !== 'undefined') {
+        try {
+          this._stickyResizeObserver = new ResizeObserver(() => this._refreshFollowTarget(el));
+          this._stickyResizeObserver.observe(el);
+        } catch {}
+      }
+    }
   }
 
   _unbindStickyScroll() {
@@ -796,6 +846,10 @@ class ChatView extends React.Component {
     if (this._stickyScrollRafId) {
       cancelAnimationFrame(this._stickyScrollRafId);
       this._stickyScrollRafId = null;
+    }
+    if (this._stickyResizeObserver) {
+      try { this._stickyResizeObserver.disconnect(); } catch {}
+      this._stickyResizeObserver = null;
     }
   }
 
@@ -812,6 +866,10 @@ class ChatView extends React.Component {
 
   // rAF 缓动吸底：流式 chunk 抵达后用 easeOut 平滑追底，避免每帧 scrollTop=scrollHeight
   // 带来的硬跳与换行抖动。gap<=0.5 停止；新 chunk 到达会续约（cancel 旧 rAF 重启循环）。
+  //
+  // 性能：target = scrollHeight - clientHeight 不在 step 内每帧读（forced layout），
+  // 改为入口（DOM 已 layout 完）刷新一次缓存到 this._followTarget；step 仅读 scrollTop。
+  // 续约时（流式新 chunk 抵达）会重新调本函数，target 自动更新。
   _startSmoothStickyFollow = (useVirtuoso) => {
     const scroller = useVirtuoso ? this._virtuosoScrollerEl : this.containerRef.current;
     if (!scroller) return;
@@ -821,7 +879,7 @@ class ChatView extends React.Component {
       this._smoothFollowRafId = null;
       if (this._unmounted) { this._stickyScrollLock = false; return; }
       if (!this.state.stickyBottom) { this._stickyScrollLock = false; return; }
-      const target = scroller.scrollHeight - scroller.clientHeight;
+      const target = this._followTarget;
       const current = scroller.scrollTop;
       const gap = target - current;
       if (gap <= 0.5) {
@@ -834,9 +892,12 @@ class ChatView extends React.Component {
       scroller.scrollTop = current + delta;
       this._smoothFollowRafId = requestAnimationFrame(step);
     };
-    // 先让新内容 layout 完成再测量（原实现用双 rAF 正是为此）
+    // 先让新内容 layout 完成再测量（原实现用双 rAF 正是为此），随后刷新 target 缓存。
     this._smoothFollowRafId = requestAnimationFrame(() => {
-      this._smoothFollowRafId = requestAnimationFrame(step);
+      this._smoothFollowRafId = requestAnimationFrame(() => {
+        this._refreshFollowTarget(scroller);
+        step();
+      });
     });
   };
 
@@ -3683,7 +3744,7 @@ class ChatView extends React.Component {
               if (needsHighlight) el = React.cloneElement(el, { highlight: highlightFading ? 'fading' : 'active' });
               return isScrollTarget ? <div ref={this._scrollTargetRef}>{el}</div> : el;
             }}
-            scrollerRef={(ref) => { this._virtuosoScrollerEl = ref; }}
+            scrollerRef={(ref) => { this._virtuosoScrollerEl = ref; this._bindVirtuosoResizeObserver(ref); }}
             context={{ header: this._virtuosoHeader, footer: this._virtuosoFooter }}
             components={this._virtuosoComponents || (this._virtuosoComponents = {
               Scroller: VirtuosoScroller,

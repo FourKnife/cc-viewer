@@ -11,6 +11,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import '@xterm/xterm/css/xterm.css';
 import { darkTerminalTheme, lightTerminalTheme } from './terminalThemes';
 import styles from './TerminalPanel.module.css';
+import { TerminalWriteQueue } from '../utils/terminalWriteQueue';
 
 class ScratchTerminal extends React.Component {
   constructor(props) {
@@ -20,8 +21,10 @@ class ScratchTerminal extends React.Component {
     this.fitAddon = null;
     this.ws = null;
     this.resizeObserver = null;
-    this._writeBuffer = [];
-    this._writeRaf = null;
+    // 写入节流复用 TerminalPanel 同款 utility（utils/terminalWriteQueue.js）。
+    // ScratchTerminal 历史用 [string].push + join 的实现，单字符串 push 不存在
+    // O(n²) 切片问题，但 unmount 时同样会丢最后 16ms buffer；改用 utility 统一行为。
+    this._writeQ = new TerminalWriteQueue(() => this.terminal);
     this._closing = false;
   }
 
@@ -42,7 +45,11 @@ class ScratchTerminal extends React.Component {
     this._closing = true;
     if (this._wsReconnectTimer) clearTimeout(this._wsReconnectTimer);
     if (this._themeObserver) { this._themeObserver.disconnect(); this._themeObserver = null; }
-    if (this._writeRaf) cancelAnimationFrame(this._writeRaf);
+    // unmount 前同步排空 buffer 给 xterm，再 dispose 队列；与 terminal.dispose 顺序无关。
+    if (this._writeQ) {
+      try { this._writeQ.drain(); } catch {}
+      this._writeQ.dispose();
+    }
     if (this._resizeDebounceTimer) clearTimeout(this._resizeDebounceTimer);
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
@@ -110,14 +117,7 @@ class ScratchTerminal extends React.Component {
   }
 
   _throttledWrite = (data) => {
-    this._writeBuffer.push(data);
-    if (this._writeRaf) return;
-    this._writeRaf = requestAnimationFrame(() => {
-      this._writeRaf = null;
-      const chunk = this._writeBuffer.join('');
-      this._writeBuffer.length = 0;
-      if (this.terminal) this.terminal.write(chunk);
-    });
+    this._writeQ.push(data);
   };
 
   connectWebSocket() {

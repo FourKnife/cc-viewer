@@ -2363,6 +2363,74 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // 当前项目「持久记忆」入口/明细 —— 路径编码: cwd 中所有非 [a-zA-Z0-9-] 字符替换为 -
+  // 编码方案与 Claude Code 写入 ~/.claude/projects/<encoded>/memory/ 时使用的一致(实地比对验证)。
+  // 不带参 → 返回 MEMORY.md 入口; ?file=<basename> → 返回同目录下指定 .md 明细。
+  // 安全分层: 1) basename 形态校验(单段 + .md) 2) realpath 必须严格在 memoryDir 之内 3) isReadAllowed 政策(~/.claude/ allowlist)。
+  if (url === '/api/project-memory' && method === 'GET') {
+    // 本端点内 helper:8 处响应去重(端点局部,不跨文件)
+    const respondJson = (status, body) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    try {
+      const cwdRaw = process.env.CCV_PROJECT_DIR || process.cwd();
+      const cwd = cwdRaw.replace(/[/\\]+$/, '');
+      const encoded = cwd.replace(/[^a-zA-Z0-9-]/g, '-');
+      const dir = join(getClaudeConfigDir(), 'projects', encoded, 'memory');
+      const fileParam = parsedUrl.searchParams.get('file');
+      const MAX_BYTES = 512 * 1024;
+
+      // 入口文件
+      if (!fileParam) {
+        const indexPath = join(dir, 'MEMORY.md');
+        if (!existsSync(indexPath)) return respondJson(200, { exists: false, dir, indexPath });
+        const policy = isReadAllowed(indexPath);
+        if (!policy.ok) return respondJson(reasonToStatus(policy.reason), { error: 'Forbidden', reason: policy.reason });
+        const st = statSync(policy.real);
+        if (!st.isFile()) return respondJson(400, { error: 'Not a file' });
+        if (st.size > MAX_BYTES) return respondJson(413, { error: 'File too large' });
+        const content = readFileSync(policy.real, 'utf-8');
+        return respondJson(200, { exists: true, dir, indexPath, content });
+      }
+
+      // 明细文件: 仅接受单段 basename + .md 后缀
+      // 再次校验 realpath 严格在 memoryDir 内 —— policy 的 ~/.claude/ allowlist 范围比这里宽。
+      if (fileParam.includes('/') || fileParam.includes('\\') || fileParam.includes('\0') || fileParam === '..' || fileParam.startsWith('.')) {
+        return respondJson(400, { error: 'Invalid file name' });
+      }
+      if (!/\.md$/i.test(fileParam)) return respondJson(400, { error: 'Only .md files allowed' });
+      const detailPath = join(dir, fileParam);
+      if (!existsSync(detailPath)) return respondJson(404, { error: 'File not found' });
+      // realpath 收紧: 必须严格落在 realpath(dir) 内 —— 防 symlink 跳出 memoryDir
+      let realDir, realFile;
+      try {
+        realDir = realpathSync(dir);
+        realFile = realpathSync(detailPath);
+      } catch {
+        return respondJson(404, { error: 'File not found' });
+      }
+      const sep = realDir.endsWith('/') ? realDir : realDir + '/';
+      if (realFile !== realDir && !realFile.startsWith(sep)) {
+        return respondJson(403, { error: 'Path traversal not allowed' });
+      }
+      const policy = isReadAllowed(realFile);
+      if (!policy.ok) return respondJson(reasonToStatus(policy.reason), { error: 'Forbidden', reason: policy.reason });
+      const st = statSync(realFile);
+      if (!st.isFile()) return respondJson(400, { error: 'Not a file' });
+      if (st.size > MAX_BYTES) return respondJson(413, { error: 'File too large' });
+      const content = readFileSync(realFile, 'utf-8');
+      return respondJson(200, { name: fileParam, path: realFile, content });
+    } catch (err) {
+      // 与 /api/file-content 一致：已知 errno（ENOENT/EACCES 等）走 ERROR_STATUS_MAP 映射；
+      // 500 时不回显 err.message —— 可能含 ~/.claude/projects/<encoded>/memory/ 路径片段。
+      const status = ERROR_STATUS_MAP[err.code] || 500;
+      const message = status === 500 ? 'Internal error' : err.message;
+      respondJson(status, { error: message });
+    }
+    return;
+  }
+
   // 返回文件原始二进制内容（用于图片预览等）—— 走 file-access-policy 统一校验
   // 历史 isEditorSession 后门 + uploadPrefix/persistPrefix 硬编码豁免已收敛:
   // policy 的 allowlist 已含 /tmp/cc-viewer-uploads/、tmpdir()/cc-viewer-uploads/、

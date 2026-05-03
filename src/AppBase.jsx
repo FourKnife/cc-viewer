@@ -1931,7 +1931,15 @@ class AppBase extends React.Component {
     );
   }
 
-  /** Ant Design 主题配置 (dark/light) */
+  /** Ant Design 主题配置 (dark/light)
+   *
+   * 历史尝试 `cssVar: true`（antd 5.14+）想砍 useToken/useGlobalCache 开销，但实测是性能
+   * 负优化：trace3 vs trace2 显示 cssinjs 自身耗时 +170%，`flattenToken` +1426%，GC +56%，
+   * 主线程 idle 从 16% 崩到 0.5%，dropped frames +64%。原因：启用 cssVar 后每个 token 多走
+   * 一层 CSSVarRegister.path + flattenToken；4 处 ConfigProvider + 主题切换 + 大量 antd
+   * 组件叠加，cache miss 路径被放大。antd 文档宣传的 20-35% 收益建立在「单 ConfigProvider
+   * + 主题不切换」理想场景，本仓库不符合。结论：保持 hash style，不要开 cssVar。
+   */
   get themeConfig() {
     if (this.state.themeColor === 'light') {
       return {
