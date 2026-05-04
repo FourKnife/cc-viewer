@@ -1,17 +1,17 @@
 import React from 'react';
-import { Space, Tag, Button, Dropdown, Popover, Modal, Collapse, Drawer, Switch, Radio, Tabs, Spin, Input, Table, Select, Tooltip, Alert, message } from 'antd';
+import { Space, Tag, Button, Dropdown, Popover, Modal, Collapse, Drawer, Switch, Radio, Tabs, Spin, Input, Table, Select, Tooltip, message } from 'antd';
 import { MessageOutlined, FileTextOutlined, ImportOutlined, DashboardOutlined, ExportOutlined, DownloadOutlined, SettingOutlined, BarChartOutlined, CodeOutlined, CopyOutlined, ApiOutlined, DeleteOutlined, ReloadOutlined, PlusOutlined, CloudDownloadOutlined, SwapOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { QRCodeCanvas } from 'qrcode.react';
-import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeToolUsageStats, computeSkillUsageStats, getModelMaxTokens, getEffectiveModel, extractCachedContent, parseCachedTools, extractLoadedSkills } from '../utils/helpers';
-import { BUILTIN_SKILL_NAMES, mergeActiveSkills } from '../utils/skillsParser';
+import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeToolUsageStats, computeSkillUsageStats, getModelMaxTokens, getEffectiveModel } from '../utils/helpers';
 import { isSystemText, classifyUserContent, isMainAgent } from '../utils/contentFilter';
 import { classifyRequest } from '../utils/requestType';
 import { resolveTeammateNames } from '../utils/contentFilter';
 import { t, getLang, setLang } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
-import { renderMarkdown } from '../utils/markdown';
 import ConceptHelp from './ConceptHelp';
 import OpenFolderIcon from './OpenFolderIcon';
+import CachePopoverContent from './CachePopoverContent';
+import MemoryDetailModal from './MemoryDetailModal';
 import appConfig from '../config.json';
 import { OPTIMISTIC_CLEAR_PERCENT } from '../AppBase';
 const CALIBRATION_MODELS = appConfig.calibrationModels;
@@ -155,36 +155,6 @@ class AppHeader extends React.Component {
         this.setState({ _memoryDetail: { name, error: e.message || 'network' } });
       }
     }
-  };
-
-  // 拦截记忆区块内的 <a> 点击：拒绝任何 URI scheme / 绝对路径 / 含 ".." 段，
-  // 仅对单段 .md basename 触发明细 Modal。其它链接放过（让浏览器默认行为处理）。
-  handleMemoryLinkClick = (e) => {
-    const a = e.target.closest('a');
-    if (!a) return;
-    const hrefRaw = a.getAttribute('href') || '';
-    if (!hrefRaw) return;
-    // 任何 scheme（javascript:/data:/file:/http:/...）→ 直接拒绝（避免 XSS / 越权读）
-    if (/^[a-z][a-z0-9+.-]*:/i.test(hrefRaw)) {
-      e.preventDefault();
-      return;
-    }
-    // 锚点链接（#section）放过
-    if (hrefRaw.startsWith('#')) return;
-    e.preventDefault();
-    // 去掉 query/hash + URL 解码 → 得到候选 basename
-    let candidate;
-    try {
-      candidate = decodeURIComponent(hrefRaw.split('#')[0].split('?')[0]);
-    } catch {
-      return;
-    }
-    // 绝对路径 / 任意路径分隔符 / ".." 段 / 空值 → 拒绝
-    if (!candidate || candidate.startsWith('/') || candidate.startsWith('\\')) return;
-    if (candidate.includes('/') || candidate.includes('\\')) return;
-    if (candidate === '..' || candidate.startsWith('.')) return;
-    if (!/\.md$/i.test(candidate)) return;
-    this.loadMemoryDetail(candidate);
   };
 
   // 把 reloadFsSkills 的 reason code 映射成用户可读文案。
@@ -673,298 +643,6 @@ class AppHeader extends React.Component {
     localStorage.setItem('ccv_calibrationModel', value);
   };
 
-  renderCacheContentPopover(contextPercent) {
-    const { requests = [], serverCachedContent } = this.props;
-    const cached = serverCachedContent || extractCachedContent(requests);
-
-    // 记录最后一次有效的 token / ctx（原展示已移除，保留以便将来恢复）
-    if (cached && (cached.cacheCreateTokens > 0 || cached.cacheReadTokens > 0)) {
-      this._lastCachedTokens = { cacheCreateTokens: cached.cacheCreateTokens, cacheReadTokens: cached.cacheReadTokens };
-    }
-    if (contextPercent > 0) {
-      this._lastContextPercent = contextPercent;
-    }
-
-    // 解析 tools 并缓存：tools 数组引用未变时复用上次解析结果，避免 200 条量级重复 split/regex。
-    const toolsArr = Array.isArray(cached?.tools) ? cached.tools : null;
-    let parsed;
-    if (toolsArr === this._lastToolsRef && this._lastParsedTools) {
-      parsed = this._lastParsedTools;
-    } else {
-      parsed = parseCachedTools(toolsArr);
-      this._lastToolsRef = toolsArr;
-      this._lastParsedTools = parsed;
-    }
-    const { builtin, mcpByServer } = parsed;
-    const hasBuiltin = builtin.length > 0;
-    const hasMcp = mcpByServer.size > 0;
-
-    // skills 缓存：以「被选中的 MainAgent 请求引用」为 key（而非 requests 数组引用），
-    // live-tail 追加新请求时，chosen 不变就不重扫。
-    const chosenForSkills = (() => {
-      if (!Array.isArray(requests) || requests.length === 0) return null;
-      if (requests.length === 1) return requests[0];
-      for (let i = requests.length - 1; i >= 0; i--) {
-        const r = requests[i];
-        if (r && r.type !== 'teammate' && r.type !== 'subAgent') return r;
-      }
-      return null;
-    })();
-    if (chosenForSkills !== this._lastChosenForSkills) {
-      this._lastSkills = extractLoadedSkills(requests);
-      this._lastChosenForSkills = chosenForSkills;
-    }
-    // Chip 数据源：优先走 /api/skills（文件系统权威，禁用立即生效；插件名带前缀符合 system-reminder 格式）。
-    // `_fsSkills` 为 null / false（本地 log / fetch 失败）时，回退到历史 system-reminder 解析 —— 不回归旧行为。
-    const historicalSkills = (this._lastSkills || []).filter(s => !BUILTIN_SKILL_NAMES.has(s.name));
-    const mergedSkills = mergeActiveSkills(this.state._fsSkills, this._lastSkills || []);
-    const skills = mergedSkills !== null ? mergedSkills : historicalSkills;
-    const hasSkills = skills.length > 0;
-
-    // 内置工具 chip：若有对应 Tool-<name>.md 文档（由 ConceptHelp 内部白名单校验），
-    // 点击直接打开 md modal；无文档则退化为纯展示 chip（ConceptHelp children fallback）。
-    // MCP 工具 chip：暂无对应文档，维持纯展示 + title hover 预览。
-    const renderBuiltinChip = ({ name, description }) => {
-      const title = [name, description].filter(Boolean).join('\n\n');
-      const chip = <span className={styles.cacheToolChip} title={title}>{name}</span>;
-      return <ConceptHelp key={name} doc={`Tool-${name}`}>{chip}</ConceptHelp>;
-    };
-    // MCP / Skill chip 改 hover 弹浮窗看 desc（原 click 弹 Modal 交互太重）。
-    // Antd Popover 默认 trigger='hover' + mouseEnter/Leave delay；overlay maxWidth 480
-    // 避免长描述拉爆视口；`.chipDetailBody` 复用原 Modal 样式（pre-wrap + maxHeight: 60vh 滚动）。
-    const renderChipPopoverContent = (description) => (
-      description
-        ? <div className={styles.chipDetailBody}>{description}</div>
-        : <div className={`${styles.chipDetailBody} ${styles.chipDetailEmpty}`}>{t('ui.noDescription')}</div>
-    );
-    const renderMcpChip = ({ name, fullName, description }) => (
-      <Popover
-        key={fullName}
-        title={fullName}
-        content={renderChipPopoverContent(description)}
-        overlayStyle={{ maxWidth: 480 }}
-        mouseEnterDelay={0.2}
-      >
-        <span className={styles.cacheToolChip}>{name}</span>
-      </Popover>
-    );
-    const renderSkillChip = ({ name, description }) => (
-      <Popover
-        key={name}
-        title={name}
-        content={renderChipPopoverContent(description)}
-        overlayStyle={{ maxWidth: 480 }}
-        mouseEnterDelay={0.2}
-      >
-        <span className={styles.cacheToolChip}>{name}</span>
-      </Popover>
-    );
-
-    const renderGroup = (sectionKey, titleKey, count, defaultCollapsed, body, rightAction = null) => {
-      const state = (this.state._cacheSectionCollapsed || {})[sectionKey];
-      const collapsed = state !== undefined ? !!state : defaultCollapsed;
-      const toggle = () => this.setState(prev => ({
-        _cacheSectionCollapsed: { ...(prev._cacheSectionCollapsed || {}), [sectionKey]: !collapsed },
-      }));
-      return (
-        <div className={styles.cacheSection}>
-          <div className={styles.cacheSectionHeader}>
-            <button type="button" className={styles.cacheSectionTitle} onClick={toggle} aria-expanded={!collapsed}>
-              <span className={styles.cacheSectionArrow}>{collapsed ? '▶' : '▼'}</span>
-              {t(titleKey)} ({count})
-            </button>
-            {rightAction}
-          </div>
-          {!collapsed && body}
-        </div>
-      );
-    };
-
-    const builtinBody = (
-      <div className={styles.toolChipGrid}>{builtin.map(renderBuiltinChip)}</div>
-    );
-
-    const mcpBody = (
-      <div className={styles.toolChipGridVertical}>
-        {Array.from(mcpByServer.entries()).map(([server, tools]) => (
-          <div key={server} className={styles.mcpServerGroup}>
-            <div className={styles.mcpServerName}>{server} ({tools.length})</div>
-            <div className={styles.toolChipGrid}>{tools.map(renderMcpChip)}</div>
-          </div>
-        ))}
-      </div>
-    );
-
-    const skillsBody = (
-      <div className={styles.toolChipGrid}>{skills.map(renderSkillChip)}</div>
-    );
-
-    const skillsAction = (
-      <Button
-        type="primary"
-        size="small"
-        onClick={() => {
-          // 打开 modal 同时关掉 popover（popover zIndex 1030 > Modal 1000 会盖住内容）
-          this.handleOpenSkillsModal();
-        }}
-      >
-        {t('ui.skillManage')}
-      </Button>
-    );
-
-    // 持久记忆区块：始终显示在 popover 中（即使为空，也展示一个空态提示，让用户知道"已加载"）。
-    // 三态：null=loading / false=失败 / { exists, content, dir, indexPath }。
-    // exists:false 也展示 dir 路径，方便用户复制去手工创建/查看。
-    const memData = this.state._memory;
-    // 标题尾部 (N)：与 MCP/Skills 视觉一致。N = entry 内点向 .md 文件的 markdown 链接条数（去重）。
-    // 仅对 [text](file.md) 形式计数；外链/锚点不计。无内容时不显示。
-    const memoryCount = (() => {
-      if (!memData || !memData.exists || !memData.content) return null;
-      const matches = memData.content.match(/\]\(\s*([^)\s]+\.md)(?:\s+"[^"]*")?\s*\)/gi);
-      if (!matches) return 0;
-      const set = new Set();
-      for (const m of matches) {
-        const inner = m.match(/\(\s*([^)\s]+\.md)/i);
-        if (inner) set.add(inner[1].toLowerCase());
-      }
-      return set.size;
-    })();
-    const memoryBody = (() => {
-      if (memData === null) return <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>{t('ui.memoryLoading')}</div>;
-      if (memData === false) return <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>{t('ui.memoryLoadError')}</div>;
-      if (!memData.exists) {
-        return (
-          <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>
-            <div>{t('ui.memoryNotFound')}</div>
-            <div className={styles.memoryDirHint} title={memData.dir}>{memData.dir}</div>
-          </div>
-        );
-      }
-      if (!memData.content || !memData.content.trim()) {
-        return (
-          <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>
-            <div>{t('ui.memoryEmpty')}</div>
-            <div className={styles.memoryDirHint} title={memData.indexPath}>{memData.indexPath}</div>
-          </div>
-        );
-      }
-      return (
-        <div
-          className={styles.memoryMarkdown}
-          onClick={this.handleMemoryLinkClick}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(memData.content) }}
-        />
-      );
-    })();
-
-    const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
-    return (
-      <div className={styles.cachePopover}>
-        <div className={styles.cachePopoverHeader}>
-          <div className={styles.cachePopoverTitle}>
-            <span className={styles.cachePercent} style={{ color: ctxColor }}>{contextPercent}%</span>
-            <span className={styles.cacheCalibrationLabel}>{t('ui.calibrationModelLabel')}</span>
-            <Select
-              size="small"
-              value={this.state.calibrationModel}
-              onChange={this.handleCalibrationModelChange}
-              options={CALIBRATION_MODELS}
-              className={styles.calibrationSelect}
-              popupMatchSelectWidth={false}
-            />
-          </div>
-        </div>
-        <div className={styles.cacheScrollArea}>
-          {hasBuiltin && renderGroup('tools_builtin', 'ui.builtinTools', builtin.length, true, builtinBody)}
-          {hasMcp && (
-            // MCP 工具一进来就要看（常用且量不大），去掉折叠控件走静态标签 + 视觉分组框
-            <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
-              <div className={styles.cacheSectionLabel}>
-                {t('ui.mcpTools')} ({Array.from(mcpByServer.values()).reduce((n, arr) => n + arr.length, 0)})
-              </div>
-              {mcpBody}
-            </div>
-          )}
-          {hasSkills && (
-            // 已载入 Skill 同样去折叠 + 加框；「管理」按钮放标题右侧（space-between + 蓝色 primary）。
-            // skill 数量 >10 黄色提示"浪费 token 幻觉"、>20 红色提示"上下文污染"——插在 label 和 action 之间，
-            // flex:1 填充中间空白。阈值只按展示 chip 数（已排除 builtin）来算，builtin 是系统自带不计。
-            <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
-              <div className={styles.cacheSectionHeader}>
-                <div className={styles.cacheSectionLabel}>
-                  {t('ui.loadedSkills')} ({skills.length})
-                </div>
-                {skills.length > 20 ? (
-                  <Alert
-                    type="error"
-                    showIcon
-                    banner
-                    message={t('ui.skillsWarnPollution')}
-                    style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
-                  />
-                ) : skills.length > 10 ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    banner
-                    message={t('ui.skillsWarnOveruse')}
-                    style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
-                  />
-                ) : null}
-                {skillsAction}
-              </div>
-              {skillsBody}
-            </div>
-          )}
-          {/* 持久记忆区块：与 MCP/Skill 同样的加框样式；空态/加载态/错误态都给出可读提示。 */}
-          <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
-            <div className={styles.cacheSectionLabel}>
-              {t('ui.persistentMemory')}{memoryCount !== null ? ` (${memoryCount})` : ''}
-            </div>
-            {memoryBody}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 渲染明细 Modal（zIndex 1100 跨过 popover 的 1030 —— 不需要先关 popover）。
-  // 内容复用同一个 markdown 渲染管线 + 链接拦截器，明细里点其它 .md 链接会原地切到对应明细
-  // （loadMemoryDetail 走 seq 防止快慢回包乱序）。非 .md / 含 scheme / 绝对路径的 href 一律拒绝。
-  renderMemoryDetailModal() {
-    const detail = this.state._memoryDetail;
-    if (!detail) return null;
-    const { name, content, error, loading } = detail;
-    let body;
-    if (loading) {
-      body = <div className={styles.cachePopoverEmpty}>{t('ui.memoryLoading')}</div>;
-    } else if (error) {
-      body = <div className={styles.cachePopoverEmpty}>{t('ui.memoryLoadError')}: {error}</div>;
-    } else if (!content || !content.trim()) {
-      body = <div className={styles.cachePopoverEmpty}>{t('ui.memoryEmpty')}</div>;
-    } else {
-      body = (
-        <div
-          className={styles.memoryMarkdown}
-          onClick={this.handleMemoryLinkClick}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-        />
-      );
-    }
-    return (
-      <Modal
-        open={true}
-        title={name}
-        onCancel={() => this.setState({ _memoryDetail: null })}
-        footer={null}
-        width={720}
-        zIndex={1100}
-        destroyOnClose
-      >
-        {body}
-      </Modal>
-    );
-  }
 
   renderCacheRebuildStats() {
     const { requests = [] } = this.props;
@@ -1612,6 +1290,9 @@ class AppHeader extends React.Component {
                 }
               }
             }
+            // 记录最后一次有效值（>0），供下次渲染回退时使用。
+            // 抽出 CachePopoverContent 后此 side effect 从子组件挪到父级 IIFE，行为不变。
+            if (contextPercent > 0) this._lastContextPercent = contextPercent;
             // 回退到最后一次有效值，避免闪烁
             if (contextPercent === 0 && this._lastContextPercent > 0) {
               contextPercent = this._lastContextPercent;
@@ -1626,7 +1307,19 @@ class AppHeader extends React.Component {
               </Tag>
             ) : (
               <Popover
-                content={this.state._cachePopoverOpen ? this.renderCacheContentPopover(contextPercent) : <div className={styles.cachePopoverPlaceholder} />}
+                content={this.state._cachePopoverOpen ? (
+                  <CachePopoverContent
+                    requests={requests}
+                    serverCachedContent={serverCachedContent}
+                    contextPercent={contextPercent}
+                    fsSkills={this.state._fsSkills}
+                    memory={this.state._memory}
+                    calibrationModel={this.state.calibrationModel}
+                    onCalibrationModelChange={this.handleCalibrationModelChange}
+                    onOpenMemoryDetail={this.loadMemoryDetail}
+                    onOpenSkillsModal={this.handleOpenSkillsModal}
+                  />
+                ) : <div className={styles.cachePopoverPlaceholder} />}
                 trigger="hover"
                 placement="bottomLeft"
                 overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: '8px 8px' }}
@@ -1807,7 +1500,11 @@ class AppHeader extends React.Component {
             {viewMode === 'raw' ? t('ui.chatMode') : t('ui.rawMode')}
           </Button>
         </Space>
-        {this.renderMemoryDetailModal()}
+        <MemoryDetailModal
+          detail={this.state._memoryDetail}
+          onClose={() => this.setState({ _memoryDetail: null })}
+          onOpenMemoryDetail={this.loadMemoryDetail}
+        />
         <Modal
           title={`${t('ui.userPrompt')} (${this.state.promptData.length}${t('ui.promptCountUnit')})`}
           open={this.state.promptModalVisible}

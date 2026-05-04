@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.6.233 (2026-05-04) — header 血条 popover 抽组件 + iPad/手机 popover 接通 + 手机 chip tooltip 改 Modal + UltraPlan 模板瘦身 + memoryLinkParser 白名单
+
+### header 血条 popover 抽出独立组件 + 三端入口
+
+之前血条 popover 只在 PC AppHeader（hover 触发）。本轮抽出共享组件并接通 iPad / 手机两端，PC 行为不变。
+
+- Refactor (P0 — 新文件 `src/components/CachePopoverContent.jsx` + `src/components/MemoryDetailModal.jsx`): 把 `AppHeader.jsx` 的 `renderCacheContentPopover()` 抽成纯展示函数组件 `<CachePopoverContent />`（接 `requests / serverCachedContent / contextPercent / fsSkills / memory / calibrationModel + onCalibrationModelChange / onOpenMemoryDetail / onOpenSkillsModal` props）；解析缓存（`_lastToolsRef / _lastParsedTools / _lastSkills / _lastChosenForSkills`）改 `useRef` 保持原 class 实例缓存语义；折叠状态用本地 `useState`。`renderMemoryDetailModal()` 抽到 `<MemoryDetailModal />`，AppHeader 与 Mobile 各 mount 一份避免持久记忆条目明细 Modal 在 mobile/iPad 不可达。`AppHeader.jsx` 删除 ~290 行 + 7 个仅模板内用的 import（`extractCachedContent / parseCachedTools / extractLoadedSkills / BUILTIN_SKILL_NAMES / mergeActiveSkills / Alert / renderMarkdown`）；`_lastContextPercent` 从子组件 render-side-effect 上提到父级 IIFE，保持原"只更新有效值"语义。
+- Feature (P0 — `src/components/AppHeader.module.css`): `.cacheScrollArea` `max-height: 450px → calc(100vh - 140px)`；加 `-webkit-overflow-scrolling: touch + overscroll-behavior: contain`，让 PC 弹层接近视口高、iOS 抽屉里也用此组件时不弹性穿透。无 `!important`（项目硬性约束）。
+- Feature (P0 — `src/Mobile.jsx`): iPad 路径（`isPad`）把血条用 antd `<Popover trigger={['click']} open={...}>` 包住（与 QR popover 同 pattern——iPad 触屏 hover/focus 不可靠，不混 `['click','hover']` 否则鼠标 iPad 会与 click-close 打架），content 是 `<CachePopoverContent />`；手机路径（`!isPad`）把 `mobileCtxTag` 升级为可点击 button（`role="button" / tabIndex / aria-label / onKeyDown` Enter+Space），onClick 切换 `mobileCachePanelVisible` 触发新 `mobileCachePanelOverlay` CSS 抽屉（沿用 `mobileGitDiffOverlay` 同 `transform: translateX(-100%) → 0` 模式 + zoom 0.6 / mobile-ios `scale(0.6)` / pad-mode zoom 1）。新增 `_fsSkills / _memory / _memoryDetail` state + `reloadFsSkills / loadMemory / loadMemoryDetail` 三 fetch 方法 + 三 seq 防 workspace 切换乱包污染（与 AppHeader 复制一份；`componentDidUpdate` projectName 变化时作废 + seq++）；`calibrationModel` 同样从 localStorage 引入，`<CachePopoverContent />` 受控 `onCalibrationModelChange`。`mobileContextPercent` 计算从 IIFE 上提到 render 顶部，避免 IIFE 副作用与下方 overlay 共享。**抽 `_closeAllMobileOverlays()` helper** 返回 10 个 mobile*Visible:false（包含新 `mobileCachePanelVisible`），把 9 处互斥 setState（构造器初始化 + `_handleMobileOpenFile` + 8 处 onClick）从 7-8 键散写改成 `{ ...this._closeAllMobileOverlays(), [thisOne]: ... }`，下次新增 overlay 改一处即可。
+- i18n (P1 — `src/i18n.js`): 新增 `ui.openCachePanel`（aria-label）+ `ui.closeCachePanel`（关闭按钮 aria-label），各 18 locale。
+
+### 手机 chip tooltip 偏移修复：改全屏 Modal（PC/iPad 不动）
+
+之前手机抽屉里 MCP / Skill chip 的 hover 描述用 antd Popover，定位经过 `mobileCachePanelInner zoom: 0.6` 的 `getBoundingClientRect` 错位（截图反馈）。
+
+- Fix (P0 — `src/components/CachePopoverContent.jsx`): 引入 `IS_MOBILE_PHONE = isMobile && !isPad`（模块级 const）。`renderMcpChip / renderSkillChip` 在手机分支改成 click 触发 `setChipModal({ title, description })`，组件末尾 mount `<Modal width="92vw" zIndex={1101} destroyOnClose>`——`zIndex 1101 > MemoryDetailModal 1100`，避免两 Modal 同层视觉未定义；Modal 通过 portal 挂到 `document.body` 逃出 zoom 容器，定位回正。PC / iPad 分支保留原 hover Popover（`trigger='hover' + mouseEnterDelay:0.2`）。chip 加 `role="button" / tabIndex / onKeyDown` Enter+Space 键盘可达。
+
+### `parseMemoryLink` 白名单设计 + 黑白名单覆盖加固
+
+将 CachePopoverContent 与 MemoryDetailModal 共用的链接拦截规则统一到 `src/utils/memoryLinkParser.js`，避免双份 paste 漂移。**Discriminated union 返回**（`{ open: name } | { allow: true } | { reject: true }`）让调用方编译期 catch 漏分支。
+
+- Refactor (P0 — 新文件 `src/utils/memoryLinkParser.js` + 双方调用方简化): 16 行 paste 逻辑收到 5 行调用 `parseMemoryLink(href)`。
+- Hardening (P0 — 5 路 review 命中 MED 安全 + P1 设计): 改成**白名单**——任何 scheme（不限于黑名单的 `javascript / data / file / vbscript / blob`）一律 reject，`chrome:` / `chrome-extension:` / `tel:` / `sms:` / `intent:` / `about:` / `ws:` / `MAILTO:`（大小写绕过尝试）/ 任意 `x-custom:` 协议都拦；只放行 `#anchor`（allow）和单段 `.md` basename（open）。`toLowerCase()` 前置防大小写绕过。文件头注释解释 discriminated union 选择理由。
+- Test (P0 — 新文件 `test/memoryLinkParser.test.js`): 44 用例（happy path 6 + anchor 2 + dangerous schemes 含 mixed case 10 + 任意其它 scheme 13 + path traversal 6 + 非 .md / 空 / malformed 7）。
+
+### UltraPlan codeExpert + researchExpert 模板瘦身
+
+5-人 UltraReview 评估认为 codeExpert 改写从 37 行 → 52 行净优化 +0.4，但收益被字数稀释；按 4 项瘦身建议落地。researchExpert 也加 `AskUserQuestion` Pre-requisite。
+
+- Refactor (P1 — `src/utils/ultraplanTemplates.js`): codeExpert：(1) 删 Step 3 二次 `AskUserQuestion`（与 Pre-requisite 合并），后续步骤 4-7 重编号为 3-6；(2) "spawn multiple review agents" → "spawn 2-3 review agents"（量化）；(3) "adopt P0 and high-priority P1 items" → "adopt P0 items, and selectively adopt P1 items when they are concrete and low-risk; defer P2/P3 to backlog"（操作指令更明确）；(4) UltraReview 启动前加 `git diff --quiet && git diff --cached --quiet` 判空跳过空 review；(5) 子目录 git 查找 prefer `git rev-parse --show-toplevel` fall back to recursive lookup（性能优于盲 find）。researchExpert：加 `Pre-requisite: Use AskUserQuestion to clarify the research scope, target audience, and deliverable format...`。
+- Docs sync (P1 — 18 个 `concepts/<lang>/UltraPlan.md` + 2 个 `concepts/<lang>/CustomUltraplanExpert.md`): 每个 locale `<textarea>` 块同步成最新 codeExpert + researchExpert prompt 全文（英文，发到 LLM 的内容不需要本地化），16 个之前缺 Raw Templates 段的 locale 文件从 55 行补齐到 156 行。CustomUltraplanExpert.md 之前只有 en + zh，本轮**派 5 个并行翻译 subagent 按语言家族分批翻译** 16 个缺失 locale（保留 `<system-reminder>` xml 块 + Competitive Analyst 示例 code block 英文不译，技术术语 `TeamCreate / ExitPlanMode / webSearch / AskUserQuestion / [SCOPED INSTRUCTION]` 等保留英文，markdown 结构原位）。
+
+### `presetShortcuts` builtin schema 清理
+
+- Cleanup (P3 — `src/utils/builtinPresets.js`): 删除 `version` 字段。当前消费方（`PresetModal.jsx` / `ChatView.jsx` / `TerminalPanel.jsx`）从未读取 version——i18n key 在 `t()` 渲染时间接生效已经覆盖了"文案变更"自动同步到存量用户。如果未来真要做"server-driven 模板结构升级"（不只改文案），届时再实现 version-based update 机制（backlog）。
+
+### Cross-cutting
+
+- 5-人 `UltraReview` 团队（requirements / defensive / architect / quality / perf-security）跑两轮：第一轮抽组件 + 三端接通后采纳 P1 两条（memoryLinkParser + URI 加固）+ P2 1 条（删 version 死字段）；第二轮 chip Modal + 模板瘦身后再采纳 P1 两条（白名单升级 + zIndex 1100→1101）。
+- `npm run build` ✓ + `npm run test` 1464/1464 ✓（+44 个 memoryLinkParser case）。
+
 ## 1.6.232 (2026-05-03) — terminal 写缓冲 O(n²) 修复 + 持久记忆 popover + cssVar 回退 / 热路径 Tooltip 原生化
 
 ### 性能优化（terminal 写缓冲 / cssVar 回退 / 热路径 Tooltip 原生化 / scrollHeight 缓存）

@@ -1,0 +1,322 @@
+import React, { useState, useRef } from 'react';
+import { Popover, Select, Button, Alert, Modal } from 'antd';
+import { extractCachedContent, parseCachedTools, extractLoadedSkills } from '../utils/helpers';
+import { BUILTIN_SKILL_NAMES, mergeActiveSkills } from '../utils/skillsParser';
+import { t } from '../i18n';
+import { renderMarkdown } from '../utils/markdown';
+import { isMobile, isPad } from '../env';
+import ConceptHelp from './ConceptHelp';
+import { parseMemoryLink } from '../utils/memoryLinkParser';
+import appConfig from '../config.json';
+import styles from './AppHeader.module.css';
+
+// 手机（非 iPad）：chip 描述用 click → 全屏 Modal 而非 hover Popover。
+// 抽屉容器有 zoom: 0.6 缩放，antd Popover 的 getBoundingClientRect 在 zoom 容器内会错位；
+// Modal portal 到 document.body 逃出 zoom 容器，定位恢复正确。PC/iPad 不受影响（zoom: 1）。
+const IS_MOBILE_PHONE = isMobile && !isPad;
+
+const CALIBRATION_MODELS = appConfig.calibrationModels;
+
+// 头部 token 血条 hover/click 弹层的纯展示组件。父级负责：
+// (a) 用 isOpen 条件挂载（父级把 popover/抽屉的 open 状态映射到是否渲染本组件 vs 占位 div），
+//     以保留 commit 0914cc5 的"hover 才解析 200 条 system-reminder"性能修复；
+// (b) 提供 fsSkills / memory 数据 props（父级 fetch + state 三态契约 null/false/数据）；
+// (c) 透传 onOpenMemoryDetail（父级 mount 一份 MemoryDetailModal 处理）和 onOpenSkillsModal；
+// (d) calibrationModel 受控（父级要用同一份值做 contextPercent 计算 / 校准）。
+// 解析缓存（_lastTools*/_lastSkills/_lastChosen*）通过 useRef 保留在组件实例内，与 AppHeader 旧版同语义。
+export default function CachePopoverContent({
+  requests = [],
+  serverCachedContent,
+  contextPercent = 0,
+  fsSkills,
+  memory,
+  calibrationModel = 'auto',
+  onCalibrationModelChange,
+  onOpenMemoryDetail,
+  onOpenSkillsModal,
+}) {
+  const [sectionCollapsed, setSectionCollapsed] = useState({});
+  // 手机端 chip 描述 Modal 的当前条目；null = 关。{ title, description } 形态由 chip render 函数填入。
+  const [chipModal, setChipModal] = useState(null);
+
+  const lastToolsRef = useRef(null);
+  const lastParsedTools = useRef(null);
+  const lastSkillsRef = useRef(null);
+  const lastChosenForSkills = useRef(null);
+
+  const cached = serverCachedContent || extractCachedContent(requests);
+
+  // tools 数组引用未变时复用上次解析结果
+  const toolsArr = Array.isArray(cached?.tools) ? cached.tools : null;
+  let parsed;
+  if (toolsArr === lastToolsRef.current && lastParsedTools.current) {
+    parsed = lastParsedTools.current;
+  } else {
+    parsed = parseCachedTools(toolsArr);
+    lastToolsRef.current = toolsArr;
+    lastParsedTools.current = parsed;
+  }
+  const { builtin, mcpByServer } = parsed;
+  const hasBuiltin = builtin.length > 0;
+  const hasMcp = mcpByServer.size > 0;
+
+  // skills 缓存：以「被选中的 MainAgent 请求引用」为 key，live-tail 追加时不重扫
+  const chosenForSkills = (() => {
+    if (!Array.isArray(requests) || requests.length === 0) return null;
+    if (requests.length === 1) return requests[0];
+    for (let i = requests.length - 1; i >= 0; i--) {
+      const r = requests[i];
+      if (r && r.type !== 'teammate' && r.type !== 'subAgent') return r;
+    }
+    return null;
+  })();
+  if (chosenForSkills !== lastChosenForSkills.current) {
+    lastSkillsRef.current = extractLoadedSkills(requests);
+    lastChosenForSkills.current = chosenForSkills;
+  }
+  const historicalSkills = (lastSkillsRef.current || []).filter(s => !BUILTIN_SKILL_NAMES.has(s.name));
+  const mergedSkills = mergeActiveSkills(fsSkills, lastSkillsRef.current || []);
+  const skills = mergedSkills !== null ? mergedSkills : historicalSkills;
+  const hasSkills = skills.length > 0;
+
+  const renderBuiltinChip = ({ name, description }) => {
+    const title = [name, description].filter(Boolean).join('\n\n');
+    const chip = <span className={styles.cacheToolChip} title={title}>{name}</span>;
+    return <ConceptHelp key={name} doc={`Tool-${name}`}>{chip}</ConceptHelp>;
+  };
+  const renderChipPopoverContent = (description) => (
+    description
+      ? <div className={styles.chipDetailBody}>{description}</div>
+      : <div className={`${styles.chipDetailBody} ${styles.chipDetailEmpty}`}>{t('ui.noDescription')}</div>
+  );
+  // PC / iPad：hover 触发 antd Popover；手机：click 触发全屏 Modal（避开 zoom 容器导致的 Popover 定位错位）。
+  const renderMcpChip = ({ name, fullName, description }) => {
+    if (IS_MOBILE_PHONE) {
+      return (
+        <span
+          key={fullName}
+          className={styles.cacheToolChip}
+          role="button"
+          tabIndex={0}
+          onClick={() => setChipModal({ title: fullName, description })}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setChipModal({ title: fullName, description }); } }}
+        >
+          {name}
+        </span>
+      );
+    }
+    return (
+      <Popover
+        key={fullName}
+        title={fullName}
+        content={renderChipPopoverContent(description)}
+        overlayStyle={{ maxWidth: 480 }}
+        mouseEnterDelay={0.2}
+      >
+        <span className={styles.cacheToolChip}>{name}</span>
+      </Popover>
+    );
+  };
+  const renderSkillChip = ({ name, description }) => {
+    if (IS_MOBILE_PHONE) {
+      return (
+        <span
+          key={name}
+          className={styles.cacheToolChip}
+          role="button"
+          tabIndex={0}
+          onClick={() => setChipModal({ title: name, description })}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setChipModal({ title: name, description }); } }}
+        >
+          {name}
+        </span>
+      );
+    }
+    return (
+      <Popover
+        key={name}
+        title={name}
+        content={renderChipPopoverContent(description)}
+        overlayStyle={{ maxWidth: 480 }}
+        mouseEnterDelay={0.2}
+      >
+        <span className={styles.cacheToolChip}>{name}</span>
+      </Popover>
+    );
+  };
+
+  const renderGroup = (sectionKey, titleKey, count, defaultCollapsed, body, rightAction = null) => {
+    const state = sectionCollapsed[sectionKey];
+    const collapsed = state !== undefined ? !!state : defaultCollapsed;
+    const toggle = () => setSectionCollapsed(prev => ({ ...prev, [sectionKey]: !collapsed }));
+    return (
+      <div className={styles.cacheSection}>
+        <div className={styles.cacheSectionHeader}>
+          <button type="button" className={styles.cacheSectionTitle} onClick={toggle} aria-expanded={!collapsed}>
+            <span className={styles.cacheSectionArrow}>{collapsed ? '▶' : '▼'}</span>
+            {t(titleKey)} ({count})
+          </button>
+          {rightAction}
+        </div>
+        {!collapsed && body}
+      </div>
+    );
+  };
+
+  // 拦截记忆区块内的 <a> 点击：仅对单段 .md basename 触发明细 Modal；规则统一在 parseMemoryLink。
+  const handleMemoryLinkClick = (e) => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    const hrefRaw = a.getAttribute('href') || '';
+    const r = parseMemoryLink(hrefRaw);
+    if (r.allow) return;
+    e.preventDefault();
+    if (r.open) onOpenMemoryDetail?.(r.open);
+  };
+
+  const builtinBody = (
+    <div className={styles.toolChipGrid}>{builtin.map(renderBuiltinChip)}</div>
+  );
+  const mcpBody = (
+    <div className={styles.toolChipGridVertical}>
+      {Array.from(mcpByServer.entries()).map(([server, tools]) => (
+        <div key={server} className={styles.mcpServerGroup}>
+          <div className={styles.mcpServerName}>{server} ({tools.length})</div>
+          <div className={styles.toolChipGrid}>{tools.map(renderMcpChip)}</div>
+        </div>
+      ))}
+    </div>
+  );
+  const skillsBody = (
+    <div className={styles.toolChipGrid}>{skills.map(renderSkillChip)}</div>
+  );
+
+  const skillsAction = onOpenSkillsModal ? (
+    <Button type="primary" size="small" onClick={() => onOpenSkillsModal()}>
+      {t('ui.skillManage')}
+    </Button>
+  ) : null;
+
+  // 记忆区块标题尾部 (N)：仅对 [text](file.md) 形式计数；外链/锚点不计
+  const memoryCount = (() => {
+    if (!memory || !memory.exists || !memory.content) return null;
+    const matches = memory.content.match(/\]\(\s*([^)\s]+\.md)(?:\s+"[^"]*")?\s*\)/gi);
+    if (!matches) return 0;
+    const set = new Set();
+    for (const m of matches) {
+      const inner = m.match(/\(\s*([^)\s]+\.md)/i);
+      if (inner) set.add(inner[1].toLowerCase());
+    }
+    return set.size;
+  })();
+
+  const memoryBody = (() => {
+    if (memory === null) return <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>{t('ui.memoryLoading')}</div>;
+    if (memory === false) return <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>{t('ui.memoryLoadError')}</div>;
+    if (!memory.exists) {
+      return (
+        <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>
+          <div>{t('ui.memoryNotFound')}</div>
+          <div className={styles.memoryDirHint} title={memory.dir}>{memory.dir}</div>
+        </div>
+      );
+    }
+    if (!memory.content || !memory.content.trim()) {
+      return (
+        <div className={`${styles.cachePopoverEmpty} ${styles.memoryStatus}`}>
+          <div>{t('ui.memoryEmpty')}</div>
+          <div className={styles.memoryDirHint} title={memory.indexPath}>{memory.indexPath}</div>
+        </div>
+      );
+    }
+    return (
+      <div
+        className={styles.memoryMarkdown}
+        onClick={handleMemoryLinkClick}
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.content) }}
+      />
+    );
+  })();
+
+  const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
+  return (
+    <div className={styles.cachePopover}>
+      <div className={styles.cachePopoverHeader}>
+        <div className={styles.cachePopoverTitle}>
+          <span className={styles.cachePercent} style={{ color: ctxColor }}>{contextPercent}%</span>
+          <span className={styles.cacheCalibrationLabel}>{t('ui.calibrationModelLabel')}</span>
+          <Select
+            size="small"
+            value={calibrationModel}
+            onChange={onCalibrationModelChange}
+            options={CALIBRATION_MODELS}
+            className={styles.calibrationSelect}
+            popupMatchSelectWidth={false}
+          />
+        </div>
+      </div>
+      <div className={styles.cacheScrollArea}>
+        {hasBuiltin && renderGroup('tools_builtin', 'ui.builtinTools', builtin.length, true, builtinBody)}
+        {hasMcp && (
+          <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
+            <div className={styles.cacheSectionLabel}>
+              {t('ui.mcpTools')} ({Array.from(mcpByServer.values()).reduce((n, arr) => n + arr.length, 0)})
+            </div>
+            {mcpBody}
+          </div>
+        )}
+        {hasSkills && (
+          <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
+            <div className={styles.cacheSectionHeader}>
+              <div className={styles.cacheSectionLabel}>
+                {t('ui.loadedSkills')} ({skills.length})
+              </div>
+              {skills.length > 20 ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  banner
+                  message={t('ui.skillsWarnPollution')}
+                  style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
+                />
+              ) : skills.length > 10 ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  banner
+                  message={t('ui.skillsWarnOveruse')}
+                  style={{ marginRight: 'auto', padding: '2px 8px', fontSize: 11 }}
+                />
+              ) : null}
+              {skillsAction}
+            </div>
+            {skillsBody}
+          </div>
+        )}
+        <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
+          <div className={styles.cacheSectionLabel}>
+            {t('ui.persistentMemory')}{memoryCount !== null ? ` (${memoryCount})` : ''}
+          </div>
+          {memoryBody}
+        </div>
+      </div>
+      {/* 手机 chip 描述 Modal：portal 到 document.body 逃出 mobileCachePanelInner zoom: 0.6 容器。
+          zIndex 1101 比 MemoryDetailModal (1100) 高 1，避免两者同时打开时视觉层级未定义。 */}
+      {chipModal && (
+        <Modal
+          open={true}
+          title={chipModal.title}
+          onCancel={() => setChipModal(null)}
+          footer={null}
+          width="92vw"
+          zIndex={1101}
+          destroyOnClose
+        >
+          {chipModal.description
+            ? <div className={styles.chipDetailBody}>{chipModal.description}</div>
+            : <div className={`${styles.chipDetailBody} ${styles.chipDetailEmpty}`}>{t('ui.noDescription')}</div>}
+        </Modal>
+      )}
+    </div>
+  );
+}

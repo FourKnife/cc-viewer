@@ -461,6 +461,84 @@
   transform-origin: top left;
 }
 
+/* ─── 血条 cache popover 抽屉 overlay（手机模式：点击血条划出）─── */
+.mobileCachePanelOverlay {
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  transition: transform 0.3s ease;
+  z-index: 100;
+  background: var(--bg-base-alt);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobileCachePanelOverlayVisible {
+  transform: translateX(0);
+}
+
+.mobileCachePanelInner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  zoom: 0.6;
+}
+
+:global(html.mobile-ios) .mobileCachePanelInner {
+  zoom: 1;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% / 0.6);
+  height: calc(100% / 0.6);
+  transform: scale(0.6);
+  transform-origin: top left;
+}
+
+.mobileCachePanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-secondary);
+  background: var(--bg-elevated);
+}
+
+.mobileCachePanelTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileCachePanelClose {
+  background: none;
+  border: none;
+  color: var(--text-light);
+  padding: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobileCachePanelClose:hover {
+  color: var(--text-primary);
+}
+
+.mobileCachePanelBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 8px;
+}
+
 /* ─── iPad/Pad 模式：取消 0.6 缩放，保持 PC 比例 ─── */
 :global(html.pad-mode) .mobileChatInner {
   zoom: 1;
@@ -469,6 +547,9 @@
   zoom: 1;
 }
 :global(html.pad-mode) .mobileFileExplorerInner {
+  zoom: 1;
+}
+:global(html.pad-mode) .mobileCachePanelInner {
   zoom: 1;
 }
 

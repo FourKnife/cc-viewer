@@ -572,8 +572,13 @@
 }
 
 .cacheScrollArea {
-  max-height: 450px;
+  /* 弹层尽量贴近视口高度（扣除 header ~30px / popover overlayInner padding 16 / 上下余量）。
+     antd Popover 默认 autoAdjustOverflow 仍会把超出视口的部分顶回来，矮窗口下不会贴边溢出。 */
+  max-height: calc(100vh - 140px);
   overflow-y: auto;
+  /* iOS 抽屉里也用此组件：开启原生惯性滚动，避免 body 弹性滚动穿透。 */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .cachePopoverTitle {
