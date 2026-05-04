@@ -518,6 +518,29 @@
   color: var(--color-primary-lighter);
 }
 
+.viewRequestIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  color: var(--text-disabled);
+  cursor: pointer;
+  margin-left: 6px;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.viewRequestIcon:hover {
+  color: var(--color-primary-lighter);
+}
+
+.viewRequestIcon svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
 /* === User-selection question === */
 
 .optionList {

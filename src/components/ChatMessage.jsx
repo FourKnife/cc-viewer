@@ -23,6 +23,14 @@ import styles from './ChatMessage.module.css';
 
 const { Text } = Typography;
 
+function ViewRequestIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" width="12" height="12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path fill="currentColor" d="M738.133333 580.266667c-17.066667-8.533333-38.4 0-38.4 21.333333v85.333333H268.8c-123.733333 0-200.533333-42.666667-200.533333-42.666666s21.333333 170.666667 200.533333 170.666666h430.933333v85.333334c0 21.333333 21.333333 34.133333 38.4 21.333333l204.8-149.333333c17.066667-8.533333 17.066667-34.133333 0-42.666667l-204.8-149.333333zM285.866667 443.733333c17.066667 8.533333 38.4 0 38.4-21.333333v-85.333333h430.933333c123.733333 0 200.533333 42.666667 200.533333 42.666666s-21.333333-170.666667-200.533333-170.666666H324.266667v-85.333334c0-21.333333-21.333333-34.133333-38.4-21.333333L81.066667 251.733333c-17.066667 8.533333-17.066667 34.133333 0 42.666667l204.8 149.333333z" />
+    </svg>
+  );
+}
+
 function ChatImage({ src, alt, fallbackText }) {
   const [failed, setFailed] = React.useState(false);
   const [lightboxOpen, setLightboxOpen] = React.useState(false);
@@ -80,10 +88,21 @@ function formatCacheK(n) {
 }
 
 const AssistantLabel = React.memo(function AssistantLabel({ name, extra, timeStr, requestIndex, onViewRequest, cacheTotalTokens, showFullToolContent }) {
+  const useIcon = !showFullToolContent;
   const viewBtn = (requestIndex != null && onViewRequest) ? (
-    <span className={styles.viewRequestBtn} onClick={(e) => { e.stopPropagation(); onViewRequest(requestIndex); }}>
-      {t('ui.viewRequest')}
-    </span>
+    useIcon ? (
+      <span
+        className={styles.viewRequestIcon}
+        title={t('ui.viewRequest')}
+        onClick={(e) => { e.stopPropagation(); onViewRequest(requestIndex); }}
+      >
+        <ViewRequestIcon />
+      </span>
+    ) : (
+      <span className={styles.viewRequestBtn} onClick={(e) => { e.stopPropagation(); onViewRequest(requestIndex); }}>
+        {t('ui.viewRequest')}
+      </span>
+    )
   ) : null;
   const showCache = showFullToolContent && cacheTotalTokens != null;
   const cacheStr = showCache ? formatCacheK(cacheTotalTokens) : '';
@@ -137,6 +156,7 @@ class ChatMessage extends React.Component {
       p.activePlanPrompt !== n.activePlanPrompt || p.activeDangerousPrompt !== n.activeDangerousPrompt ||
       p.activePtyPlanId !== n.activePtyPlanId ||
       p.requestIndex !== n.requestIndex || p.cacheTotalTokens !== n.cacheTotalTokens || p.label !== n.label || p.isTeammate !== n.isTeammate ||
+      p.isHistoryLog !== n.isHistoryLog ||
       p.userProfile !== n.userProfile || p.modelInfo !== n.modelInfo ||
       p.resultText !== n.resultText || p.toolName !== n.toolName ||
       p.onViewRequest !== n.onViewRequest || p.onOpenFile !== n.onOpenFile ||
@@ -165,13 +185,28 @@ class ChatMessage extends React.Component {
     try {
       const d = new Date(ts);
       const pad = n => String(n).padStart(2, '0');
-      return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      const { showFullToolContent, isHistoryLog } = this.props;
+      const compact = !showFullToolContent && !isHistoryLog;
+      const hms = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      if (compact) return hms;
+      return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hms}`;
     } catch { return null; }
   }
 
   renderViewRequestBtn() {
-    const { requestIndex, onViewRequest } = this.props;
+    const { requestIndex, onViewRequest, showFullToolContent } = this.props;
     if (requestIndex == null || !onViewRequest) return null;
+    if (!showFullToolContent) {
+      return (
+        <span
+          className={styles.viewRequestIcon}
+          title={t('ui.viewRequest')}
+          onClick={(e) => { e.stopPropagation(); onViewRequest(requestIndex); }}
+        >
+          <ViewRequestIcon />
+        </span>
+      );
+    }
     return (
       <span className={styles.viewRequestBtn} onClick={(e) => { e.stopPropagation(); onViewRequest(requestIndex); }}>
         {t('ui.viewRequest')}

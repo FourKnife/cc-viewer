@@ -1,5 +1,72 @@
 # Changelog
 
+## 1.6.234 (2026-05-05)
+
+- perf(interceptor): SSE 流式累积延迟物化（消除 V8 ConsString 多次 O(n) 拷贝）
+- feat(chat): live 模式 compact 时间戳 + view-request 图标按钮
+- fix(server/sse): /events 默认窗口 + 全 SSE 写循环 backpressure
+
+---
+
+## perf(interceptor): SSE 流式累积延迟物化（消除 V8 ConsString 多次 O(n) 拷贝）
+
+### 问题
+
+`interceptor.js` 在 SSE 流读取循环里用 `streamedContent += chunk` 把每个 chunk 追加到字符串。V8 在拼接长字符串时会构造 ConsString 树，但 `.length` / `.split` / `.slice` 等读取操作会触发 flatten，把整棵树拷成线性字符串——长会话单流 80+ MB 时这意味着每次 `streamedContent.length`（每个 chunk 都要算 `bigChunk` 阈值）都跑一次 O(n) 拷贝，最终累积成 O(n²)。
+
+### 方案
+
+`streamedChunks: string[]` 累积 + `streamedContentLen` 单独追踪长度；流结束时一次性 `streamedChunks.join('')` 物化为 `fullContent`，下游 `split('\n\n')` / 错误兜底 `slice(0, 1000)` 都用 `fullContent`。`bigChunk` 阈值改用 `streamedContentLen - liveLastFlushBytes`，热路径完全不读字符串。错误路径同步清空 `streamedChunks` 和 `streamedContentLen`。
+
+### 后果
+
+- 长会话单 SSE 流物化次数从 N（每 chunk）降到 1（流结束）；数十 MB 流的 CPU 时间显著下降。
+- 行为不变：组装失败兜底仍是前 1000 字符，logging 字段保持原 schema。
+
+## feat(chat): live 模式 compact 时间戳 + view-request 图标按钮
+
+### 问题
+
+实时 CLI / SDK 会话面板里，每条消息头都用 "MM-DD HH:MM:SS" + "查看请求" 文字按钮。一行宽信息密度低、视觉噪音大；同一天的会话根本不需要看到 `MM-DD`。但浏览本地历史日志（跨天回看）时仍需要日期段。
+
+### 方案
+
+- `ChatMessage` 新增 `isHistoryLog` prop。`formatTs` 在 `!showFullToolContent && !isHistoryLog` 时输出紧凑 `HH:MM:SS`，否则保留 `MM-DD HH:MM:SS`。
+- `!showFullToolContent` 时把"查看请求"文字按钮替换为 12px SVG 图标（`.viewRequestIcon`），保留 `title` tooltip 与 hover 高亮。`AssistantLabel` 与 `renderViewRequestBtn` 两条路径都改。
+- `ChatView` 新增 `_getIsHistoryLog()`（`!cliMode && !sdkMode`），在所有 `ChatMessage` / `TeamModal` 调用点统一注入；`TeamModal` 接收并透传给内部所有 ChatMessage。
+- `shouldComponentUpdate` 加入 `isHistoryLog` 比较，prop 变化能触发重渲。
+
+### 后果
+
+- 实时 live 面板时间戳从 14 字符缩到 8 字符；图标按钮释放出"查看请求"4 个字的横向空间，长 label 不再换行。
+- 历史日志面板（`ccv` 浏览旧 jsonl）行为完全不变。
+
+## fix(server/sse): /events 默认窗口 + 全 SSE 写循环 backpressure
+
+### 问题
+
+长会话下 desktop bare `/events` 会把整段日志一次性流回浏览器（实测单流 23–86 MB），渲染进程 OOM 触发 Chrome "错误代码 5"——刷新即可继续 work，因为死的是浏览器 tab 而不是 cc-viewer 进程。同时 `lib/log-watcher.js` 的 `sendToClients` / `sendEventToClients` 与轮转处理器裸 `client.write` 都不看返回值，慢客户端撑大 Node 写缓冲、dead client 不出列，Node RSS 反复顶到 2 GB 量级、Socket 句柄长期高于 `sse+wss` 6–24 个。
+
+### 方案
+
+- **`/events` bare 请求**（无 `since`/`limit`/`cc`）默认套 `DEFAULT_EVENTS_LIMIT = 1000`，复用 `streamRawEntriesAsync` 已有的 checkpoint 对齐切片 + `load_start.{hasMore,oldestTs}`，前端"加载更早会话"按钮（`ChatView.jsx`）自动接管。显式 `?limit=0` 保留全量加载（power-user 逃生口）。
+- **`lib/log-watcher.js`** `sendToClients` / `sendEventToClients` / 新 `sendChunkToClients` 走统一 `_safeSseWrite`：`destroyed` / `!writable` / `write` throw 立即剔除客户端；`write` 返 false 后超过 5 s 未 drain 也剔除并 `end()`；倒序 `for` 循环规避 splice 遍历问题。
+- **轮转处理器** 3 处裸 `clients.forEach(client.write)` 改用 wrapper（`load_start` / `load_chunk` segment / `load_end`）。
+- **`streamRawEntriesAsync`** Pass 2 单行 `await onRawEntry(raw)`（向后兼容同步 callback），让 `/events` 初始重放在写缓冲满时 await drain（5 s 超时 / close / error 任一 fulfill）。
+- **`/events`** `req.on('close')` 之外增加 `res.on('close'|'error')` 兜底清理，保证幽灵 res 不残留在 `clients` 数组里。
+
+### 后果
+
+- desktop 长会话浏览器 renderer OOM 消除；socket 句柄数贴齐 `sse+wss`，不再持续超出 6–24 个。
+- 已知 trade-off：desktop reconnect 后 `state.requests` 仅含最新 1000 条，老条目从内存清出，需手动点"加载更早"补齐——比直接 crash 强；mobile `?since=` 增量路径不受影响；`?limit=0` 仍可拿全量。
+- `/api/requests` 多一个 microtask checkpoint per entry（`await onRawEntry` 副作用），实测开销可忽略；其裸 `res.write` 仍是 P1 backlog，下一波再处理。
+
+### 测试
+
+`test/events-backpressure.test.js`（新增）单文件覆盖：
+- A 默认窗口：bare `/events` ≤ 1000 + `hasMore=true` + `oldestTs` 非空；`?limit=0` 全量；`?limit=300` 显式；`?since=...` 走 since 路径不被截断；事件顺序断言。
+- B SSE 写：mock client write false 5 s 后被剔除；mock client write throw 立即剔除；mock client `destroyed=true` 立即剔除；mock client write false → drain 后 `_sseBackpressureSince` 重置；正常 client 不受影响。
+
 ## Unreleased — SettingsContext 重构（消除 `ccv-presets-changed` 双驱动）
 
 ### 问题

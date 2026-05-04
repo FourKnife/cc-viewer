@@ -186,6 +186,13 @@ export function initPostLaunch() {
 // Global POST body size limit (10MB) to prevent OOM from malicious/buggy clients
 const MAX_POST_BODY = 10 * 1024 * 1024;
 
+// /events 默认重放窗口：bare 请求（无 since、无 limit、无 cc）时使用，
+// 防止长会话把数十 MB 历史一次性灌进浏览器导致 renderer OOM。
+// 用户显式 ?limit=0 可恢复全量加载（power-user 逃生口）。
+const DEFAULT_EVENTS_LIMIT = 1000;
+// SSE 单客户端 backpressure 容忍上限：连续未排空 > 此时长则视为 dead 客户端剔除。
+const SSE_BACKPRESSURE_TIMEOUT_MS = 5000;
+
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -964,26 +971,57 @@ async function handleRequest(req, res) {
     const projectMatch = !projectParam || projectParam === (_projectName || '');
     const useIncremental = !!(sinceParam && ccParam > 0 && projectMatch && !isNaN(new Date(sinceParam).getTime()));
 
-    // 分页参数：移动端首次加载传 limit=200，与 since 互斥
-    const limitParam = parseInt(parsedUrl.searchParams.get('limit'), 10) || 0;
-    const useLimit = !useIncremental && limitParam > 0;
+    // 分页参数：
+    // - mobile 首次加载传 ?limit=200
+    // - bare desktop 请求（无任何 query 参数）默认套 DEFAULT_EVENTS_LIMIT
+    // - 显式 ?limit=0 表示"我要全量"（保留旧行为入口）
+    const limitParamRaw = parsedUrl.searchParams.get('limit');
+    const limitParamGiven = limitParamRaw !== null;
+    const limitParamNum = parseInt(limitParamRaw, 10);
+    let effectiveLimit = 0;
+    if (!useIncremental) {
+      if (limitParamGiven) {
+        effectiveLimit = Number.isFinite(limitParamNum) && limitParamNum > 0 ? limitParamNum : 0;
+      } else {
+        effectiveLimit = DEFAULT_EVENTS_LIMIT;
+      }
+    }
+    const useLimit = effectiveLimit > 0;
 
     // KV-Cache / context_window 追踪（扫描全量条目，不受 since 过滤影响）
     let latestKvCache = null;
     let latestContextWindow = null;
     let pushedContextWindow = false;
 
-    await streamRawEntriesAsync(LOG_FILE, (raw) => {
+    await streamRawEntriesAsync(LOG_FILE, async (raw) => {
       // 直接发送原始 JSON 字符串，不做 parse/reconstruct/stringify
       // ExitPlanMode V2 空 input 的条目按需补全 plan / planFilePath，其它原样透传
+      if (res.destroyed || !res.writable) return;
       const out = enrichRawIfNeeded(raw);
       // SSE data 字段不允许裸换行，去除 pretty-printed JSON 的换行
-      res.write('event: load_chunk\ndata: [');
-      res.write(out.includes('\n') ? out.replace(/\n/g, '') : out);
-      res.write(']\n\n');
+      // 写入路径整体 try-catch 兜底：连接在 res.write 之间被对端 RST/destroy 时不至于
+      // 把 EPIPE 抛穿 async callback；res.on('close'|'error') 已会做 clients 数组清理。
+      let drained = true;
+      try {
+        res.write('event: load_chunk\ndata: [');
+        drained = res.write(out.includes('\n') ? out.replace(/\n/g, '') : out);
+        res.write(']\n\n');
+      } catch {
+        return;
+      }
+      // 写缓冲满则等 drain（或 close/error/超时任一 fulfill），防止浏览器侧 renderer OOM
+      if (!drained) {
+        await new Promise((resolve) => {
+          const t = setTimeout(resolve, SSE_BACKPRESSURE_TIMEOUT_MS);
+          const done = () => { clearTimeout(t); resolve(); };
+          res.once('drain', done);
+          res.once('close', done);
+          res.once('error', done);
+        });
+      }
     }, {
       since: useIncremental ? sinceParam : undefined,
-      limit: useLimit ? limitParam : undefined,
+      limit: useLimit ? effectiveLimit : undefined,
       onScan: (raw) => {
         // 轻量追踪最新 MainAgent 的 KV-Cache 和 context_window（仅 regex 检测）
         if (raw.includes('"mainAgent":true') || raw.includes('"mainAgent": true')) {
@@ -1048,11 +1086,16 @@ async function handleRequest(req, res) {
     // 这样 watcher 的 sendToClients 不会在 load 阶段向该客户端推送 live entry。
     clients.push(res);
 
-    req.on('close', () => {
+    // req.on('close') 在某些异常断连时不一定立即触发；res 端 close/error 兜底保证
+    // 不会在 clients 数组里留下幽灵 res，防止 sendToClients 后续写入触发慢泄漏。
+    const removeFromClients = () => {
       clearInterval(pingTimer);
       const idx = clients.indexOf(res);
       if (idx !== -1) clients.splice(idx, 1);
-    });
+    };
+    req.on('close', removeFromClients);
+    res.on('close', removeFromClients);
+    res.on('error', removeFromClients);
     return;
   }
 

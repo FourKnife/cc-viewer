@@ -738,7 +738,9 @@ export function setupInterceptor() {
           const originalBody = response.body;
           const reader = originalBody.getReader();
           const decoder = new TextDecoder();
-          let streamedContent = '';
+          // 延迟物化：避免 V8 ConsString 多次 O(n) 拷贝
+          let streamedChunks = [];
+          let streamedContentLen = 0;
 
           // 实时流式：仅对 mainAgent 且 server live-port 已注入时启用
           let liveStreamEnabled = !!_livePort && requestEntry.mainAgent && !_isTeammate;
@@ -801,10 +803,15 @@ export function setupInterceptor() {
                   const { done, value } = await reader.read();
                   if (done) {
                     // flush decoder 残留字节
-                    streamedContent += decoder.decode();
-                    // 流结束，组装完整的消息对象
+                    {
+                      const tail = decoder.decode();
+                      if (tail) { streamedChunks.push(tail); streamedContentLen += tail.length; }
+                    }
+                    // 流结束，组装完整的消息对象。
+                    // 此处一次性 join — 流式累积期间唯一的物化点（错误路径除外）。
+                    const fullContent = streamedChunks.join('');
                     try {
-                      const events = streamedContent.split('\n\n')
+                      const events = fullContent.split('\n\n')
                         .filter(block => block.trim())
                         .map(block => {
                           // SSE 块可能包含多行: event: xxx\ndata: {...}
@@ -830,7 +837,7 @@ export function setupInterceptor() {
 
                       // 直接使用组装后的 message 对象作为 response.body
                       // 如果组装失败（例如非标准 SSE），则使用原始流内容
-                      requestEntry.response.body = assembledMessage || streamedContent;
+                      requestEntry.response.body = assembledMessage || fullContent;
 
 
                       // 移除在途请求标记，保持原始报文
@@ -839,16 +846,18 @@ export function setupInterceptor() {
                       appendFileSync(LOG_FILE, JSON.stringify(requestEntry) + '\n---\n');
                       _commitDeltaState(_deltaOriginalMessagesLength);
                       // Release memory: clear large objects after disk write
-                      streamedContent = '';
+                      streamedChunks = [];
+                      streamedContentLen = 0;
                       requestEntry.response = null;
                       resetStreamingState();
                     } catch (err) {
-                      requestEntry.response.body = streamedContent.slice(0, 1000);
+                      requestEntry.response.body = fullContent.slice(0, 1000);
                       delete requestEntry.inProgress;
                       delete requestEntry.requestId;
                       appendFileSync(LOG_FILE, JSON.stringify(requestEntry) + '\n---\n');
                       _commitDeltaState(_deltaOriginalMessagesLength);
-                      streamedContent = '';
+                      streamedChunks = [];
+                      streamedContentLen = 0;
                       requestEntry.response = null;
                       resetStreamingState();
                     }
@@ -858,7 +867,8 @@ export function setupInterceptor() {
                   streamingState.bytesReceived += value.byteLength;
                   streamingState.chunksReceived++;
                   const chunk = decoder.decode(value, { stream: true });
-                  streamedContent += chunk;
+                  streamedChunks.push(chunk);
+                  streamedContentLen += chunk.length;
                   controller.enqueue(value);
 
                   // 实时流式：增量解析完整的 SSE events 并触发节流 flush
@@ -884,10 +894,10 @@ export function setupInterceptor() {
                     }
                     const now = Date.now();
                     const overdue = (now - liveLastFlushMs) >= 100;
-                    const bigChunk = (streamedContent.length - liveLastFlushBytes) > 16384;
+                    const bigChunk = (streamedContentLen - liveLastFlushBytes) > 16384;
                     if (sawBlockStop || overdue || bigChunk) {
                       liveLastFlushMs = now;
-                      liveLastFlushBytes = streamedContent.length;
+                      liveLastFlushBytes = streamedContentLen;
                       liveFlush();
                     }
                   }
