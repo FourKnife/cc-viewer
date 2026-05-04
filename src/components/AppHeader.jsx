@@ -8,6 +8,7 @@ import { classifyRequest } from '../utils/requestType';
 import { resolveTeammateNames } from '../utils/contentFilter';
 import { t, getLang, setLang } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { SettingsContext } from '../contexts/SettingsContext';
 import ConceptHelp from './ConceptHelp';
 import OpenFolderIcon from './OpenFolderIcon';
 import CachePopoverContent from './CachePopoverContent';
@@ -42,6 +43,8 @@ const LANG_OPTIONS = [
 // countryToFlag 已随地理位置控件一起迁到 src/components/CountryFlag.jsx
 
 class AppHeader extends React.Component {
+  static contextType = SettingsContext;
+
   constructor(props) {
     super(props);
     this.state = { countdownText: '', promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false, cacheHighlightIdx: null, cacheHighlightFading: false, cdnModalVisible: false, cdnUrl: '', cdnLoading: false, calibrationModel: (v => CALIBRATION_MODELS.some(m => m.value === v) ? v : 'auto')(localStorage.getItem('ccv_calibrationModel') || 'auto'), proxyModalVisible: false, editingProxy: null, editForm: { name: '', baseURL: '', apiKey: '', models: '', activeModel: '' }, logDirDraft: null, qrPopoverOpen: false, _skillsModal: { open: false, loading: false, skills: [], error: null, toggling: new Set() },
@@ -66,9 +69,10 @@ class AppHeader extends React.Component {
     fetch(apiUrl('/api/local-url')).then(r => r.json()).then(data => {
       if (data.url) this.setState({ localUrl: data.url });
     }).catch(() => {});
-    fetch(apiUrl('/api/claude-settings')).then(r => r.json()).then(data => {
-      if (data.model) this.setState({ settingsModel: data.model });
-    }).catch(() => {});
+    // claude-settings 由 SettingsProvider 集中 fetch,这里只订阅 Promise 拿 model 字段
+    this.context._claudeSettingsReady.then(data => {
+      if (data && data.model) this.setState({ settingsModel: data.model });
+    });
     // 预热：live-tail 下提前拉一次文件系统 skill，首次打开 popover 就是权威视图而非闪一下历史。
     if (!this.props.isLocalLog) this.reloadFsSkills();
     // ipinfo.io 请求已移到 CountryFlag 组件里
@@ -847,25 +851,24 @@ class AppHeader extends React.Component {
   };
 
   handleTogglePlugin = (name, enabled) => {
-    fetch(apiUrl('/api/preferences')).then(r => r.json()).then(prefs => {
+    // 等 SettingsProvider 完成首次 fetch,避免冷启动 RMW 把已持久化的 disabledPlugins 兜底成 []
+    this.context._prefsReady.then(() => {
+      const prefs = this.context.preferences || {};
       let disabledPlugins = Array.isArray(prefs.disabledPlugins) ? [...prefs.disabledPlugins] : [];
       if (enabled) {
         disabledPlugins = disabledPlugins.filter(n => n !== name);
       } else {
         if (!disabledPlugins.includes(name)) disabledPlugins.push(name);
       }
-      return fetch(apiUrl('/api/preferences'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ disabledPlugins }),
-      });
-    }).then(() => {
-      return fetch(apiUrl('/api/plugins/reload'), { method: 'POST' });
-    }).then(r => {
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    }).then(data => {
-      this.setState({ pluginsList: data.plugins || [], pluginsDir: data.pluginsDir || '' });
+      return this.context.updatePreferences({ disabledPlugins })
+        .then(() => fetch(apiUrl('/api/plugins/reload'), { method: 'POST' }))
+        .then(r => {
+          if (!r.ok) throw new Error(r.status);
+          return r.json();
+        })
+        .then(data => {
+          this.setState({ pluginsList: data.plugins || [], pluginsDir: data.pluginsDir || '' });
+        });
     }).catch(() => {});
   };
 

@@ -9,6 +9,7 @@ import { apiUrl } from '../utils/apiUrl';
 import { isMobile, isIOS, isPad } from '../env';
 import AskQuestionForm from './AskQuestionForm';
 import { ApprovalPortalContext } from './ApprovalPortalContext';
+import { SettingsContext } from '../contexts/SettingsContext';
 import { t } from '../i18n';
 import { tc } from '../utils/tClaude';
 import { isPlanApprovalPrompt } from '../utils/promptClassifier';
@@ -107,6 +108,8 @@ const AssistantLabel = React.memo(function AssistantLabel({ name, extra, timeStr
 
 
 class ChatMessage extends React.Component {
+  static contextType = SettingsContext;
+
   constructor(props) {
     super(props);
     this.state = {
@@ -943,18 +946,13 @@ class ChatMessage extends React.Component {
                       type="primary"
                       ghost
                       className={styles.enableThinkingBtn}
-                      onClick={async (e) => {
+                      onClick={(e) => {
                         e.stopPropagation();
-                        try {
-                          const res = await fetch(apiUrl('/api/claude-settings'), {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ showThinkingSummaries: true }),
+                        this.context.updateClaudeSettings({ showThinkingSummaries: true })
+                          .then(data => {
+                            if (data) message.success(tc('ui.enableThinkingSummariesTip'));
+                            else message.error('Failed to save setting');
                           });
-                          if (res.ok) {
-                            message.success(tc('ui.enableThinkingSummariesTip'));
-                          }
-                        } catch { message.error('Failed to save setting'); }
                       }}
                     >
                       {t('ui.enableThinkingSummaries')}

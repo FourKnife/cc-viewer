@@ -5,7 +5,7 @@ import { isMobile, isPad } from './env';
 import WorkspaceList from './components/WorkspaceList';
 import OpenFolderIcon from './components/OpenFolderIcon';
 import { t, getLang, setLang } from './i18n';
-import { setClaudeConfigDir } from './utils/tClaude';
+import { SettingsContext } from './contexts/SettingsContext';
 import { formatTokenCount, filterRelevantRequests, isRelevantRequest, appendCacheLossMap, extractCachedContent } from './utils/helpers';
 import { isMainAgent, isPostClearCheckpoint } from './utils/contentFilter';
 import { apiUrl } from './utils/apiUrl';
@@ -26,8 +26,14 @@ export const OPTIMISTIC_CLEAR_PERCENT = 5;
 /**
  * 共享基类：包含 PC 和 Mobile 通用的状态管理、SSE 通信、数据处理、偏好设置等逻辑。
  * 子类 App (PC) 和 Mobile 各自实现 render() 方法。
+ *
+ * settings 数据(claude-settings + preferences)集中由 SettingsContext 提供;
+ * setLang / setClaudeConfigDir 这两个全局副作用已搬到 SettingsProvider 的 fetch 回调。
+ * AppBase 仍保留本地 state 副本用于即时 UI 反馈,POST 写入走 this.context.updatePreferences。
  */
 class AppBase extends React.Component {
+  static contextType = SettingsContext;
+
   constructor(props) {
     super(props);
     // 从 localStorage 恢复缓存倒计时
@@ -150,6 +156,18 @@ class AppBase extends React.Component {
     this._sseSlimmer = null; this._sseReconstructor = null;
   }
 
+  // 给子组件(ChatView / TerminalPanel)一次性注入 SettingsContext 的所有字段。
+  // 不能直接给它们绑 contextType — 它们已绑 TerminalWsContext,class 一次只能一个。
+  _settingsProps() {
+    const ctx = this.context || {};
+    return {
+      claudeSettings: ctx.claudeSettings,
+      preferences: ctx.preferences,
+      onUpdatePreferences: ctx.updatePreferences,
+      onUpdateClaudeSettings: ctx.updateClaudeSettings,
+    };
+  }
+
   /**
    * 单次遍历完成 timestamp 赋值 + session 构建 + 过滤 + index 重建。
    * 合并 assignMessageTimestamps + buildSessionsFromEntries + filterRelevantRequests + _rebuildRequestIndex，
@@ -226,11 +244,13 @@ class AppBase extends React.Component {
   }
 
   componentDidMount() {
-    // 获取 claude settings（showThinkingSummaries 等）
-    fetch(apiUrl('/api/claude-settings')).then(r => r.json()).then(data => {
+    // claude-settings / preferences fetch 由 SettingsProvider 集中触发;
+    // 这里仅订阅其 Promise,把字段同步到本地 state(沿用现有 13+ 个 setState 消费链路)。
+    this.context._claudeSettingsReady.then(data => {
+      if (!data) return;
       if (data.showThinkingSummaries) this.setState({ showThinkingSummaries: true });
       if (data.claudeAvailable === false) this.setState({ claudeMissing: true });
-    }).catch(() => {});
+    });
 
     // ─── Approval modal: subscribe to electron main → tabBridge ──────────────────
     // No-op when running in pure web mode — window.tabBridge is only injected by tab-content-preload.js.
@@ -261,71 +281,61 @@ class AppBase extends React.Component {
       } catch {}
     }
 
-    // 获取用户偏好设置（包含 filterIrrelevant）
-    // 用 Promise 保存，供 initSSE 等待（resume_prompt 需要知道 resumeAutoChoice）
-    this._prefsReady = fetch(apiUrl('/api/preferences'))
-      .then(res => res.json())
-      .then(data => {
-        // Claude 配置目录注入 i18n 占位符缓存；必须在这里（无条件 fetch），
-        // 不能放在 ChatView._loadPresets 里——那个路径被 agentTeamEnabled 守卫挡住，
-        // 对没开 Agent Team 的用户永远不会 hydrate。
-        if (typeof data.claudeConfigDir === 'string') setClaudeConfigDir(data.claudeConfigDir);
-        if (data.lang) {
-          setLang(data.lang);
-          this.setState({ lang: data.lang });
-        }
-        if (data.collapseToolResults !== undefined) {
-          this.setState({ collapseToolResults: !!data.collapseToolResults });
-        }
-        if (data.expandThinking !== undefined) {
-          this.setState({ expandThinking: !!data.expandThinking });
-        }
-        if (data.expandDiff !== undefined) {
-          this.setState({ expandDiff: !!data.expandDiff });
-        }
-        if (data.showFullToolContent !== undefined) {
-          this.setState({ showFullToolContent: !!data.showFullToolContent });
-        }
-        if (data.resumeAutoChoice) {
-          this.setState({ resumeAutoChoice: data.resumeAutoChoice });
-        }
-        if (typeof data.autoApproveSeconds === 'number') {
-          this.setState({ autoApproveSeconds: data.autoApproveSeconds });
-        }
-        // Approval modal preferences (defaults already in initial state — only override when persisted).
-        if (data.approvalModal && typeof data.approvalModal === 'object') {
-          this.setState(prev => {
-            const next = {
-              modalEnabled: data.approvalModal.modalEnabled !== undefined ? !!data.approvalModal.modalEnabled : prev.approvalPrefs.modalEnabled,
-              soundEnabled: data.approvalModal.soundEnabled !== undefined ? !!data.approvalModal.soundEnabled : prev.approvalPrefs.soundEnabled,
-              notifyOnlyWhenHidden: data.approvalModal.notifyOnlyWhenHidden !== undefined ? !!data.approvalModal.notifyOnlyWhenHidden : prev.approvalPrefs.notifyOnlyWhenHidden,
-            };
-            // 同步给 electron main 进程,让 maybeNotify 用最新的 notifyOnlyWhenHidden 决策。
-            // 非 electron 环境下 tabBridge 不存在,可选链跳过。
-            try { window.tabBridge?.setApprovalPref?.(next); } catch (e) { console.warn('[approvalPref IPC] hydrate sync failed:', e); }
-            return { approvalPrefs: next };
-          });
-        }
-        if (data.themeColor) {
-          this.setState({ themeColor: data.themeColor });
-          document.documentElement.setAttribute('data-theme', data.themeColor === 'light' ? 'light' : 'dark');
-        }
-        // filterIrrelevant 默认 true，showAll = !filterIrrelevant
-        const filterIrrelevant = data.filterIrrelevant !== undefined ? !!data.filterIrrelevant : true;
-        this.setState({ showAll: !filterIrrelevant });
-        if (data.logDir) {
-          this.setState({ logDir: data.logDir });
-        }
-        // URL 参数覆盖主题（白名单校验防 XSS）
-        const urlTheme = new URLSearchParams(window.location.search).get('theme');
-        if (urlTheme === 'light' || urlTheme === 'dark') {
-          this.setState({ themeColor: urlTheme });
-          document.documentElement.setAttribute('data-theme', urlTheme);
-        }
-
-        return data;
-      })
-      .catch(() => ({}));
+    // 等 SettingsProvider 完成 /api/preferences fetch,把字段同步到本地 state。
+    // setLang / setClaudeConfigDir 已由 Provider 处理,这里不再重复。
+    // initSSE 仍可读 this._prefsReady(getter 代理到 context),resume_prompt 行为不变。
+    this.context._prefsReady.then(data => {
+      if (!data) return;
+      if (data.lang) this.setState({ lang: data.lang });
+      if (data.collapseToolResults !== undefined) {
+        this.setState({ collapseToolResults: !!data.collapseToolResults });
+      }
+      if (data.expandThinking !== undefined) {
+        this.setState({ expandThinking: !!data.expandThinking });
+      }
+      if (data.expandDiff !== undefined) {
+        this.setState({ expandDiff: !!data.expandDiff });
+      }
+      if (data.showFullToolContent !== undefined) {
+        this.setState({ showFullToolContent: !!data.showFullToolContent });
+      }
+      if (data.resumeAutoChoice) {
+        this.setState({ resumeAutoChoice: data.resumeAutoChoice });
+      }
+      if (typeof data.autoApproveSeconds === 'number') {
+        this.setState({ autoApproveSeconds: data.autoApproveSeconds });
+      }
+      // Approval modal preferences (defaults already in initial state — only override when persisted).
+      if (data.approvalModal && typeof data.approvalModal === 'object') {
+        this.setState(prev => {
+          const next = {
+            modalEnabled: data.approvalModal.modalEnabled !== undefined ? !!data.approvalModal.modalEnabled : prev.approvalPrefs.modalEnabled,
+            soundEnabled: data.approvalModal.soundEnabled !== undefined ? !!data.approvalModal.soundEnabled : prev.approvalPrefs.soundEnabled,
+            notifyOnlyWhenHidden: data.approvalModal.notifyOnlyWhenHidden !== undefined ? !!data.approvalModal.notifyOnlyWhenHidden : prev.approvalPrefs.notifyOnlyWhenHidden,
+          };
+          // 同步给 electron main 进程,让 maybeNotify 用最新的 notifyOnlyWhenHidden 决策。
+          // 非 electron 环境下 tabBridge 不存在,可选链跳过。
+          try { window.tabBridge?.setApprovalPref?.(next); } catch (e) { console.warn('[approvalPref IPC] hydrate sync failed:', e); }
+          return { approvalPrefs: next };
+        });
+      }
+      if (data.themeColor) {
+        this.setState({ themeColor: data.themeColor });
+        document.documentElement.setAttribute('data-theme', data.themeColor === 'light' ? 'light' : 'dark');
+      }
+      // filterIrrelevant 默认 true，showAll = !filterIrrelevant
+      const filterIrrelevant = data.filterIrrelevant !== undefined ? !!data.filterIrrelevant : true;
+      this.setState({ showAll: !filterIrrelevant });
+      if (data.logDir) {
+        this.setState({ logDir: data.logDir });
+      }
+      // URL 参数覆盖主题（白名单校验防 XSS）
+      const urlTheme = new URLSearchParams(window.location.search).get('theme');
+      if (urlTheme === 'light' || urlTheme === 'dark') {
+        this.setState({ themeColor: urlTheme });
+        document.documentElement.setAttribute('data-theme', urlTheme);
+      }
+    });
 
     // 获取系统用户头像和名字
     fetch(apiUrl('/api/user-profile'))
@@ -440,6 +450,16 @@ class AppBase extends React.Component {
       this.loadLocalLogFile(logfile);
     } else {
       this.initSSE();
+    }
+  }
+
+  componentDidUpdate(prevProps, prevState) {
+    // context.claudeSettings 后续变化(如 ChatMessage 触发的 showThinkingSummaries 启用)
+    // 同步到本地 state,让 props.showThinkingSummaries 下游消费方立即响应。
+    // contextType 不提供 prevContext,只能比对 context value 与本地 state。
+    const cs = this.context && this.context.claudeSettings;
+    if (cs && !!cs.showThinkingSummaries !== !!this.state.showThinkingSummaries) {
+      this.setState({ showThinkingSummaries: !!cs.showThinkingSummaries });
     }
   }
 
@@ -683,7 +703,7 @@ class AppBase extends React.Component {
         try {
           const data = JSON.parse(event.data);
           // 等待偏好加载完成再判断是否跳过弹窗（避免竞态）
-          (this._prefsReady || Promise.resolve({})).then((prefs) => {
+          (this.context._prefsReady || Promise.resolve({})).then((prefs) => {
             if (prefs?.resumeAutoChoice) {
               // 自动跳过：直接发送选择到服务端，不触碰偏好设置（避免 setState 竞态清除偏好）
               fetch(apiUrl('/api/resume-choice'), {
@@ -1369,47 +1389,27 @@ class AppBase extends React.Component {
   handleLangChange = () => {
     const lang = getLang();
     this.setState({ lang });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lang }),
-    }).catch(() => { });
+    this.context.updatePreferences({ lang });
   };
 
   handleCollapseToolResultsChange = (checked) => {
     this.setState({ collapseToolResults: checked });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collapseToolResults: checked }),
-    }).catch(() => { });
+    this.context.updatePreferences({ collapseToolResults: checked });
   };
 
   handleExpandThinkingChange = (checked) => {
     this.setState({ expandThinking: checked });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expandThinking: checked }),
-    }).catch(() => { });
+    this.context.updatePreferences({ expandThinking: checked });
   };
 
   handleExpandDiffChange = (checked) => {
     this.setState({ expandDiff: checked });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expandDiff: checked }),
-    }).catch(() => { });
+    this.context.updatePreferences({ expandDiff: checked });
   };
 
   handleAutoApproveChange = (seconds) => {
     this.setState({ autoApproveSeconds: seconds });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ autoApproveSeconds: seconds }),
-    }).catch(() => {});
+    this.context.updatePreferences({ autoApproveSeconds: seconds });
   };
 
   // ─── Approval modal: ChatView -> AppBase bubbling handlers ───────────────────────
@@ -1472,27 +1472,19 @@ class AppBase extends React.Component {
   };
 
   handleApprovalPrefsChange = (patch) => {
-    // 同源 next：setState + fetch body 都用同一个 next，避免 rapid toggle 下第二次 POST 读到 stale state 漏 patch
+    // 同源 next：setState + POST body 都用同一个 next，避免 rapid toggle 下第二次 POST 读到 stale state 漏 patch
     const next = { ...this.state.approvalPrefs, ...patch };
     this.setState({ approvalPrefs: next });
     // 同步给 electron main 进程,maybeNotify 立即用新 notifyOnlyWhenHidden 决策。
     try { window.tabBridge?.setApprovalPref?.(next); } catch (e) { console.warn('[approvalPref IPC] onChange sync failed:', e); }
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approvalModal: next }),
-    }).catch(() => {});
+    this.context.updatePreferences({ approvalModal: next });
   };
 
   handleThemeColorChange = (value) => {
     this.setState({ themeColor: value });
     document.documentElement.setAttribute('data-theme', value === 'light' ? 'light' : 'dark');
     reinitializeMermaid();
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ themeColor: value }),
-    }).catch(() => { });
+    this.context.updatePreferences({ themeColor: value });
     // 切换主题后让终端获得焦点，便于用户看到 /theme 切换效果
     window.dispatchEvent(new CustomEvent('ccv-focus-terminal'));
   };
@@ -1502,22 +1494,15 @@ class AppBase extends React.Component {
     const trimmed = value.trim();
     if (!trimmed) return;
     this.setState({ logDir: trimmed });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ logDir: trimmed }),
-    }).then(r => r.json()).then(data => {
-      if (data.logDir) this.setState({ logDir: data.logDir });
-    }).catch(() => { });
+    // logDir 服务端可能 normalize 后回写,read response.logDir 覆盖本地
+    this.context.updatePreferences({ logDir: trimmed }).then(data => {
+      if (data && data.logDir) this.setState({ logDir: data.logDir });
+    });
   };
 
   handleShowFullToolContentChange = (checked) => {
     this.setState({ showFullToolContent: checked });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ showFullToolContent: checked }),
-    }).catch(() => { });
+    this.context.updatePreferences({ showFullToolContent: checked });
   };
 
   handleFilterIrrelevantChange = (checked) => {
@@ -1529,11 +1514,7 @@ class AppBase extends React.Component {
         selectedIndex: newFiltered.length > 0 ? newFiltered.length - 1 : null,
       };
     });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filterIrrelevant: checked }),
-    }).catch(() => { });
+    this.context.updatePreferences({ filterIrrelevant: checked });
   };
 
   // ─── 日志管理 ──────────────────────────────────────────
@@ -1813,11 +1794,7 @@ class AppBase extends React.Component {
   handleResumeChoice = (choice) => {
     if (this.state.resumeRememberChoice) {
       this.setState({ resumeAutoChoice: choice });
-      fetch(apiUrl('/api/preferences'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resumeAutoChoice: choice }),
-      }).catch(() => {});
+      this.context.updatePreferences({ resumeAutoChoice: choice });
     }
     fetch(apiUrl('/api/resume-choice'), {
       method: 'POST',
@@ -1829,20 +1806,12 @@ class AppBase extends React.Component {
   handleResumeAutoChoiceToggle = (enabled) => {
     const value = enabled ? 'continue' : null;
     this.setState({ resumeAutoChoice: value });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resumeAutoChoice: value }),
-    }).catch(() => {});
+    this.context.updatePreferences({ resumeAutoChoice: value });
   };
 
   handleResumeAutoChoiceChange = (value) => {
     this.setState({ resumeAutoChoice: value });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resumeAutoChoice: value }),
-    }).catch(() => {});
+    this.context.updatePreferences({ resumeAutoChoice: value });
   };
 
   _finishLocalLoad = (entries, fileNames) => {

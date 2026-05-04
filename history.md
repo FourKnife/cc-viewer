@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased — SettingsContext 重构（消除 `ccv-presets-changed` 双驱动）
+
+### 问题
+
+`/api/claude-settings` 与 `/api/preferences` 在 `AppBase` / `ChatView` / `TerminalPanel` / `AppHeader` / `PresetModal` / `ChatMessage` 各自 fetch；写后再用 `window.dispatchEvent('ccv-presets-changed')` 跨组件广播。结果是同一份状态既走 props/state 又走 window event，子组件双重订阅，session/workspace 切换时 listener 累积、回调互相打架，且没有 cleanup 路径——是潜在的浏览器侧句柄/闭包泄漏来源。
+
+### 方案
+
+用 `React.Context` 集中持有 `claudeSettings` / `preferences` 与 `updatePreferences` / `updateClaudeSettings` 两个 setter。子组件改为接 props（避免与 `TerminalWsContext` 的 `static contextType` 冲突），通过 `componentDidUpdate(prevProps.preferences !== this.props.preferences)` 接力 reload。删除所有 `ccv-presets-changed` 监听与 dispatch。
+
+### 实现
+
+- 新文件 `src/contexts/SettingsContext.jsx`：`SettingsProvider` 在 constructor 同步 fire 两个 fetch、暴露 `_prefsReady` / `_claudeSettingsReady` 给 `AppBase.componentDidMount` 等待；`updatePreferences` / `updateClaudeSettings` 乐观本地写 + POST，setState 引用变化驱动子树。`_unmounted` 守住 unmount 后的 setState。
+- `src/main.jsx`：`<SettingsProvider>` 包裹 `<TerminalWsProvider>`。
+- `src/App.jsx` / `src/AppBase.jsx`：AppBase `static contextType = SettingsContext`，原本散在 componentDidMount 里的两个 fetch 整体迁走；`_settingsProps()` helper 统一向下分发；`ccv-presets-changed` 全部删除（dispatch + listen 两侧）。AppBase.jsx 净 -25 行。
+- `src/Mobile.jsx` / `src/components/AppHeader.jsx` / `src/components/PresetModal.jsx` / `src/components/ChatMessage.jsx`：fetch + window event 全部改为 `updateClaudeSettings(patch)` / `updatePreferences(patch)` 或 `this.context.update*`。
+- `src/components/ChatView.jsx` / `src/components/TerminalPanel.jsx`：`_loadPresets` / `_loadPresetShortcuts` 改为读 props 而非 fetch，`componentDidUpdate` 守 `prevProps.preferences !== this.props.preferences` reference 比较，避免无限 loop。原 `addEventListener('ccv-presets-changed', ...)` 与 cleanup 删除。
+
+### 后果
+
+- 9 个前端文件，净 -25 行，少 1 条 window event 频道、少 6+ 处重复 fetch；
+- 数据流单一（Provider state → props → componentDidUpdate），不再可能 props 驱动 + event 驱动双触发；
+- 解决一类潜在 listener 泄漏（不显式 unmount 时 ccv-presets-changed handler 留在 window）。
+
+## Unreleased — ExitPlanMode V2 input 服务端补全
+
+### 问题
+
+Claude Code 2.1.126 的 `ExitPlanModeV2Tool` 在 API 网线传输时把 `tool_use.input` 字段送成 `{}`。完整 plan 内容由 CC 客户端 `normalizeToolInput` 写入本地 session 转写文件 `<projectsDir>/<encoded-cwd>/<sessionId>.jsonl`。cc-viewer 读的是 HTTP 请求日志 `~/.claude/cc-viewer/cc-viewer/cc-viewer*.jsonl`，所以渲染 ExitPlanMode 卡片时 `ChatMessage.jsx:489-516` 的 5 条兜底链全部命中失败 → 待审批卡片正文为空。
+
+### 方案
+
+服务端在条目推给前端之前，按 `tool_use.id` 从 session 转写补全 `input.plan` / `input.planFilePath`。前端零改动，现有兜底链第 1、2 条会自然命中。
+
+### 实现
+
+- Feature (P0 — 新文件 `lib/session-transcript-reader.js`): `findTranscriptPath(sessionId, projectHint?)` + `lookupToolUseInput(sessionId, toolUseId, projectHint?)`。流式 1MB 分块读 + 行级 `indexOf('"name":"ExitPlanMode"')` + `indexOf(toolUseId)` 双子串预过滤后才 JSON.parse 单行。projectsDir 走 `findcc.getClaudeConfigDir()` 与 `CLAUDE_CONFIG_DIR` 重定向对齐。两层 LRU：路径 LRU(64)（带 mtime 校验，detect transcript 被覆写）+ input LRU(5000)。**仅缓存命中**；miss 路径用 30s TTL 短缓存兜住 race（CC 在 stream 关闭后才 flush 转写）。`MAX_TRANSCRIPT_BYTES=64MB` 防御异常文件。多匹配（worktree 同 sid）时按 `entry.project`（`basename(cwd)` sanitized）反向匹配编码目录尾段，仍多匹配取 mtime 最大者。
+- Feature (P0 — 新文件 `lib/enrich-plan-input.js`): `enrichEntry(entry)` 遍历 `entry.response.body.content[]` 与 `entry.body.messages[*].content[]`，对 `name==='ExitPlanMode' && Object.keys(input).length === 0` 的块查 transcript 回填。`enrichRawIfNeeded(raw)` 用 raw 字符串 `indexOf('"name":"ExitPlanMode","input":{}')` 单子串预过滤（实测当前 CC interceptor 用 default `JSON.stringify(body)` 零空格、零换行，恒定字节序），命中才 parse + enrich + stringify。提供 `mainAgent === false` 早返回（sub-agent 不补；其转写在另一目录）。`x-claude-code-session-id` 缺失（旧版 CC）也早返回。In-place mutation by design：与 `lib/delta-reconstructor.js` 共享对象引用，让后续 entry 自动跳过重复查盘。
+- Wire-in (P0 — `lib/log-watcher.js`): 实时 SSE watcher 在 `_reconstructor.reconstruct(parsed)` 之后、`sendToClients` 之前同步调 `enrichEntry`。同步开销由 transcript 64MB 上限 + miss 30s TTL + path mtime 多层兜住，最坏 ~150ms；如未来 hit 比例显著上升再考虑 `setImmediate` 拆分。
+- Wire-in (P0 — `server.js` 三处 REST/SSE 端点): `/api/stream-log`（历史回放 SSE）、`/api/requests`（全量 dump）、`/api/entries/page`（移动端分页）出口前用 `enrichRawIfNeeded` 透明包装；不命中预过滤的条目按 raw 字符串透传，保留 `lib/log-stream.js` 的"零 parse / stringify"内存哲学。
+- Test (P0 — 新文件 `test/session-transcript-reader.test.js` + `test/enrich-plan-input.test.js`): 41 用例。覆盖 worktree projectHint 反向匹配、mtime 失效重扫、跨 1MB chunk 边界、半写入末行 try/catch、miss TTL race-recovery、cross-session 同 toolUseId 不串号、sub-agent mainAgent guard、200 块大文件不 OOM、enrichRawIfNeeded raw 透传契约。
+
+### 设计决策
+
+- **边界放置**：inline egress enrichment 而非 `fs.watch` + 独立 SSE 事件——前端零改动 + tool_use.id 已在 wire 上同步可用；缺点是历史回放每次重扫，由 LRU + 文件大小上限 + miss TTL 兜住。
+- **Pre-filter 策略**：单子串精确匹配 `'"name":"ExitPlanMode","input":{}'`（113MB 真实日志 14 次精确命中、零 false negative）。Schema drift 时 `enrichEntry` 内 `Object.keys(input).length === 0` 终判 + stderr 警告，不会误改其它工具或非空 input。
+- **In-place mutation**：mutation 透传到所有共享对象引用，让重复 entry 中的同 tool_use 块自动跳过。注释解释依赖 `lib/delta-reconstructor.js` 的对象共享语义。
+
+### 关于评审
+
+实施前后两轮 5 人评审（架构师 / 防御性 / 代码质量 / 性能与安全 / 需求分析师 / 测试覆盖率）。本轮 P0 全采纳：projectsDir 接 `getClaudeConfigDir`、miss 30s TTL、文件改 kebab-case、bounded sync 加注释、history.md 更新；P2 采纳 mainAgent guard、path mtime 校验、64MB 文件大小保护、scanTranscriptFile / pickByMtime helper 抽出 + 死 import 删 + 测试名修正。P3 项（input cache key 加 hint、sessionId 正则、enrichRawIfNeeded 改名）入 backlog。
+
 ## 1.6.233 (2026-05-04) — header 血条 popover 抽组件 + iPad/手机 popover 接通 + 手机 chip tooltip 改 Modal + UltraPlan 模板瘦身 + memoryLinkParser 白名单
 
 ### header 血条 popover 抽出独立组件 + 三端入口

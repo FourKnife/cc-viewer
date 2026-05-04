@@ -332,21 +332,20 @@ class ChatView extends React.Component {
         if (!r.ok) this.setState({ hasGit: false, gitChangesOpen: false });
       }).catch(() => this.setState({ hasGit: false, gitChangesOpen: false }));
     });
-    // 检测 Agent Team 是否启用（UltraPlan 依赖）
-    fetch(apiUrl('/api/claude-settings')).then(r => r.ok ? r.json() : null).then(data => {
-      if (data?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1') {
-        this.setState({ agentTeamEnabled: true });
-      }
-    }).catch(() => {});
+    // Agent Team 启用状态从 props.claudeSettings 派生(由 SettingsContext 集中 fetch);
+    // mount 时若 settings 已 ready 立即同步,否则等 componentDidUpdate 接力。
+    if (this.props.claudeSettings?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1') {
+      this.setState({ agentTeamEnabled: true });
+    }
     if (!useVirtuoso) this._bindStickyScroll();
     // 初始化时吸附到 60cols
     if (this.state.needsInitialSnap && this.props.cliMode && this.props.terminalVisible) {
       this._snapToInitialPosition();
     }
-    // 加载 Agent Team 预置项
+    // 加载 Agent Team 预置项 (props.preferences 已 ready 时立即加载,
+    // 否则 componentDidUpdate 接力。preset 写入由 SettingsContext.updatePreferences
+    // setState 触发 props 变化,无需 window event)
     this._loadPresets();
-    this._onPresetsChanged = () => this._loadPresets();
-    window.addEventListener('ccv-presets-changed', this._onPresetsChanged);
   }
 
   shouldComponentUpdate(nextProps, nextState) {
@@ -369,11 +368,25 @@ class ChatView extends React.Component {
       nextProps.lang !== this.props.lang ||
       nextProps.showThinkingSummaries !== this.props.showThinkingSummaries ||
       nextProps.fileLoading !== this.props.fileLoading ||
+      nextProps.claudeSettings !== this.props.claudeSettings ||
+      nextProps.preferences !== this.props.preferences ||
       nextState !== this.state
     );
   }
 
   componentDidUpdate(prevProps, prevState) {
+    // SettingsContext 异步 fetch 完成后,props.claudeSettings / props.preferences 才到达;
+    // 同步派生的 agentTeamEnabled 与 _loadPresets 都需在这里接力。
+    if (prevProps.claudeSettings !== this.props.claudeSettings) {
+      const enabled = this.props.claudeSettings?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1';
+      if (enabled !== this.state.agentTeamEnabled) {
+        this.setState({ agentTeamEnabled: enabled });
+      }
+      this._loadPresets();
+    }
+    if (prevProps.preferences !== this.props.preferences) {
+      this._loadPresets();
+    }
     // 扫描 messages 中所有 ExitPlanMode tool_use 的 input.planFilePath，按需异步拉取磁盘内容
     // 仅在 messages 引用变化时遍历（O(N) 低频），fetch 去重 + _unmounted 守卫
     if (prevProps.messages !== this.props.messages) {
@@ -626,7 +639,6 @@ class ChatView extends React.Component {
 
   componentWillUnmount() {
     this._unmounted = true;
-    window.removeEventListener('ccv-presets-changed', this._onPresetsChanged);
     // 清理全局审批/通知 — 切 session/关 tab 时让 modal 同步消失，main 进程 badge 归零
     if (this.props.onPendingPermission) this.props.onPendingPermission(null);
     if (this.props.onPendingPlanApproval) this.props.onPendingPlanApproval(null);
@@ -1901,39 +1913,35 @@ class ChatView extends React.Component {
   }
 
   _loadPresets() {
-    // 判断 Agent Team 是否启用
-    let agentTeamEnabled = false;
-    fetch(apiUrl('/api/claude-settings')).then(r => r.json()).then(data => {
-      agentTeamEnabled = data?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1';
-    }).catch(() => {}).then(() => {
-      if (!agentTeamEnabled) return;
-      // 加载预置快捷方式，合并内置预置
-      fetch(apiUrl('/api/preferences')).then(r => r.json()).then(data => {
-        const dismissed = Array.isArray(data.dismissedBuiltinPresets) ? new Set(data.dismissedBuiltinPresets) : new Set();
-        let items = [];
-        if (Array.isArray(data.presetShortcuts)) {
-          items = data.presetShortcuts.map((item, i) => {
-            if (typeof item === 'string') return { id: Date.now() + i, teamName: '', description: item };
-            return { id: Date.now() + i, teamName: item.teamName || '', description: item.description || '',
-              ...(item.builtinId ? { builtinId: item.builtinId } : {}), ...(item.modified ? { modified: true } : {}) };
-          });
-        }
-        const existingBuiltinIds = new Set(items.filter(i => i.builtinId).map(i => i.builtinId));
-        for (const bp of BUILTIN_PRESETS) {
-          if (dismissed.has(bp.builtinId) || existingBuiltinIds.has(bp.builtinId)) continue;
-          items.unshift({ id: Date.now() + Math.random(), builtinId: bp.builtinId, teamName: bp.teamName, description: bp.description });
-        }
-        const customExperts = Array.isArray(data.customUltraplanExperts) ? data.customUltraplanExperts : [];
-        // 若当前选中的自定义专家已不存在（被另一端删除），回退到 codeExpert
-        const current = this.state.ultraplanVariant;
-        const next = { presetItems: items, customUltraplanExperts: customExperts };
-        if (typeof current === 'string' && current.startsWith('custom:')) {
-          const id = current.slice('custom:'.length);
-          if (!customExperts.some(e => e.id === id)) next.ultraplanVariant = 'codeExpert';
-        }
-        this.setState(next);
-      }).catch(() => {});
-    });
+    // 数据从 props 派生 (SettingsContext 集中 fetch);未 ready 时静默返回,
+    // componentDidUpdate 监听 props.preferences / props.claudeSettings 后重试。
+    const agentTeamEnabled = this.props.claudeSettings?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1';
+    if (!agentTeamEnabled) return;
+    const data = this.props.preferences;
+    if (!data) return;
+    const dismissed = Array.isArray(data.dismissedBuiltinPresets) ? new Set(data.dismissedBuiltinPresets) : new Set();
+    let items = [];
+    if (Array.isArray(data.presetShortcuts)) {
+      items = data.presetShortcuts.map((item, i) => {
+        if (typeof item === 'string') return { id: Date.now() + i, teamName: '', description: item };
+        return { id: Date.now() + i, teamName: item.teamName || '', description: item.description || '',
+          ...(item.builtinId ? { builtinId: item.builtinId } : {}), ...(item.modified ? { modified: true } : {}) };
+      });
+    }
+    const existingBuiltinIds = new Set(items.filter(i => i.builtinId).map(i => i.builtinId));
+    for (const bp of BUILTIN_PRESETS) {
+      if (dismissed.has(bp.builtinId) || existingBuiltinIds.has(bp.builtinId)) continue;
+      items.unshift({ id: Date.now() + Math.random(), builtinId: bp.builtinId, teamName: bp.teamName, description: bp.description });
+    }
+    const customExperts = Array.isArray(data.customUltraplanExperts) ? data.customUltraplanExperts : [];
+    // 若当前选中的自定义专家已不存在（被另一端删除），回退到 codeExpert
+    const current = this.state.ultraplanVariant;
+    const next = { presetItems: items, customUltraplanExperts: customExperts };
+    if (typeof current === 'string' && current.startsWith('custom:')) {
+      const id = current.slice('custom:'.length);
+      if (!customExperts.some(e => e.id === id)) next.ultraplanVariant = 'codeExpert';
+    }
+    this.setState(next);
   }
 
   handlePresetSend = (description) => {
@@ -2047,13 +2055,9 @@ class ChatView extends React.Component {
 
   _persistCustomUltraplanExperts = (experts) => {
     this.setState({ customUltraplanExperts: experts });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customUltraplanExperts: experts }),
-    })
-      .then(() => window.dispatchEvent(new Event('ccv-presets-changed')))
-      .catch(() => {});
+    if (this.props.onUpdatePreferences) {
+      this.props.onUpdatePreferences({ customUltraplanExperts: experts });
+    }
   };
 
   _saveCustomUltraplanExpert = (item) => {
@@ -4057,7 +4061,7 @@ class ChatView extends React.Component {
             <>
               <div className={styles.vResizer} onMouseDown={this.handleSplitMouseDown} />
               <div className={styles.terminalPanelWrap} style={{ width: terminalWidth }}>
-                <TerminalPanel onEditorOpen={(sessionId, filePath) => {
+                <TerminalPanel claudeSettings={this.props.claudeSettings} preferences={this.props.preferences} onUpdatePreferences={this.props.onUpdatePreferences} onUpdateClaudeSettings={this.props.onUpdateClaudeSettings} onEditorOpen={(sessionId, filePath) => {
                   this.setState({
                     editorSessionId: sessionId,
                     editorFilePath: filePath,
@@ -4083,7 +4087,7 @@ class ChatView extends React.Component {
         </div>
       </div>
       <TeamModal session={this.state.teamModalSession} requests={this.props.requests} mainAgentSessions={this.props.mainAgentSessions} collapseToolResults={this.props.collapseToolResults} expandThinking={this.props.expandThinking} showFullToolContent={this.props.showFullToolContent} userProfile={this.props.userProfile} onViewRequest={this.props.onViewRequest} onClose={() => this.setState({ teamModalSession: null })} />
-      <PresetModal open={this.state.mobilePresetModalVisible} onClose={() => this.setState({ mobilePresetModalVisible: false })} items={this.state.presetItems} onItemsChange={(items) => this.setState({ presetItems: items })} />
+      <PresetModal open={this.state.mobilePresetModalVisible} onClose={() => this.setState({ mobilePresetModalVisible: false })} items={this.state.presetItems} onItemsChange={(items) => this.setState({ presetItems: items })} onSavePresets={(payload) => { if (this.props.onUpdatePreferences) this.props.onUpdatePreferences(payload); }} />
     </>);
   }
 }

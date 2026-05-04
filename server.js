@@ -48,6 +48,7 @@ import { watchLogFile, startWatching, getWatchedFiles, sendEventToClients, sendT
 import { isMainAgentEntry, extractCachedContent } from './lib/kv-cache-analyzer.js';
 import { listLocalLogs, deleteLogFiles, mergeLogFiles } from './lib/log-management.js';
 import { countLogEntries, streamRawEntriesAsync, readPagedEntries } from './lib/log-stream.js';
+import { enrichRawIfNeeded } from './lib/enrich-plan-input.js';
 import { buildTeamStatusResponse } from './lib/team-runtime.js';
 
 
@@ -974,9 +975,11 @@ async function handleRequest(req, res) {
 
     await streamRawEntriesAsync(LOG_FILE, (raw) => {
       // 直接发送原始 JSON 字符串，不做 parse/reconstruct/stringify
+      // ExitPlanMode V2 空 input 的条目按需补全 plan / planFilePath，其它原样透传
+      const out = enrichRawIfNeeded(raw);
       // SSE data 字段不允许裸换行，去除 pretty-printed JSON 的换行
       res.write('event: load_chunk\ndata: [');
-      res.write(raw.includes('\n') ? raw.replace(/\n/g, '') : raw);
+      res.write(out.includes('\n') ? out.replace(/\n/g, '') : out);
       res.write(']\n\n');
     }, {
       since: useIncremental ? sinceParam : undefined,
@@ -1061,7 +1064,7 @@ async function handleRequest(req, res) {
     let first = true;
     await streamRawEntriesAsync(LOG_FILE, (raw) => {
       if (!first) res.write(',');
-      res.write(raw);
+      res.write(enrichRawIfNeeded(raw));
       first = false;
     });
     res.write(']');
@@ -1081,8 +1084,9 @@ async function handleRequest(req, res) {
     try {
       const result = readPagedEntries(LOG_FILE, { before, limit: limitVal });
       // entries 是原始 JSON 字符串数组，parse 后返回给客户端
+      // ExitPlanMode V2 空 input 的条目用 enrichRawIfNeeded 在 raw 阶段补全
       const entries = result.entries.map(raw => {
-        try { return JSON.parse(raw); } catch { return null; }
+        try { return JSON.parse(enrichRawIfNeeded(raw)); } catch { return null; }
       }).filter(Boolean);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({

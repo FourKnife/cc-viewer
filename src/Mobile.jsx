@@ -360,11 +360,7 @@ class Mobile extends AppBase {
 
   handleAutoApproveChange = (seconds) => {
     this.setState({ autoApproveSeconds: seconds });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ autoApproveSeconds: seconds }),
-    }).catch(() => {});
+    this.context.updatePreferences({ autoApproveSeconds: seconds });
   };
 
   // ─── 拖拽上传（iPad / Mobile） ────────────────────────────
@@ -697,6 +693,7 @@ class Mobile extends AppBase {
               <ConfigProvider theme={this.themeConfig}>
                 <div className={styles.mobileChatInner}>
                   <ChatView
+                    {...this._settingsProps()}
                     requests={filteredRequests}
                     mainAgentSessions={mainAgentSessions}
                     streamingLatest={this.state.streamingLatest}
@@ -738,6 +735,7 @@ class Mobile extends AppBase {
           {!mobileIsLocalLog && (
             <div className={`${styles.mobileChatOverlay} ${this.state.mobileTerminalVisible ? styles.mobileChatOverlayVisible : ''}`}>
               <TerminalPanel
+                {...this._settingsProps()}
                 modelName={mobileModelName}
                 onFilePath={this._handleTerminalFilePath}
                 pendingImages={this.state.terminalPendingImages}

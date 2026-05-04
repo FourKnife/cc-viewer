@@ -417,14 +417,14 @@ class TerminalPanel extends React.Component {
       this.sendResize();
     }
     this.setupResizeObserver();
-    // 读取 claude settings 判断 Agent Team 是否可用
-    fetch(apiUrl('/api/claude-settings')).then(r => r.json()).then(data => {
-      const enabled = data?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1';
+    // claude-settings 由 SettingsContext 集中提供;通过 props 派生 agentTeamEnabled,
+    // mount 时若已 ready 同步 setState,否则等 componentDidUpdate 接力。
+    if (this.props.claudeSettings) {
+      const enabled = this.props.claudeSettings?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1';
       this.setState({ agentTeamEnabled: enabled });
-    }).catch(() => {});
+    }
+    // 加载预置 (props.preferences 已 ready 时立即,否则 componentDidUpdate 接力)
     this._loadPresetShortcuts();
-    this._onPresetsChanged = () => this._loadPresetShortcuts();
-    window.addEventListener('ccv-presets-changed', this._onPresetsChanged);
     this._onFocusTerminal = () => { if (this.terminal && this.containerRef?.current?.offsetWidth > 0) this.terminal.focus(); };
     window.addEventListener('ccv-focus-terminal', this._onFocusTerminal);
     this._themeObserver = new MutationObserver(() => {
@@ -440,7 +440,18 @@ class TerminalPanel extends React.Component {
     if (this.state.activeScratchTabId) writeScratchActiveTab(this.state.activeScratchTabId);
   }
 
-  componentDidUpdate(_prevProps, prevState) {
+  componentDidUpdate(prevProps, prevState) {
+    // SettingsContext 异步 fetch 完成后,props.claudeSettings / props.preferences 才到达;
+    // 同步派生的 agentTeamEnabled 与 _loadPresetShortcuts 都在这里接力。
+    if (prevProps.claudeSettings !== this.props.claudeSettings) {
+      const enabled = this.props.claudeSettings?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1';
+      if (enabled !== this.state.agentTeamEnabled) {
+        this.setState({ agentTeamEnabled: enabled });
+      }
+    }
+    if (prevProps.preferences !== this.props.preferences) {
+      this._loadPresetShortcuts();
+    }
     if (prevState.scratchOpen !== this.state.scratchOpen) {
       if (this.state.scratchOpen) {
         // componentDidUpdate 在 React commit 之后、浏览器 paint 之前同步触发，
@@ -460,39 +471,40 @@ class TerminalPanel extends React.Component {
   }
 
   _loadPresetShortcuts() {
-    // 读取预置快捷方式（兼容旧版 string[] 和新版 {teamName, description}[]），合并内置预置
-    fetch(apiUrl('/api/preferences')).then(r => r.json()).then(data => {
-      const dismissed = Array.isArray(data.dismissedBuiltinPresets) ? new Set(data.dismissedBuiltinPresets) : new Set();
-      this._dismissedBuiltinPresets = dismissed;
-      let items = [];
-      if (Array.isArray(data.presetShortcuts)) {
-        items = data.presetShortcuts.map((item, i) => {
-          if (typeof item === 'string') return { id: Date.now() + i, teamName: '', description: item };
-          return {
-            id: Date.now() + i,
-            teamName: item.teamName || '',
-            description: item.description || '',
-            ...(item.builtinId ? { builtinId: item.builtinId } : {}),
-            ...(item.modified ? { modified: true } : {}),
-          };
-        });
-      }
-      // 合并内置预置：未被用户删除且不在已有列表中的
-      const existingBuiltinIds = new Set(items.filter(i => i.builtinId).map(i => i.builtinId));
-      for (const bp of BUILTIN_PRESETS) {
-        if (dismissed.has(bp.builtinId) || existingBuiltinIds.has(bp.builtinId)) continue;
-        items.unshift({ id: Date.now() + Math.random(), builtinId: bp.builtinId, teamName: bp.teamName, description: bp.description });
-      }
-      const customExperts = Array.isArray(data.customUltraplanExperts) ? data.customUltraplanExperts : [];
-      // 若当前选中的自定义专家已不存在（被另一端删除），回退到 codeExpert
-      const current = this.state.ultraplanVariant;
-      const next = { presetItems: items, customUltraplanExperts: customExperts };
-      if (typeof current === 'string' && current.startsWith('custom:')) {
-        const id = current.slice('custom:'.length);
-        if (!customExperts.some(e => e.id === id)) next.ultraplanVariant = 'codeExpert';
-      }
-      this.setState(next);
-    }).catch(() => {});
+    // 数据从 props.preferences 派生(SettingsContext 集中 fetch);未 ready 时静默返回,
+    // componentDidUpdate 接力。
+    const data = this.props.preferences;
+    if (!data) return;
+    const dismissed = Array.isArray(data.dismissedBuiltinPresets) ? new Set(data.dismissedBuiltinPresets) : new Set();
+    this._dismissedBuiltinPresets = dismissed;
+    let items = [];
+    if (Array.isArray(data.presetShortcuts)) {
+      items = data.presetShortcuts.map((item, i) => {
+        if (typeof item === 'string') return { id: Date.now() + i, teamName: '', description: item };
+        return {
+          id: Date.now() + i,
+          teamName: item.teamName || '',
+          description: item.description || '',
+          ...(item.builtinId ? { builtinId: item.builtinId } : {}),
+          ...(item.modified ? { modified: true } : {}),
+        };
+      });
+    }
+    // 合并内置预置：未被用户删除且不在已有列表中的
+    const existingBuiltinIds = new Set(items.filter(i => i.builtinId).map(i => i.builtinId));
+    for (const bp of BUILTIN_PRESETS) {
+      if (dismissed.has(bp.builtinId) || existingBuiltinIds.has(bp.builtinId)) continue;
+      items.unshift({ id: Date.now() + Math.random(), builtinId: bp.builtinId, teamName: bp.teamName, description: bp.description });
+    }
+    const customExperts = Array.isArray(data.customUltraplanExperts) ? data.customUltraplanExperts : [];
+    // 若当前选中的自定义专家已不存在（被另一端删除），回退到 codeExpert
+    const current = this.state.ultraplanVariant;
+    const next = { presetItems: items, customUltraplanExperts: customExperts };
+    if (typeof current === 'string' && current.startsWith('custom:')) {
+      const id = current.slice('custom:'.length);
+      if (!customExperts.some(e => e.id === id)) next.ultraplanVariant = 'codeExpert';
+    }
+    this.setState(next);
   }
 
   componentWillUnmount() {
@@ -509,7 +521,6 @@ class TerminalPanel extends React.Component {
       this.terminal.textarea.removeEventListener('blur', this._handleTermBlur);
     }
     if (this._themeObserver) { this._themeObserver.disconnect(); this._themeObserver = null; }
-    window.removeEventListener('ccv-presets-changed', this._onPresetsChanged);
     window.removeEventListener('ccv-focus-terminal', this._onFocusTerminal);
     if (this._stopMobileMomentum) this._stopMobileMomentum();
     // unmount 前同步排空 buffer 给 xterm，防最后 16ms 数据丢失（既有 bug 缓解）。
@@ -1124,13 +1135,7 @@ class TerminalPanel extends React.Component {
       }),
     };
     if (dismissed) payload.dismissedBuiltinPresets = [...dismissed];
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).then(() => {
-      window.dispatchEvent(new Event('ccv-presets-changed'));
-    }).catch(() => {});
+    if (this.props.onUpdatePreferences) this.props.onUpdatePreferences(payload);
   };
 
   handlePresetAdd = () => {
@@ -1302,13 +1307,9 @@ class TerminalPanel extends React.Component {
 
   persistCustomUltraplanExperts = (experts) => {
     this.setState({ customUltraplanExperts: experts });
-    fetch(apiUrl('/api/preferences'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customUltraplanExperts: experts }),
-    })
-      .then(() => window.dispatchEvent(new Event('ccv-presets-changed')))
-      .catch(() => {});
+    if (this.props.onUpdatePreferences) {
+      this.props.onUpdatePreferences({ customUltraplanExperts: experts });
+    }
   };
 
   saveCustomUltraplanExpert = (item) => {
