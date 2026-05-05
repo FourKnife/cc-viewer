@@ -8,6 +8,8 @@ import {
   createIncrementalSlimmer,
   createEntrySlimmer,
   restoreSlimmedEntry,
+  slimBodyBigFields,
+  SYSTEM_TEXT_KEEP_PREFIX,
 } from '../src/utils/entry-slim.js';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -25,8 +27,16 @@ function makeMainAgent(msgCount, opts = {}) {
     mainAgent: true,
     body: {
       messages,
-      metadata: { user_id: opts.userId || 'user-1' },
+      metadata: opts.metadata || { user_id: opts.userId || 'user-1', request_id: `r-${Math.random()}` },
       model: 'claude-opus-4-6',
+      tools: opts.tools || [
+        { name: 'Bash', description: 'X'.repeat(20000), input_schema: { type: 'object', properties: { cmd: {} } } },
+        { name: 'Read', description: 'X'.repeat(10000), input_schema: { type: 'object' } },
+      ],
+      system: opts.system || [
+        { type: 'text', text: 'You are Claude Code, Anthropic\'s official CLI for Claude. ' + 'A'.repeat(50000), cache_control: { type: 'ephemeral' } },
+      ],
+      tool_choice: opts.tool_choice || { type: 'auto' },
     },
     response: { status: 200, body: {} },
   };
@@ -287,6 +297,109 @@ describe('restoreSlimmedEntry', () => {
     assert.equal(restoreSlimmedEntry(entry, requests), entry);
   });
 
+  it('should restore tools/system/metadata/tool_choice from fullEntry', () => {
+    const slimmer = createIncrementalSlimmer(isMainAgent);
+    const requests = [];
+
+    const e0 = makeMainAgent(10);
+    slimmer.processEntry(e0, requests, 0);
+    requests.push(e0);
+
+    const e1 = makeMainAgent(15);
+    slimmer.processEntry(e1, requests, 1);
+    requests.push(e1);
+
+    // entry 0 现在已被 slim 且 body.tools 仅保留 name
+    assert.equal(requests[0]._slimmed, true);
+    assert.equal(requests[0].body.tools.length, 2);
+    assert.equal(requests[0].body.tools[0].name, 'Bash');
+    assert.equal(requests[0].body.tools[0].description, undefined, 'description should be stripped');
+    assert.equal(requests[0].body.tools[0].input_schema, undefined, 'input_schema should be stripped');
+
+    // system text 被截断
+    assert.ok(requests[0].body.system[0].text.length <= 2048);
+    assert.ok(requests[0].body.system[0].text.startsWith('You are Claude Code'));
+    assert.deepEqual(requests[0].body.system[0].cache_control, { type: 'ephemeral' });
+
+    // metadata 仅保留 user_id
+    assert.equal(requests[0].body.metadata.user_id, 'user-1');
+    assert.equal(requests[0].body.metadata.request_id, undefined);
+
+    // tool_choice 被删除
+    assert.equal('tool_choice' in requests[0].body, false);
+
+    // restore 后从 fullEntry 还原所有字段
+    const restored = restoreSlimmedEntry(requests[0], requests);
+    assert.equal(restored.body.tools[0].description.length, 20000);
+    assert.equal(restored.body.tools[0].input_schema.type, 'object');
+    assert.equal(restored.body.system[0].text.length > 2048, true);
+    assert.equal(restored.body.metadata.request_id, requests[1].body.metadata.request_id);
+    assert.deepEqual(restored.body.tool_choice, { type: 'auto' });
+  });
+
+  it('should not mutate fullEntry body when slim runs (incremental path)', () => {
+    const slimmer = createIncrementalSlimmer(isMainAgent);
+    const requests = [];
+
+    const e0 = makeMainAgent(10);
+    const origToolsRef = e0.body.tools;
+    const origSystemRef = e0.body.system;
+    slimmer.processEntry(e0, requests, 0);
+    requests.push(e0);
+
+    const e1 = makeMainAgent(15);
+    slimmer.processEntry(e1, requests, 1);
+    requests.push(e1);
+
+    // 增量路径 clone 后 e0 实例本身的 body 不应被替换（关键：React state 引用不变）
+    assert.equal(e0.body.tools, origToolsRef, 'original e0.body.tools reference must not be mutated');
+    assert.equal(e0.body.system, origSystemRef, 'original e0.body.system reference must not be mutated');
+    // 而 requests[0] 是 cloned slimmed entry
+    assert.notEqual(requests[0], e0, 'requests[0] should be the cloned slimmed entry, not e0');
+    assert.equal(requests[0].body.tools[0].description, undefined);
+  });
+
+  it('should slim body.tools/system in batch slimmer', () => {
+    const entries = [];
+    const e0 = makeMainAgent(10);
+    const e1 = makeMainAgent(15);
+    entries.push(e0, e1);
+
+    const slimmer = createEntrySlimmer(isMainAgent);
+    slimmer.process(e0, entries, 0);
+    slimmer.process(e1, entries, 1);
+    slimmer.finalize(entries);
+
+    assert.equal(entries[0]._slimmed, true);
+    assert.equal(entries[0].body.tools[0].description, undefined);
+    assert.ok(entries[0].body.system[0].text.length <= 2048);
+    assert.equal('tool_choice' in entries[0].body, false);
+    // entry 1 是 fullEntry，未变
+    assert.equal(entries[1]._slimmed, undefined);
+    assert.equal(entries[1].body.tools[0].description.length, 20000);
+  });
+
+  it('should preserve identifiers needed for isMainAgent detection in slimmed system text', () => {
+    const slimmer = createIncrementalSlimmer(isMainAgent);
+    const requests = [];
+
+    const e0 = makeMainAgent(10);
+    slimmer.processEntry(e0, requests, 0);
+    requests.push(e0);
+
+    const e1 = makeMainAgent(15);
+    slimmer.processEntry(e1, requests, 1);
+    requests.push(e1);
+
+    // slim 后 system text 必须仍包含 "You are Claude Code" 标识
+    const sysText = requests[0].body.system.map(s => s.text || '').join('');
+    assert.ok(sysText.includes('You are Claude Code'), 'slimmed system must retain MainAgent identifier');
+    // tools[].name 必须保留（isMainAgent 旧路径依赖 body.tools.some(t=>t.name==='Edit') 等）
+    assert.ok(Array.isArray(requests[0].body.tools));
+    assert.equal(requests[0].body.tools[0].name, 'Bash');
+    assert.equal(requests[0].body.tools[1].name, 'Read');
+  });
+
   it('should restore cascaded slimmed entry using cascaded _fullEntryIndex', () => {
     // Build entries via the slimmer so cascade is applied correctly
     const slimmer = createIncrementalSlimmer(isMainAgent);
@@ -315,5 +428,69 @@ describe('restoreSlimmedEntry', () => {
     const restored = restoreSlimmedEntry(requests[0], requests);
     assert.notEqual(restored, requests[0], 'should return new object');
     assert.equal(restored.body.messages.length, 10, 'restored entry should have original 10 messages sliced from entry 2');
+  });
+});
+
+// ─── slimBodyBigFields edge cases ─────────────────────────────────────────────
+
+describe('slimBodyBigFields edge cases', () => {
+  it('should truncate body.system when it is a long string (not array)', () => {
+    const body = {
+      messages: [{ role: 'user', content: 'x' }],
+      system: 'You are Claude Code, ' + 'A'.repeat(SYSTEM_TEXT_KEEP_PREFIX * 2),
+    };
+    const slimmed = slimBodyBigFields(body);
+    assert.equal(typeof slimmed.system, 'string');
+    assert.equal(slimmed.system.length, SYSTEM_TEXT_KEEP_PREFIX);
+    assert.ok(slimmed.system.startsWith('You are Claude Code'));
+    // 短字符串不截断
+    const shortBody = { messages: [], system: 'short text' };
+    assert.equal(slimBodyBigFields(shortBody).system, 'short text');
+  });
+
+  it('should normalize tools entries that lack a name', () => {
+    const body = {
+      messages: [{ role: 'user', content: 'x' }],
+      tools: [
+        { name: 'Bash', description: 'X'.repeat(5000) },
+        { description: 'no-name tool', input_schema: { type: 'object' } },
+        null,
+        { name: '', description: 'empty-name tool' },
+      ],
+    };
+    const slimmed = slimBodyBigFields(body);
+    assert.equal(slimmed.tools.length, 4);
+    // tool with name: { name } only
+    assert.deepEqual(slimmed.tools[0], { name: 'Bash' });
+    // no-name tool: 不能保留 description（避免变相绕过 slim）
+    assert.deepEqual(slimmed.tools[1], { name: null });
+    assert.equal('description' in slimmed.tools[1], false, 'no-name tool must not retain description');
+    // null entry: 也降级为 { name: null }
+    assert.deepEqual(slimmed.tools[2], { name: null });
+    // empty-string name 视为无 name
+    assert.deepEqual(slimmed.tools[3], { name: null });
+  });
+
+  it('should handle body.metadata when null/undefined', () => {
+    // metadata 是 null
+    const bodyNull = {
+      messages: [{ role: 'user', content: 'x' }],
+      metadata: null,
+    };
+    const slimmedNull = slimBodyBigFields(bodyNull);
+    assert.equal(slimmedNull.metadata, null, 'null metadata should pass through unchanged');
+
+    // metadata 缺失
+    const bodyMissing = { messages: [{ role: 'user', content: 'x' }] };
+    const slimmedMissing = slimBodyBigFields(bodyMissing);
+    assert.equal('metadata' in slimmedMissing, false, 'missing metadata stays missing');
+
+    // metadata 无 user_id
+    const bodyNoUserId = {
+      messages: [{ role: 'user', content: 'x' }],
+      metadata: { request_id: 'r-123', some_other: 'value' },
+    };
+    const slimmedNoUserId = slimBodyBigFields(bodyNoUserId);
+    assert.deepEqual(slimmedNoUserId.metadata, {}, 'metadata without user_id slims to empty object');
   });
 });

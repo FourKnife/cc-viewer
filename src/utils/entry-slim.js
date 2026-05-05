@@ -4,14 +4,68 @@
  * 老格式日志每条 MainAgent entry 包含累积的完整 messages，
  * 480MB 文件 JSON.parse 后在浏览器中膨胀到 ~1.2GB → OOM。
  *
- * 核心机制：同 session 内只保留最新一条 MainAgent 的完整 messages，
+ * 核心机制：同 session 内只保留最新一条 MainAgent 的完整 messages 与 body 大字段，
  * 前一条立即释放。被剪枝的 entry 记录 _fullEntryIndex 供按需还原。
+ *
+ * v2: 除 messages 外，body.tools / body.system / body.metadata / body.tool_choice 也参与 slim。
+ *     - body.tools: 每个 tool 仅保留 name（删除 description 与 input_schema）
+ *     - body.system: 每个 text block 仅保留前 SYSTEM_TEXT_KEEP_PREFIX 字符
+ *     - body.metadata: 仅保留 user_id（slim session boundary 检测依赖）
+ *     - body.tool_choice: 直接删除
+ *   兼顾：保留 isMainAgent / isNativeTeammate / classifyRequest 等 read path 所需的 shape。
+ *   单条 MainAgent entry 节省 ~250–300KB，全 session 累计节省 ~50% 渲染进程堆内存。
  *
  * 导出：
  * - createEntrySlimmer(isMainAgentFn): 批量剪枝器（历史日志加载，process + finalize）
- * - createIncrementalSlimmer(isMainAgentFn): 增量剪枝器（实时 SSE，无需 finalize）
+ * - createIncrementalSlimmer(isMainAgentFn): 增量剪枝器（实时 SSE,无需 finalize）
  * - restoreSlimmedEntry(entry, requests): 按需还原被剪枝的 entry
  */
+
+// system text 每个 block 保留的前缀长度（字符数）。
+// 必须足够覆盖现有的 system text 检测关键词（contentFilter.js / teammateDetector.js）：
+//   - "You are Claude Code"        ~50 字符内
+//   - "You are a Claude agent"     ~50 字符内
+//   - SUBAGENT_SYSTEM_RE: "command execution specialist | file search specialist
+//     | planning specialist | general-purpose agent"
+//   - cc_version=X.Y.Z (extractCcVersion)
+// 假设：所有上述检测器消费的关键词都在 system block 前 2KB 内。新增依赖 system text
+// 更长前缀的检测器时，同步上调此常数。2048 字符相对原始 ~50KB 节省 ~96%。
+export const SYSTEM_TEXT_KEEP_PREFIX = 2048;
+
+/**
+ * 把一个 body 的大字段降级为占位 shape；返回新 body 对象（不 mutate 原 body）。
+ * 调用方必须自行替换 entry.body = slimBodyBigFields(entry.body)。
+ * Export 仅用于单元测试，运行时调用方应使用 createEntrySlimmer / createIncrementalSlimmer。
+ */
+export function slimBodyBigFields(body) {
+  if (!body) return body;
+  const next = { ...body, messages: [] };
+
+  if (Array.isArray(body.tools)) {
+    next.tools = body.tools.map(t => ({ name: (t && t.name) || null }));
+  }
+
+  if (Array.isArray(body.system)) {
+    next.system = body.system.map(blk => {
+      if (!blk || typeof blk !== 'object') return blk;
+      if (blk.type === 'text' && typeof blk.text === 'string' && blk.text.length > SYSTEM_TEXT_KEEP_PREFIX) {
+        const slimBlock = { ...blk, text: blk.text.slice(0, SYSTEM_TEXT_KEEP_PREFIX) };
+        return slimBlock;
+      }
+      return blk;
+    });
+  } else if (typeof body.system === 'string' && body.system.length > SYSTEM_TEXT_KEEP_PREFIX) {
+    next.system = body.system.slice(0, SYSTEM_TEXT_KEEP_PREFIX);
+  }
+
+  if (body.metadata && typeof body.metadata === 'object') {
+    next.metadata = body.metadata.user_id ? { user_id: body.metadata.user_id } : {};
+  }
+
+  if ('tool_choice' in next) delete next.tool_choice;
+
+  return next;
+}
 
 /**
  * 创建流式剪枝器。
@@ -62,7 +116,7 @@ export function createEntrySlimmer(isMainAgentFn) {
         return entry;
       }
 
-      // 同 session：剪枝前一条 MainAgent 的 messages
+      // 同 session：剪枝前一条 MainAgent 的 messages 与 body 大字段
       if (prevMainIdx >= 0 && prevMainIdx < entries.length) {
         const prev = entries[prevMainIdx];
         if (prev.body?.messages?.length > 0) {
@@ -74,7 +128,10 @@ export function createEntrySlimmer(isMainAgentFn) {
           prev._messageCount = pCount;
           prev._messagesIndex = idxArr;
           prev._slimmed = true;
-          prev.body.messages = [];
+          // 批量路径：原代码就是 in-place mutate prev.body.messages = []，
+          // 这里同样 in-place 替换 body 各大字段。entries 数组在 _batchSlim 阶段
+          // 还未传给 React，无渲染中间态风险。
+          prev.body = slimBodyBigFields(prev.body);
         }
       }
 
@@ -154,15 +211,21 @@ export function restoreSlimmedEntry(entry, requests) {
   const fullEntry = requests[entry._fullEntryIndex];
   if (!fullEntry?.body?.messages) return entry;
   if (fullEntry.body.messages.length < entry._messageCount) return entry;
+  // 从 fullEntry 还原所有被 slim 掉/降级的大字段（messages/tools/system/metadata/tool_choice）。
+  // entry.body 自身的非 big-field（model、max_tokens、stream 等）保留。
+  const fullBody = fullEntry.body;
   return {
     ...entry,
     _slimmed: false,
     _fullEntryIndex: undefined,
     body: {
       ...entry.body,
-      messages: fullEntry.body.messages.slice(0, entry._messageCount),
-      system: fullEntry.body.system,
-    }
+      messages: fullBody.messages.slice(0, entry._messageCount),
+      tools: fullBody.tools,
+      system: fullBody.system,
+      metadata: fullBody.metadata,
+      tool_choice: fullBody.tool_choice,
+    },
   };
 }
 
@@ -220,15 +283,20 @@ export function createIncrementalSlimmer(isMainAgentFn) {
         return entry;
       }
 
-      // 前向 slim：剪枝上一条 MainAgent
+      // 前向 slim：剪枝上一条 MainAgent 的 messages 与 body 大字段
       // 注意：必须 clone entry 再修改，不能 in-place mutate。
       // requests 数组是 [...prev.requests] 浅拷贝，元素仍与 React 上一次 state 共享引用，
       // 直接 mutate 会导致 React 渲染中途看到 messages=[] 的中间态，引起对话闪烁。
       if (prevMainIdx >= 0 && prevMainIdx < requests.length) {
         const orig = requests[prevMainIdx];
         if (orig.body?.messages?.length > 0) {
-          const cloned = { ...orig, body: { ...orig.body }, _messageCount: orig.body.messages.length, _slimmed: true, _fullEntryIndex: currentIdx };
-          cloned.body.messages = [];
+          const cloned = {
+            ...orig,
+            body: slimBodyBigFields(orig.body),
+            _messageCount: orig.body.messages.length,
+            _slimmed: true,
+            _fullEntryIndex: currentIdx,
+          };
           requests[prevMainIdx] = cloned;
           sessionSlimmedIndices.add(prevMainIdx);
         }

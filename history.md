@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.237 (2026-05-05)
+
+- perf(entry-slim): MainAgent body 大字段 slim 扩展到 tools/system/metadata/tool_choice（堆快照实证 884 条 slimmed entry 各保留完整 ~250KB body.tools 是渲染进程内存暴涨主因；预期回收 ~50% 渲染堆 / ~256MB）
+
+---
+
 ## 1.6.236 (2026-05-05)
 
 - perf(chatview): viewReqProps 9 处 spread → 显式 prop（消除 messages.map 内对象创建热点）
@@ -19,6 +25,53 @@
 - perf(interceptor): SSE 流式累积延迟物化（消除 V8 ConsString 多次 O(n) 拷贝）
 - feat(chat): live 模式 compact 时间戳 + view-request 图标按钮
 - fix(server/sse): /events 默认窗口 + 全 SSE 写循环 backpressure
+
+---
+
+## perf(entry-slim): MainAgent body 大字段 slim 扩展到 tools/system/metadata/tool_choice
+
+### 问题
+
+用户反馈渲染进程内存频繁暴涨。Chrome heap snapshot（782MB JSON / 7.93M nodes / 436.5 MB self_size + 81 MB native ≈ 520 MB 实际堆）实证：
+
+- **字符串占 47.3% / 206.5 MB；94 % 字符串字节是重复**（理论可去重 194.6 MB）
+- 0 个 detached DOM 节点、0 个 self_size > 1MB 的数组、最大 Map/Set 仅 23 entries —— 排除监听器泄漏、unbounded cache、ArrayBuffer 等常规嫌疑
+- Top 30 self_size 中 **13 项是工具描述与 system prompt 的完整副本**：884 份 Bash 工具描述（每份 20.8 KB） / 884 份 Monitor / 884 份 Read / 798 份 TeamCreate / 287 份 53KB system prompt / 81 份 56KB system prompt …… 单 tools 描述累计 ~70MB、system 累计 ~20MB
+
+边遍历对应：`string("Executes a given bash...")` ← `.description` ← `Object{tool}` ← `[idx]` ← `Array(tools)` ← `.tools` ← `Object{body}` ← `.body` ← request entry。**887 条 request body 同时活在 state.requests 中各自保留完整 tools[]**。
+
+根因是 `src/utils/entry-slim.js` 的 slim 操作只清空 `body.messages = []`，**没动 `body.tools`、`body.system`、`body.metadata`、`body.tool_choice`**。注释里写"消除 480MB 老格式日志膨胀到 1.2GB OOM"，但 v1 实现实际只解决了 messages 维度，剩下的大字段在每条 slimmed entry 里都被原样保留。
+
+### 方案
+
+`slimBodyBigFields(body)` 把 4 个大字段降级为占位 shape 而非粗暴 delete，目标是**保留 read path 所需的最小结构、零调用方改动**：
+
+- `body.tools[]`：每个 tool 仅保留 `{ name }`（`description` ~20KB / `input_schema` 全删）。`isMainAgent` 旧路径 `body.tools.some(t => t.name === 'Edit')`、`isNativeTeammate` 中 `tools.some(t => t.name === 'SendMessage')`、`isPreflightRequest` 的 `tools.length` 全部仍正常工作。
+- `body.system[]`：每个 text block 保留前 `SYSTEM_TEXT_KEEP_PREFIX = 2048` 字符与 `cache_control` 等其它字段。覆盖现有的 system text 检测关键词："You are Claude Code"、"You are a Claude agent"、`SUBAGENT_SYSTEM_RE`（command execution specialist|file search specialist|planning specialist|general-purpose agent）、`cc_version=X.Y.Z`，全部命中点都在前 2KB 内。`getSystemText` 拼接、`SUBAGENT_SYSTEM_RE.test` 等正则全部仍正常工作。
+- `body.metadata`：仅保留 `user_id`（slim session boundary 检测依赖）、删除 `request_id` 等其它字段。
+- `body.tool_choice`：直接 `delete`，无 read path 依赖。
+
+`restoreSlimmedEntry` 对称还原 4 个字段（旧版本已经从 fullEntry.body 取 system，本次扩展到 tools/metadata/tool_choice）。
+
+并发安全维持原模块设计：批量路径 `_batchSlim` 在 entries 传给 React 前 in-place 替换 `prev.body = slimBodyBigFields(prev.body)`，增量路径 `createIncrementalSlimmer` clone 出新 entry 替换 `requests[idx]` 避免 React 渲染中间态污染。
+
+### 后果
+
+- 单条 slimmed MainAgent entry 由 ~300KB（tools desc ~250KB + system ~50KB）降到 ~11KB（tools name only ~1KB + system 前 2KB ~10KB），**节省 ~289KB / 96%**。
+- 884 条 slimmed entry × 289KB ≈ **回收 256MB / 渲染堆 ~50%**。
+- "网络报文模式"（`viewMode === 'raw'`）零影响：`DetailPanel.render()` 入口 `let request = this.getCurrentRequest()` 已自动 restore（`getCurrentRequest()` 内 `_slimmed ? restoreSlimmedEntry(...) : request`），所有 raw body 展示 / KV-Cache / ContextTab / Claude.md+Skills 检测 / 复制 / diff 全部走 restored 对象。
+- 持久化路径与既有"slim 持久化 + 加载时 restore"模式一致：`saveEntries` 写入 slimmed merged，`loadEntries → _batchSlim → restoreSlimmedEntry` 闭环还原；`_fullEntryIndex` 在 in-memory state 始终有效，跨 session 加载也通过 `loadSessionEntries` + `_processEntries`（`isMainAgent` 走 entry 顶层 `mainAgent` 标记 + 保留的 `_messageCount` / `metadata.user_id`）正常工作。
+- 隐含假设：restored 的 tools/system/metadata 取自同 session 的 fullEntry 而非该请求自己的原始值。要求"同 session 内 tools/system 在请求间稳定"——堆快照 884 份 Bash 描述完全相同验证假设成立。这不是本次新增假设，旧版 `restoreSlimmedEntry` 已对 system 这样做，本次只是把 tools/metadata/tool_choice 也纳入同一池。
+
+### 测试
+
+`test/entry-slim.test.js` 共 19 case（原 16 + 新 3），覆盖：
+
+- batch / incremental slimmer 的 tools/system/metadata/tool_choice 降级行为
+- restoreSlimmedEntry 4 字段对称还原 + cascade `_fullEntryIndex` 路径
+- React state 引用安全（incremental 路径 clone 不 mutate 原 entry）
+- isMainAgent 检测关键词在 slimmed system text 中保留
+- edge cases：`body.system` 是字符串、`body.tools[]` 元素无 name、`body.metadata` 为 null/undefined/无 user_id
 
 ---
 
