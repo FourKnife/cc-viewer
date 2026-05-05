@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.236 (2026-05-05)
+
+- perf(chatview): viewReqProps 9 处 spread → 显式 prop（消除 messages.map 内对象创建热点）
+- refactor(contexts): SettingsProvider class → 函数组件 + useMemo value（消除 contextType 订阅链路虚假重渲）
+- refactor(appheader): 抽离 LiveTagPopover + inline style 提常量 + CSS 变量化（hover 血条 popover 性能修复）
+
+---
+
 ## 1.6.235 (2026-05-05)
 
 - fix(server/sse): /events 写 backpressure 等待消除监听器累积（MaxListenersExceededWarning）
@@ -11,6 +19,77 @@
 - perf(interceptor): SSE 流式累积延迟物化（消除 V8 ConsString 多次 O(n) 拷贝）
 - feat(chat): live 模式 compact 时间戳 + view-request 图标按钮
 - fix(server/sse): /events 默认窗口 + 全 SSE 写循环 backpressure
+
+---
+
+## perf(chatview): viewReqProps 9 处 spread → 显式 prop
+
+### 问题
+
+Chrome perf trace 实测前端 hover 路径上单次主线程任务 1.7 秒、长任务总占比 38.76%、帧丢失率 75%。CPU profile 叶子热点 `_objectSpread2` 占 871 样本，反查 source-map 落在 antd v5 cssinjs runtime（`@ant-design/cssinjs-utils/es/util/genStyleUtils.js`）+ Babel `@babel/runtime/helpers/esm/objectSpread2.js`。前端代码侧的同源问题集中在 `ChatView.renderSessionMessages` L1168 的 `viewReqProps` 字面量：每条消息每次 ChatView render 都新建一次对象，9 处 `<ChatMessage {...viewReqProps}>` 各调一次 `_objectSpread2` helper，N 条消息每次 render 喂出 N 个临时对象 + 9N 次 spread，叠加 ChatMessage 内部多个 antd 组件的 cssinjs runtime spread，构成 GC scavenger 持续吃 CPU 的根因之一。
+
+### 方案
+
+`viewReqProps` 字面量删除，改为 `const hasViewRequest = reqIdx != null && onViewRequest;`。9 处 `{...viewReqProps}` 改成显式三 prop:
+
+```jsx
+requestIndex={hasViewRequest ? reqIdx : undefined}
+onViewRequest={hasViewRequest ? onViewRequest : undefined}
+isHistoryLog={isHistoryLog}
+```
+
+`ChatMessage.shouldComponentUpdate` L142-166 已逐字段比较这三个字段，prop 集合在 SCU 层面与原 spread 行为一字不差。`reqIdx==null` 时 `onViewRequest` 也传 `undefined`（与原 spread 缺字段时 `props.onViewRequest === undefined` 等价）。
+
+### 后果
+
+- 每次 ChatView render 减少 N 个 viewReqProps 字面量对象 + 9N 次 `_objectSpread2` 调用，长会话场景 GC 压力显著下降。
+- plan / askUserQuestion 状态走独立 prop 通道（`askAnswerMap` / `planApprovalMap` / `lastPendingPlanId` / `lastPendingAskId` 等），不经 viewReqProps，本改动零影响。
+
+---
+
+## refactor(contexts): SettingsProvider class → 函数组件 + useMemo value
+
+### 问题
+
+`SettingsContext.Provider` 的 value 在 class 组件 `render()` 中每次都新建对象（`{ claudeSettings, preferences, _prefsReady, _claudeSettingsReady, updatePreferences, updateClaudeSettings }`），让 `static contextType = SettingsContext` 的所有 class 子组件（AppBase / AppHeader / ChatMessage）在 SettingsProvider 任何 setState 时都收到新引用，触发 SCU 浅比较代价。长会话里 ChatMessage 实例数高达数百，每次 preferences/claudeSettings patch 都让所有订阅者付一次比较。
+
+### 方案
+
+整文件重写为函数组件:
+
+- `useState((initFn))` lazy 初始化器同步启动 fetch（不放在 useEffect 内，避免 useEffect 异步导致 `_prefsReady` Promise 在 AppBase.componentDidMount 时还未设置 → 拿到兜底空 Promise → 首屏 lang 闪屏）。`setLang` / `setClaudeConfigDir` 全局副作用紧随 fetch 回包，与原 constructor 行为等价。
+- `updatePreferences` / `updateClaudeSettings` 用 `useCallback(deps=[])` 包裹。两者内部仅通过 setState 函数式更新 + fetch，无外部闭包依赖，所以 `deps=[]` 是安全的，引用全局稳定，等价原 class field arrow。
+- `value` 用 `useMemo` 缓存，仅在 `claudeSettings` / `preferences` / `readyPromises` / 两个 callback 任一变化时重建。在常见的"AppHeader.setState 与 SettingsContext 无关"场景下 value 引用稳定，contextType 订阅者不会因 SettingsProvider 自身重渲触发不必要更新。
+- `mountedRef` 替代 `_unmounted`，且**在 useEffect 入口重置 `mountedRef.current = true`**：防止 StrictMode/HMR 下 mount → cleanup(false) → remount 时 ref 对象被复用、`mountedRef.current` 永久卡 false 的退化（这种场景下后续所有 setState 都会被 mountedRef 拦截，state 永不更新）。
+
+### 后果
+
+- 外部 API 完全保留：`SettingsContext` 默认 value 不变 / Provider value shape 一字不变 / `static contextType` 消费方零改动。
+- StrictMode 双调用：`useState` 初始化器只跑一次（React 保证），但 fetch 内的 `setLang` 副作用如开启 StrictMode 会跑两次（幂等，无功能影响）。`useEffect` 双调用经 mountedRef cleanup → reset 模式正常处理。
+
+---
+
+## refactor(appheader): 抽离 LiveTagPopover + inline style 缓存 + CSS 变量化
+
+### 问题
+
+`AppHeader.jsx` L1305-1346 的"实时上下文血条 Popover"在 AppHeader 每次 render 时都重建：`overlayInnerStyle={{ background, border, borderRadius, padding }}` 字面量、trigger span 的 `style={{ borderColor, color }}`、fill bar 的 `style={{ width, backgroundColor }}` 各自创建新对象。SSE live 模式下 `contextWindow` 高频 push 让 AppHeader 频繁重渲，这堆 inline 对象每次都新建，叠加 antd Popover 内部 cssinjs runtime 的 `_objectSpread2`，在 hover 路径上构成额外 GC 压力。`onOpenChange` 内还把 setState + `reloadFsSkills()` + `loadMemory()` 链式塞在一起，单次 hover 触发可能 3 次 commit。
+
+### 方案
+
+抽出 `src/components/LiveTagPopover.jsx` 为函数组件 + `React.memo()`:
+
+- `overlayInnerStyle` 提到模块顶层 `const POPOVER_OVERLAY_STYLE`，所有实例共享同一引用。
+- trigger span 用 CSS 变量 `style={{ '--ctx-color': ctxColor, '--ctx-percent': '${contextPercent}%' }}` + `useMemo` 缓存 triggerStyle 对象。配套修改 `AppHeader.module.css`：`.liveTag { border-color: var(--ctx-color); color: var(--ctx-color); }` 与 `.liveTagFill { width: var(--ctx-percent, 0); background-color: var(--ctx-color); }`。`.liveTagHistory`（local-log 模式）显式覆盖 border-color/color，与 var() 不冲突。
+- `onOpenChange` 提取为 class field method `handleCachePopoverOpenChange`，引用稳定不会让 LiveTagPopover memo 失效。
+
+保守化策略:`_cachePopoverOpen` / `_memory` state 留在 AppHeader 受控传给 LiveTagPopover。原因是 `_cachePopoverOpen` 在 `handleOpenSkillsModal` 里被跨组件 setState 强制关闭、`_memory` 在 workspace 切换（`componentDidUpdate` 内）时被 invalidate，搬到子组件会引入新的跨组件同步面，得不偿失。
+
+### 后果
+
+- AppHeader render 时 LiveTagPopover memo 浅比较：`contextPercent` / `ctxColor` / `projectName` / `isLocalLog` 等稳定值未变时跳过子树重渲。`requests` / `serverCachedContent` 引用每次变（SSE 期间）时仍会重渲，但开销跟原 inline 版本一样（不变差）。
+- inline style 字面量从"每次 render 创建几个新对象"降到"模块加载时创建一次 + useMemo 引用稳定"。
+- `onOpenChange` 仍在 AppHeader 内执行（保守化，未拆 useEffect），但提取为 class field 后引用稳定。
 
 ---
 
