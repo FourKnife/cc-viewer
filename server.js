@@ -48,6 +48,7 @@ import { watchLogFile, startWatching, getWatchedFiles, sendEventToClients, sendT
 import { isMainAgentEntry, extractCachedContent } from './lib/kv-cache-analyzer.js';
 import { listLocalLogs, deleteLogFiles, mergeLogFiles } from './lib/log-management.js';
 import { countLogEntries, streamRawEntriesAsync, readPagedEntries } from './lib/log-stream.js';
+import { awaitDrainOrClose } from './lib/sse-backpressure.js';
 import { enrichRawIfNeeded } from './lib/enrich-plan-input.js';
 import { buildTeamStatusResponse } from './lib/team-runtime.js';
 
@@ -1009,15 +1010,11 @@ async function handleRequest(req, res) {
       } catch {
         return;
       }
-      // 写缓冲满则等 drain（或 close/error/超时任一 fulfill），防止浏览器侧 renderer OOM
+      // 写缓冲满则等 drain（或 close/error/超时任一 fulfill），防止浏览器侧 renderer OOM。
+      // helper 内部会在 fulfill 时把另外两个监听器从 res 上摘掉，避免 N 次 backpressure
+      // 累积出 N 个 stale close/error listener 触发 MaxListenersExceededWarning。
       if (!drained) {
-        await new Promise((resolve) => {
-          const t = setTimeout(resolve, SSE_BACKPRESSURE_TIMEOUT_MS);
-          const done = () => { clearTimeout(t); resolve(); };
-          res.once('drain', done);
-          res.once('close', done);
-          res.once('error', done);
-        });
+        await awaitDrainOrClose(res, SSE_BACKPRESSURE_TIMEOUT_MS);
       }
     }, {
       since: useIncremental ? sinceParam : undefined,

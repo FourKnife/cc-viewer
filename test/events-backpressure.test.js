@@ -10,6 +10,7 @@ import {
   sendChunkToClients,
 } from '../lib/log-watcher.js';
 import { streamRawEntriesAsync } from '../lib/log-stream.js';
+import { awaitDrainOrClose } from '../lib/sse-backpressure.js';
 
 /**
  * 构造一个能模拟 backpressure / dead 状态的 SSE client。
@@ -238,5 +239,106 @@ describe('streamRawEntriesAsync limit behavior (covers /events default-window co
     }
 
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// awaitDrainOrClose helper — 回归：N 次 backpressure 等待不得在 res 上累积监听器。
+// 之前内联在 server.js /events 处理里的写法对 drain/close/error 都用 res.once()，
+// 但只有触发的那个会自动摘掉，剩下两个会一直留在 res 上，N 次 backpressure 后
+// 触发 MaxListenersExceededWarning（11 close listeners / 11 error listeners）。
+// ---------------------------------------------------------------------------
+
+describe('awaitDrainOrClose: SSE backpressure listener cleanup', () => {
+  it('removes drain/close/error listeners after drain wins', async () => {
+    const res = new EventEmitter();
+    const p = awaitDrainOrClose(res, 1000);
+    assert.equal(res.listenerCount('drain'), 1);
+    assert.equal(res.listenerCount('close'), 1);
+    assert.equal(res.listenerCount('error'), 1);
+    res.emit('drain');
+    await p;
+    assert.equal(res.listenerCount('drain'), 0, 'drain listener removed');
+    assert.equal(res.listenerCount('close'), 0, 'close listener removed even though it didn\'t fire');
+    assert.equal(res.listenerCount('error'), 0, 'error listener removed even though it didn\'t fire');
+  });
+
+  it('removes drain/close/error listeners after close wins', async () => {
+    const res = new EventEmitter();
+    const p = awaitDrainOrClose(res, 1000);
+    res.emit('close');
+    await p;
+    assert.equal(res.listenerCount('drain'), 0);
+    assert.equal(res.listenerCount('close'), 0);
+    assert.equal(res.listenerCount('error'), 0);
+  });
+
+  it('removes drain/close/error listeners after error wins', async () => {
+    const res = new EventEmitter();
+    const p = awaitDrainOrClose(res, 1000);
+    res.emit('error');
+    await p;
+    assert.equal(res.listenerCount('drain'), 0);
+    assert.equal(res.listenerCount('close'), 0);
+    assert.equal(res.listenerCount('error'), 0);
+  });
+
+  it('removes drain/close/error listeners after timeout fires (no drain ever emitted)', async () => {
+    const res = new EventEmitter();
+    const p = awaitDrainOrClose(res, 5);
+    await p;
+    assert.equal(res.listenerCount('drain'), 0, 'drain listener cleaned up on timeout');
+    assert.equal(res.listenerCount('close'), 0, 'close listener cleaned up on timeout');
+    assert.equal(res.listenerCount('error'), 0, 'error listener cleaned up on timeout');
+  });
+
+  it('regression: 20 sequential backpressure waits never accumulate listeners', async () => {
+    const res = new EventEmitter();
+    // 模拟一个常驻的 removeFromClients 监听器（server.js:1097-1098 那两个），
+    // 验证 helper 的累计净增为 0，不会把这条常驻监听器顶到 maxListeners 之上。
+    const permanent = () => {};
+    res.on('close', permanent);
+    res.on('error', permanent);
+    const baseline = {
+      drain: res.listenerCount('drain'),
+      close: res.listenerCount('close'),
+      error: res.listenerCount('error'),
+    };
+    for (let i = 0; i < 20; i++) {
+      const p = awaitDrainOrClose(res, 1000);
+      // 模拟 drain 排空 — 最常见的 happy path
+      res.emit('drain');
+      await p;
+      assert.equal(res.listenerCount('drain'), baseline.drain, `drain count stable at iter ${i}`);
+      assert.equal(res.listenerCount('close'), baseline.close, `close count stable at iter ${i}`);
+      assert.equal(res.listenerCount('error'), baseline.error, `error count stable at iter ${i}`);
+    }
+  });
+
+  it('regression: 20 sequential timeout waits never accumulate listeners', async () => {
+    const res = new EventEmitter();
+    for (let i = 0; i < 20; i++) {
+      // 短超时模拟 5s 兜底触发
+      await awaitDrainOrClose(res, 1);
+      assert.equal(res.listenerCount('drain'), 0, `iter ${i} drain`);
+      assert.equal(res.listenerCount('close'), 0, `iter ${i} close`);
+      assert.equal(res.listenerCount('error'), 0, `iter ${i} error`);
+    }
+  });
+
+  it('idempotent: extra non-error emits after resolution do not re-trigger anything', async () => {
+    const res = new EventEmitter();
+    const p = awaitDrainOrClose(res, 1000);
+    res.emit('drain');
+    await p;
+    // 第二次 emit 不应该有任何挂着的 listener 接收 — 验证 cleanup 完整。
+    // 不重发 'error'：EventEmitter 在没有 error listener 时 emit('error') 会抛，
+    // 那是 EventEmitter 自身的语义不是 helper 的 bug；listenerCount=0 已足以证明
+    // helper 把 error 监听器摘干净了。
+    res.emit('close');
+    res.emit('drain');
+    assert.equal(res.listenerCount('drain'), 0);
+    assert.equal(res.listenerCount('close'), 0);
+    assert.equal(res.listenerCount('error'), 0);
   });
 });

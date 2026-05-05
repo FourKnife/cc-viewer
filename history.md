@@ -5,6 +5,38 @@
 - perf(interceptor): SSE 流式累积延迟物化（消除 V8 ConsString 多次 O(n) 拷贝）
 - feat(chat): live 模式 compact 时间戳 + view-request 图标按钮
 - fix(server/sse): /events 默认窗口 + 全 SSE 写循环 backpressure
+- fix(server/sse): /events 写 backpressure 等待消除监听器累积（MaxListenersExceededWarning）
+
+---
+
+## fix(server/sse): /events 写 backpressure 等待消除监听器累积（MaxListenersExceededWarning）
+
+### 问题
+
+运行时反复看到：
+
+```
+MaxListenersExceededWarning: 11 close listeners added to [ServerResponse]
+MaxListenersExceededWarning: 11 error listeners added to [ServerResponse]
+```
+
+`server.js` `/events` 处理在 `streamRawEntriesAsync` 回调里遇到 backpressure 时会 `await new Promise()` 等 drain，三个事件 `drain` / `close` / `error` 都用 `res.once()` 注册。`once` 只会自动摘除"实际触发的"那一个监听器；剩下两个一直挂在 `res` 上，加上常驻的 `removeFromClients` (`res.on('close')` + `res.on('error')`)，N 次 backpressure 后单事件名监听器数 ≥ 11，触发警告。timeout 路径更糟——三个监听器全部都不摘。
+
+### 方案
+
+新增 `lib/sse-backpressure.js#awaitDrainOrClose(res, timeoutMs)`，把 backpressure 等待收敛到一个 helper：
+
+- 三个事件都用 `res.once()` 注册到同一个 `done` 闭包
+- `done` 触发时 `clearTimeout` + `res.off('drain'|'close'|'error', done)` 主动摘掉另外两个未触发的监听器，再 `resolve()`
+- timeout 也复用 `done`，路径一致
+
+`server.js` 1013-1021 的内联实现整个被替换为单行 `await awaitDrainOrClose(res, SSE_BACKPRESSURE_TIMEOUT_MS)`。
+
+### 后果
+
+- 一次 backpressure 等待对 `res` 的净监听器增量 = 0（无论从 drain / close / error / timeout 哪条路径出来）
+- 行为完全保留：四种 fulfill 来源任一发生即继续下一条写入，timeout 仍是 5s 兜底
+- 新增 `test/events-backpressure.test.js#awaitDrainOrClose` 7 条单测，覆盖四种触发路径 + 20 次连续 backpressure + 20 次连续 timeout 不累积监听器 + 常驻 listener 与 helper 共存
 
 ---
 
