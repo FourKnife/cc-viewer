@@ -1,11 +1,16 @@
 # Changelog
 
+## 1.6.235 (2026-05-05)
+
+- fix(server/sse): /events 写 backpressure 等待消除监听器累积（MaxListenersExceededWarning）
+
+---
+
 ## 1.6.234 (2026-05-05)
 
 - perf(interceptor): SSE 流式累积延迟物化（消除 V8 ConsString 多次 O(n) 拷贝）
 - feat(chat): live 模式 compact 时间戳 + view-request 图标按钮
 - fix(server/sse): /events 默认窗口 + 全 SSE 写循环 backpressure
-- fix(server/sse): /events 写 backpressure 等待消除监听器累积（MaxListenersExceededWarning）
 
 ---
 
