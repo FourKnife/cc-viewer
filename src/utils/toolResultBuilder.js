@@ -5,6 +5,7 @@
 
 import { extractToolResultText } from './helpers';
 import { t } from '../i18n';
+import { internReadResult } from './readResultPool.js';
 
 // --- WeakMap cache for tool result state ---
 
@@ -17,6 +18,7 @@ export function getToolResultCache(messages) {
 export function setToolResultCache(messages, state) {
   _toolResultCache.set(messages, state);
 }
+
 
 // --- State builder ---
 
@@ -131,7 +133,11 @@ export function appendToolResultMap(state, messages, startIndex) {
               label = t('ui.toolReturnNamed', { name: matchedTool.name });
             }
           }
-          const resultText = extractToolResultText(block);
+          let resultText = extractToolResultText(block);
+          // Read 工具结果走 intern pool（同 .jsx 内容跨 entry 共享引用，~30MB 节省）
+          if (matchedTool && matchedTool.name === 'Read') {
+            resultText = internReadResult(resultText);
+          }
           const isError = !!block.is_error;
           const isPermissionDenied = isError && resultText && /doesn't want to proceed|Permission.*denied|rejected.*tool use|interrupted by user for tool use/i.test(resultText);
           const isUltraplan = isPermissionDenied && resultText && /ultraplan/i.test(resultText);

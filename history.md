@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.238 (2026-05-05)
+
+- perf(entry-slim): 全局 intern pool + Read tool_result content-hash dedup（堆 v3 实测从 531MB → 189MB / 节省 65%；Bash 描述 678 份 → 4 份；解决 1.6.237 fullEntry 累积根因）
+
+---
+
 ## 1.6.237 (2026-05-05)
 
 - perf(entry-slim): MainAgent body 大字段 slim 扩展到 tools/system/metadata/tool_choice（堆快照实证 884 条 slimmed entry 各保留完整 ~250KB body.tools 是渲染进程内存暴涨主因；预期回收 ~50% 渲染堆 / ~256MB）
@@ -25,6 +31,67 @@
 - perf(interceptor): SSE 流式累积延迟物化（消除 V8 ConsString 多次 O(n) 拷贝）
 - feat(chat): live 模式 compact 时间戳 + view-request 图标按钮
 - fix(server/sse): /events 默认窗口 + 全 SSE 写循环 backpressure
+
+---
+
+## perf(entry-slim): 全局 intern pool + Read tool_result content-hash dedup
+
+### 问题
+
+1.6.237 发布后再做 heap snapshot（1.1GB JSON / 531MB self_size），实测发现**预期 256MB 节省并未达到**：Bash 工具描述仅从 884 份降到 678 份（-23%），53KB system prompt 反而从 287 份涨到 317 份。
+
+反向边图实证根因：`createIncrementalSlimmer` 设计上**只 slim 同 session 的"前一条" MainAgent**，每个 session 的"最后一条" fullEntry 永远保留完整 body.tools。再加上 session boundary 检测（`count < prevMsgCount * 0.5 && (prevMsgCount - count) > 4`）在长会话 streaming/delta 场景频繁误触发，单次 heap 累积 678 个 fullEntry，每个独占 ~250KB tools 描述 ≈ 170MB 浪费。**slim 越彻底越接近 678 个 fullEntry，越浪费**。
+
+第二个独立问题：subagent / 父 user message 累积同一 .jsx 文件 87 份完整副本（30MB+），不在 1.6.237 优化范围。
+
+### 方案
+
+不再依赖"按 session 边界 slim"思路，引入**全局 intern pool**：所有 entry（含 fullEntry）的 body.tools / body.system 在进入 state.requests 之前过 `internEntryBigFields(entry)`，按 signature 命中 module-level pool 共享同一份完整数据；slim 与 intern 是两件正交的事，slim 仍按原逻辑降级 messages，但 fullEntry 的 tools/system 不再每条独占。
+
+`src/utils/entry-slim.js` 新增：
+- `_toolsPool` / `_systemPool` Map<sig, fullArray>，FIFO 上限 200
+- `_toolsSig` 用 `t:` 前缀 + length + 各 tool name + description.length 拼接
+- `_systemSig` 用 `a:` / `s:` 前缀 + length + 各 block type + textLength + 前 50 + 中部 50 字符（双段防长文本碰撞）
+- `_internOrAdd` 注册时 `Object.freeze` 浅冻结防止 caller mutate 污染
+- `internEntryBigFields(entry)` 替换 body.tools / body.system 为 pool ref，dirty 时返回 clone，干净时返回原 entry
+
+`src/AppBase.jsx`：
+- `_flushPendingEntries:1091` 在 SSE reconstruct 后立即 intern
+- `_batchSlim:140` 每条 entry 先 intern 再 slim；自动覆盖 loadEntries / load_chunk / loadMoreHistory / loadSessionEntries / load_end / batch reload 7 处批量路径
+
+`src/utils/readResultPool.js`（新模块）+ `src/utils/toolResultBuilder.js:139`：
+- `internReadResult(s)` 对 ≥256 字符的 Read tool_result 做 content-addressed dedup
+- sig = length + 前 64 + 后 64 字符；FIFO 容量 1000
+- 抽到独立模块（无外部依赖）规避 toolResultBuilder.js 传递 import（./helpers 无 .js 后缀）的 ESM 解析问题
+
+### 后果
+
+heap v3 实测三方对比（同等长度会话）：
+
+| 指标 | 1.6.236 baseline | 1.6.237 已发布 | 1.6.238 v3 | 净降幅 |
+|---|---:|---:|---:|---:|
+| JSON 大小 | 782MB | 1.15GB | **450MB** | **−61%** |
+| self_size | 436MB | 531MB | **189MB** | **−65% / −342MB** |
+| 字符串总量 | 206MB | 206MB | **41MB** | **−81%** |
+| Bash 描述份数 | 884 | 678 | **4** | -99.5% |
+| 53KB system prompt 份数 | 287 | 317 | **4** | -98.6% |
+| Agent 描述份数 | 284 | 28 | **2** | -99.3% |
+
+每工具堆里仅 2–4 份对应 4 种合法 session shape（MainAgent / SubAgent / Plan / Task spawner），不是 leak，是设计预期。反向边图实证 678 个 fullEntry 的 body.tools 全部指向 pool ref，零遗留副本。
+
+实际节省（342MB）超过原估算（210MB）的原因：tools/system 共享后**外层 Object wrapper 与 closure 也跟随下降 60%**——单条 entry 不再独占 tools 数组对象 → 不再独占 tool 项对象 → 不再独占 description 字符串。整个 retainer 链一起塌。
+
+"网络报文模式"（`viewMode === 'raw'`）零功能影响：`DetailPanel.render()` 入口 `getCurrentRequest()` 已对 _slimmed entry 做 restore，restored entry 的 body.tools 是 pool ref（完整）；intern 不破坏 restore 语义。
+
+### 测试
+
+`test/entry-slim.test.js` 新增 8 个 case（含 freeze 行为防御性测试 + 6 种 sig 边界）+ `test/toolResultBuilder-dedup.test.js` 8 个 case 覆盖 internReadResult。共 1549/1549 通过（旧 1533 + 新 16）。
+
+### 已知剩余热点（下一站）
+
+- subagent / teammate messages 中其它工具的 tool_result（Bash / Grep / Glob 输出）尚未走 dedup 池，可扩展 `readResultPool` 为通用 `toolResultPool`
+- Anthropic content-block Object wrappers 仍占 ~68MB
+- AntD render leak（onJsEllipsis / triggerEdit 等 4794 份）需 react-window 虚拟化才能根除
 
 ---
 

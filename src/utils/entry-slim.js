@@ -32,10 +32,133 @@
 // 更长前缀的检测器时，同步上调此常数。2048 字符相对原始 ~50KB 节省 ~96%。
 export const SYSTEM_TEXT_KEEP_PREFIX = 2048;
 
+// ─── intern pools (v3) ──────────────────────────────────────────────────────
+// 1.6.237 实测：每个 session 的"最后一条" MainAgent 仍保留完整 body.tools（fullEntry
+// 不被 slim），678 个 fullEntry 各持一份 ~250KB tools 描述 ≈ 170MB 浪费。
+// v3 修正：所有 entry（含 fullEntry）的 body.tools / body.system 走 module-level pool
+// 共享同一引用。signature 命中时直接替换为 pool ref，pool 内是完整原始数据。
+// pool 容量上限防御异常输入；正常 cc-viewer session 内 tools/system 配置稳定，
+// pool 实测 size 通常 < 5。FIFO eviction 见 _internOrAdd。
+const _MAX_INTERN_POOL_SIZE = 200;
+const _toolsPool = new Map();   // sig → tools array (full, shared)
+const _systemPool = new Map();  // sig → system array (full, shared)
+
+function _toolsSig(tools) {
+  if (!Array.isArray(tools) || tools.length === 0) return '';
+  // 't:' 前缀让 tools / system / readResult 三套 sig 命名空间正交，
+  // 避免未来如果共用同一个 pool 时碰撞。
+  let sig = 't:' + tools.length;
+  for (const t of tools) {
+    sig += '|' + (t?.name || '') + ':' + (t?.description?.length || 0);
+  }
+  return sig;
+}
+
+function _systemSig(system) {
+  if (Array.isArray(system)) {
+    if (system.length === 0) return 'a:0';
+    let sig = 'a:' + system.length;
+    for (const b of system) {
+      const text = b?.text || '';
+      // 边界增强（CR P1 defensive）：cc-viewer 场景中 system block 跨 entry 通常同模板，
+      // 仅前缀检测在长 text 后段差异时不足。加中段 50 字符显著降低误共享概率。
+      const mid = text.length > 100 ? Math.floor(text.length / 2) : 0;
+      sig += '|' + (b?.type || '') + ':' + text.length + ':' + text.slice(0, 50) + ':' + text.slice(mid, mid + 50);
+    }
+    return sig;
+  }
+  if (typeof system === 'string') {
+    const mid = system.length > 100 ? Math.floor(system.length / 2) : 0;
+    return 's:' + system.length + ':' + system.slice(0, 50) + ':' + system.slice(mid, mid + 50);
+  }
+  return '';
+}
+
+function _internOrAdd(pool, sig, value) {
+  let pooled = pool.get(sig);
+  if (pooled) return pooled;
+  if (pool.size >= _MAX_INTERN_POOL_SIZE) {
+    // FIFO eviction — 早期插入的优先丢；cc-viewer 场景 tools/system 配置稳定，pool
+    // 实测命中率极高（典型 size <5），FIFO/LRU 等价；远期升级 LRU 时再换。
+    pool.delete(pool.keys().next().value);
+  }
+  // 浅冻结 pool entries（CR P1 defensive）：防止 caller 拿到 ref 后 push/splice 污染
+  // 所有共享该 ref 的 entry。Object.freeze 是浅层（数组顶层不可变，元素对象不冻结
+  // 以避免影响 React 渲染期可能 mutate 内部字段——cc-viewer 实际不发生但保留余地）。
+  if (Array.isArray(value)) Object.freeze(value);
+  pool.set(sig, value);
+  return value;
+}
+
 /**
- * 把一个 body 的大字段降级为占位 shape；返回新 body 对象（不 mutate 原 body）。
- * 调用方必须自行替换 entry.body = slimBodyBigFields(entry.body)。
- * Export 仅用于单元测试，运行时调用方应使用 createEntrySlimmer / createIncrementalSlimmer。
+ * 把 entry.body.tools / body.system 替换为 module-level pool 中的共享引用。
+ * 在 entry 进入 state.requests 之前调用，所有路径（SSE flush / batch load /
+ * IndexedDB cached restore）都应过一遍此函数。
+ *
+ * 返回新 entry 对象（如果 body 字段被替换）或原 entry（无变化时）。
+ *
+ * @param {object} entry
+ * @returns {object}
+ */
+export function internEntryBigFields(entry) {
+  if (!entry?.body) return entry;
+  const body = entry.body;
+  let newTools = body.tools;
+  let newSystem = body.system;
+  let dirty = false;
+
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
+    const sig = _toolsSig(body.tools);
+    const pooled = _internOrAdd(_toolsPool, sig, body.tools);
+    if (pooled !== body.tools) {
+      newTools = pooled;
+      dirty = true;
+    }
+  }
+
+  if ((Array.isArray(body.system) && body.system.length > 0) || typeof body.system === 'string') {
+    const sig = _systemSig(body.system);
+    if (sig) {
+      const pooled = _internOrAdd(_systemPool, sig, body.system);
+      if (pooled !== body.system) {
+        newSystem = pooled;
+        dirty = true;
+      }
+    }
+  }
+
+  if (dirty) {
+    return {
+      ...entry,
+      body: { ...entry.body, tools: newTools, system: newSystem },
+    };
+  }
+  return entry;
+}
+
+/**
+ * 测试辅助：清空 intern pools。仅用于单元测试隔离。
+ */
+export function _resetInternPoolsForTest() {
+  _toolsPool.clear();
+  _systemPool.clear();
+}
+
+/**
+ * 测试辅助：观察 pool 当前状态（仅 size）。
+ */
+export function _getInternPoolStatsForTest() {
+  return { toolsPoolSize: _toolsPool.size, systemPoolSize: _systemPool.size };
+}
+
+/**
+ * 把一个 body 的大字段降级为占位 shape，返回**新 body 对象**（不 mutate 原 body）。
+ * 调用方拿到新 body 后需自行赋值给 entry，例如 `entry.body = slimBodyBigFields(entry.body)`
+ * （批量路径）或在 clone 中嵌入（增量路径，避免 React 渲染中间态）。
+ * Export 仅用于单元测试；运行时调用方应使用 createEntrySlimmer / createIncrementalSlimmer。
+ *
+ * @param {object} body
+ * @returns {object} 新 body 对象
  */
 export function slimBodyBigFields(body) {
   if (!body) return body;

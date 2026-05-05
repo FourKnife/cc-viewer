@@ -2,7 +2,7 @@
  * Unit tests for src/utils/entry-slim.js
  * 覆盖 createIncrementalSlimmer 和 restoreSlimmedEntry 的防御检查。
  */
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createIncrementalSlimmer,
@@ -10,6 +10,9 @@ import {
   restoreSlimmedEntry,
   slimBodyBigFields,
   SYSTEM_TEXT_KEEP_PREFIX,
+  internEntryBigFields,
+  _resetInternPoolsForTest,
+  _getInternPoolStatsForTest,
 } from '../src/utils/entry-slim.js';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -492,5 +495,99 @@ describe('slimBodyBigFields edge cases', () => {
     };
     const slimmedNoUserId = slimBodyBigFields(bodyNoUserId);
     assert.deepEqual(slimmedNoUserId.metadata, {}, 'metadata without user_id slims to empty object');
+  });
+});
+
+// ─── internEntryBigFields (intern pool) ───────────────────────────────────────
+
+describe('internEntryBigFields', () => {
+  beforeEach(() => {
+    _resetInternPoolsForTest();
+  });
+
+  it('should share tools array reference across entries with identical tools content', () => {
+    const e1 = makeMainAgent(5);
+    const e2 = makeMainAgent(8);
+    // 默认 tools fixture 一致 → signature 相同 → 共享引用
+    const i1 = internEntryBigFields(e1);
+    const i2 = internEntryBigFields(e2);
+    assert.equal(i1.body.tools, i2.body.tools, 'identical tools should be the same reference after intern');
+    // 第一次 intern 时 e1 的 tools 不变（被注册到 pool）
+    assert.equal(i1, e1, 'first intern returns original entry (no body replacement needed)');
+    // 第二次 intern 时 e2 拿 pool ref → e2 被 clone
+    assert.notEqual(i2, e2, 'second intern returns cloned entry with pooled tools');
+    assert.equal(i2.body.tools, e1.body.tools, 'i2 tools points to e1 tools (pool registered first)');
+  });
+
+  it('should share system array reference for identical system content', () => {
+    const e1 = makeMainAgent(5);
+    const e2 = makeMainAgent(8);
+    const i1 = internEntryBigFields(e1);
+    const i2 = internEntryBigFields(e2);
+    assert.equal(i1.body.system, i2.body.system, 'identical system should share reference');
+  });
+
+  it('should keep distinct entries when tools/system signatures differ', () => {
+    const e1 = makeMainAgent(5);
+    const e2 = makeMainAgent(8, {
+      tools: [{ name: 'Edit', description: 'X'.repeat(2000) }],
+    });
+    const i1 = internEntryBigFields(e1);
+    const i2 = internEntryBigFields(e2);
+    assert.notEqual(i1.body.tools, i2.body.tools, 'different tools content should not collide');
+    const stats = _getInternPoolStatsForTest();
+    assert.equal(stats.toolsPoolSize, 2, 'tools pool should hold 2 distinct entries');
+  });
+
+  it('should be idempotent — interning an already pooled entry returns the same object', () => {
+    const e1 = makeMainAgent(5);
+    const i1a = internEntryBigFields(e1);
+    const i1b = internEntryBigFields(i1a);
+    assert.equal(i1a, i1b, 'second intern of same entry should not clone again');
+  });
+
+  it('should pass through entries with no tools/system', () => {
+    const entry = { timestamp: '2026-01-01', url: 'x', body: { messages: [] } };
+    const result = internEntryBigFields(entry);
+    assert.equal(result, entry, 'entry without tools/system passes through unchanged');
+  });
+
+  it('should respect FIFO eviction at MAX_INTERN_POOL_SIZE (defensive)', () => {
+    // 注入 201 种不同 signature 的 tools，验证 pool 不会无限增长
+    for (let i = 0; i < 201; i++) {
+      const e = makeMainAgent(2, {
+        tools: [{ name: `Tool${i}`, description: 'X'.repeat(100) }],
+      });
+      internEntryBigFields(e);
+    }
+    const stats = _getInternPoolStatsForTest();
+    assert.ok(stats.toolsPoolSize <= 200, `pool size ${stats.toolsPoolSize} should be capped at 200`);
+  });
+
+  it('should freeze pooled tools/system arrays to prevent accidental mutation', () => {
+    const e1 = makeMainAgent(5);
+    const i1 = internEntryBigFields(e1);
+    // pool 中的 tools/system 数组应被冻结：push / splice / 索引赋值在 strict mode 抛 TypeError
+    assert.ok(Object.isFrozen(i1.body.tools), 'pooled tools array must be frozen');
+    assert.ok(Object.isFrozen(i1.body.system), 'pooled system array must be frozen');
+    assert.throws(() => { i1.body.tools.push({ name: 'NewTool' }); }, TypeError, 'push on frozen tools must throw');
+    assert.throws(() => { i1.body.tools[0] = { name: 'Replaced' }; }, TypeError, 'index assign on frozen tools must throw');
+    assert.throws(() => { i1.body.system.splice(0, 1); }, TypeError, 'splice on frozen system must throw');
+  });
+
+  it('AppBase _batchSlim path: identical fullEntry tools across sessions share reference', () => {
+    // 模拟 678 个 session 各有一个 fullEntry，tools 内容相同的极端场景
+    const entries = [];
+    for (let i = 0; i < 50; i++) {
+      const e = makeMainAgent(5, { userId: `user-${i}` });
+      entries.push(internEntryBigFields(e));
+    }
+    // 所有 entry 的 tools 应共享同一引用
+    const ref = entries[0].body.tools;
+    for (let i = 1; i < entries.length; i++) {
+      assert.equal(entries[i].body.tools, ref, `entry ${i} tools should equal pool ref`);
+    }
+    const stats = _getInternPoolStatsForTest();
+    assert.equal(stats.toolsPoolSize, 1, '50 entries with identical tools should result in pool size 1');
   });
 });

@@ -13,7 +13,7 @@ import { saveEntries, loadEntries, clearEntries, getCacheMeta, saveSessionEntrie
 import { buildSessionIndex, splitHotCold, mergeSessionIndices, HOT_SESSION_COUNT } from './utils/sessionManager';
 import { mergeMainAgentSessions as _mergeMainAgentSessions } from './utils/sessionMerge';
 import { reconstructEntries, createIncrementalReconstructor } from '../lib/delta-reconstructor.js';
-import { createEntrySlimmer, createIncrementalSlimmer, restoreSlimmedEntry } from './utils/entry-slim.js';
+import { createEntrySlimmer, createIncrementalSlimmer, restoreSlimmedEntry, internEntryBigFields } from './utils/entry-slim.js';
 import { reinitializeMermaid } from './hooks/useMermaidRender';
 import styles from './App.module.css';
 
@@ -134,8 +134,10 @@ class AppBase extends React.Component {
     this._sseSlimmer = null; this._sseReconstructor = null;
   }
 
-  /** 批量剪枝 entries：清空旧 MainAgent 的 body.messages，保留最后一条完整 */
+  /** 批量剪枝 entries：清空旧 MainAgent 的 body.messages，保留最后一条完整。
+   *  v3: intern body.tools / body.system 让所有 entry 共享 pool 引用 */
   _batchSlim(entries) {
+    for (let i = 0; i < entries.length; i++) entries[i] = internEntryBigFields(entries[i]);
     const slimmer = createEntrySlimmer(isMainAgent);
     for (let i = 0; i < entries.length; i++) slimmer.process(entries[i], entries, i);
     slimmer.finalize(entries);
@@ -1086,7 +1088,8 @@ class AppBase extends React.Component {
       }
 
       for (const rawEntry of batch) {
-        const entry = this._sseReconstructor.reconstruct(rawEntry);
+        // v3: intern body.tools / body.system → pool 共享引用，消除 fullEntry 累积
+        const entry = internEntryBigFields(this._sseReconstructor.reconstruct(rawEntry));
         const key = `${entry.timestamp}|${entry.url}`;
         const existingIndex = this._requestIndexMap.get(key);
 
