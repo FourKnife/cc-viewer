@@ -1089,6 +1089,10 @@ class AppBase extends React.Component {
 
       for (const rawEntry of batch) {
         // v3: intern body.tools / body.system → pool 共享引用，消除 fullEntry 累积
+        // v5: 同时 intern body.messages 内 tool_result block.content（lazy-clone 三层
+        //     messages/content/block）。下方 L1170-1175 mutate `messages[i]._timestamp`
+        //     的安全前提：浅 clone 仅 spread 顶层字段保留 _timestamp 写位；共享的
+        //     block.content 是 string primitive 不可变，跨 entry 共享 ref 不会串扰。
         const entry = internEntryBigFields(this._sseReconstructor.reconstruct(rawEntry));
         const key = `${entry.timestamp}|${entry.url}`;
         const existingIndex = this._requestIndexMap.get(key);

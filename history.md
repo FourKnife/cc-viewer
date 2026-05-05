@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.240 (2026-05-05)
+
+- perf(entry-slim): raw payload tool_result 内容 intern（B 项 / v5）—— `internEntryBigFields` 扩展 walk `body.messages[*].content[*]`，对 `type='tool_result'` 且 string content (>= 256) 的 block 走 readResultPool 共享。SubAgent / Teammate entry 不被 slim 路径首次获得 raw payload dedup（v4 仅覆盖派生 toolResultMap.resultText 视图层，raw payload 此前每个 entry 独立分配）。**浏览器 console diag 实测：综合 hitRate 97.6% / v5 自身 41261 calls / 18418 hits / 0 evictions / poolSize 594，估算回收 36-92 MB raw payload 重复**。新增 `internToolResultIfPooled` 命中-aware 变体，解决 JS string === 是值比较导致 lazy-clone 失效的关键 bug（设计 review 阶段识别）；sig 加 mid-64 切片防御 length+前后缀重合的结构化输出碰撞；新增 `_poolEvictions` 诊断计数器
+- test: entry-slim.test.js +12 case（zero-overhead / 跨 entry 共享 / array 形态透传 / 短结果透传 / mutation 隔离 / mixed 命中 / malformed blocks / mid-slice 边界 / eviction 后 ref 有效性 + 2 internEntryBigFields 集成）；toolResultBuilder-dedup.test.js +3 case（sig mid-slice 防碰撞 + eviction counter）；总计 1568/1568 pass
+
 ## 1.6.239 (2026-05-05)
 
 - perf(tool-result-pool): 通用化 Read 专属 intern pool，默认覆盖所有 tool_result（Bash/Grep/Glob/MCP/Task/...）—— phase4 retainer 实证派生层 89.3% hitRate / git diff 69 副本 → 3 unique pool entry / entry-slim.js cat-n 121 → 7 entry，~15-30MB 派生层 dedup；sig 不带 toolName 前缀让 MainAgent 与 SubAgent 同内容字符串共享同一引用，自动覆盖未来新增 tool 类型

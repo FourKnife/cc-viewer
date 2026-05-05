@@ -43,6 +43,14 @@ const _MAX_INTERN_POOL_SIZE = 200;
 const _toolsPool = new Map();   // sig → tools array (full, shared)
 const _systemPool = new Map();  // sig → system array (full, shared)
 
+// v5: messages 内 tool_result block.content 走 readResultPool 同一池化逻辑。
+// SubAgent / Teammate entry 不被 slim，body.messages 中 inline 嵌入的 Read/Bash 等
+// tool_result 跨多个 SubAgent run 是同一份内容重复。v4 已 dedup 派生层（toolResultMap.resultText），
+// v5 补 raw payload（req.body.messages[*].content[*].content）这一关键缺口。
+// internToolResultIfPooled 的命中信号是 lazy-clone 决策的关键：JS string === 是值比较，
+// 普通 internToolResult 返回的 ref 无法用于 ref-不变性判断。
+import { internToolResultIfPooled } from './readResultPool.js';
+
 function _toolsSig(tools) {
   if (!Array.isArray(tools) || tools.length === 0) return '';
   // 't:' 前缀让 tools / system / readResult 三套 sig 命名空间正交，
@@ -91,7 +99,57 @@ function _internOrAdd(pool, sig, value) {
 }
 
 /**
- * 把 entry.body.tools / body.system 替换为 module-level pool 中的共享引用。
+ * 把 messages[*].content[*] 中的 tool_result block.content 字符串替换为 readResultPool
+ * 共享引用。仅处理 string 形态的 content（minority array/object 形态原样透传）。
+ *
+ * 设计要点：
+ * - lazy clone：只在至少有一个 block 命中 pool 替换时才 clone messages / content / block。
+ *   未命中场景零开销，原数组直接返回。
+ * - 浅 clone（{...block}）保留 _timestamp 等顶层字段；不冻结 messages 数组——
+ *   AppBase.jsx:1170-1175 mutate `messages[i]._timestamp` 仍可工作。
+ * - tool_result.content 字符串本身不可变（JS string primitive），多个 entry 共享 pool ref
+ *   完全安全。
+ *
+ * @param {Array} messages
+ * @returns {Array} 原数组（无变化）或浅 clone 后的新数组
+ */
+export function internMessagesToolResultBlocks(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+  let newMessages = null;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const content = msg?.content;
+    if (!Array.isArray(content) || content.length === 0) continue;
+
+    let newContent = null;
+    for (let j = 0; j < content.length; j++) {
+      const block = content[j];
+      if (!block || block.type !== 'tool_result') continue;
+      const c = block.content;
+      // 仅 dedup string 形态。array 形态（含 text/image blocks）少见且结构复杂，留待后续。
+      if (typeof c !== 'string') continue;
+      // pooled = null 时为未命中（已注册到 pool 但调用方无需替换 ref——block 已持原始 ref，
+      // 且原始 ref 也是 pool 持有的 ref，零浪费）；pooled 非 null 时是命中，原始 c 是独立分配
+      // 副本，必须替换为 pool ref 才能让原副本可被 GC 回收。
+      const pooled = internToolResultIfPooled(c);
+      if (pooled !== null) {
+        if (newContent === null) newContent = content.slice();
+        newContent[j] = { ...block, content: pooled };
+      }
+    }
+
+    if (newContent !== null) {
+      if (newMessages === null) newMessages = messages.slice();
+      newMessages[i] = { ...msg, content: newContent };
+    }
+  }
+
+  return newMessages || messages;
+}
+
+/**
+ * 把 entry.body.tools / body.system / body.messages 替换为 module-level pool 中的共享引用。
  * 在 entry 进入 state.requests 之前调用，所有路径（SSE flush / batch load /
  * IndexedDB cached restore）都应过一遍此函数。
  *
@@ -105,6 +163,7 @@ export function internEntryBigFields(entry) {
   const body = entry.body;
   let newTools = body.tools;
   let newSystem = body.system;
+  let newMessages = body.messages;
   let dirty = false;
 
   if (Array.isArray(body.tools) && body.tools.length > 0) {
@@ -127,10 +186,20 @@ export function internEntryBigFields(entry) {
     }
   }
 
+  // v5: walk messages 内的 tool_result block.content 走通用 pool。
+  // SubAgent / Teammate 不被 slim 路径，这是 raw payload 唯一的 dedup 入口。
+  if (Array.isArray(body.messages) && body.messages.length > 0) {
+    const interned = internMessagesToolResultBlocks(body.messages);
+    if (interned !== body.messages) {
+      newMessages = interned;
+      dirty = true;
+    }
+  }
+
   if (dirty) {
     return {
       ...entry,
-      body: { ...entry.body, tools: newTools, system: newSystem },
+      body: { ...entry.body, tools: newTools, system: newSystem, messages: newMessages },
     };
   }
   return entry;

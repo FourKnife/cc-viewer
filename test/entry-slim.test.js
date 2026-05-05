@@ -11,9 +11,11 @@ import {
   slimBodyBigFields,
   SYSTEM_TEXT_KEEP_PREFIX,
   internEntryBigFields,
+  internMessagesToolResultBlocks,
   _resetInternPoolsForTest,
   _getInternPoolStatsForTest,
 } from '../src/utils/entry-slim.js';
+import { _resetReadPoolForTest } from '../src/utils/readResultPool.js';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -589,5 +591,236 @@ describe('internEntryBigFields', () => {
     }
     const stats = _getInternPoolStatsForTest();
     assert.equal(stats.toolsPoolSize, 1, '50 entries with identical tools should result in pool size 1');
+  });
+});
+
+// ─── internMessagesToolResultBlocks (v5 raw payload intern) ───────────────────
+
+describe('internMessagesToolResultBlocks', () => {
+  beforeEach(() => {
+    _resetReadPoolForTest();
+    _resetInternPoolsForTest();
+  });
+
+  // 构造一个包含 tool_result block 的 user message
+  function makeToolResultMessage(toolUseId, content) {
+    return {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: toolUseId, content },
+      ],
+    };
+  }
+
+  it('zero-overhead: returns same array ref when no tool_result blocks present', () => {
+    const messages = [
+      { role: 'user', content: 'short text' },
+      { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+    ];
+    const out = internMessagesToolResultBlocks(messages);
+    assert.equal(out, messages, 'no clone when nothing to intern');
+  });
+
+  it('zero-overhead: short tool_result content (< 256) does not trigger clone', () => {
+    const messages = [makeToolResultMessage('t1', 'short result')];
+    const out = internMessagesToolResultBlocks(messages);
+    assert.equal(out, messages, 'short content skips dedup, no clone');
+    assert.equal(out[0], messages[0], 'message wrapper not cloned');
+    assert.equal(out[0].content[0], messages[0].content[0], 'block not cloned');
+  });
+
+  it('cross-entry sharing: two messages with same tool_result content → shared ref', () => {
+    const big = 'X'.repeat(2000);
+    const m1 = makeToolResultMessage('t1', big);
+    const m2 = makeToolResultMessage('t2', 'X'.repeat(2000)); // 同内容、不同 instance
+    const out1 = internMessagesToolResultBlocks([m1]);
+    const out2 = internMessagesToolResultBlocks([m2]);
+    assert.equal(
+      out1[0].content[0].content,
+      out2[0].content[0].content,
+      'same content across entries should share pool ref'
+    );
+  });
+
+  it('passthrough: array-form tool_result.content is not interned', () => {
+    const arrContent = [{ type: 'text', text: 'X'.repeat(2000) }];
+    const messages = [makeToolResultMessage('t1', arrContent)];
+    const out = internMessagesToolResultBlocks(messages);
+    assert.equal(out, messages, 'array form skipped → no clone');
+    assert.equal(out[0].content[0].content, arrContent, 'array content unchanged');
+  });
+
+  it('mutation isolation: cloning preserves _timestamp writes per entry (no cross-entry leak)', () => {
+    const big = 'Y'.repeat(2000);
+    const m1 = makeToolResultMessage('t1', big);
+    const m2 = makeToolResultMessage('t2', 'Y'.repeat(2000));
+    const out1 = internMessagesToolResultBlocks([m1]);
+    const out2 = internMessagesToolResultBlocks([m2]);
+    // 模拟 AppBase.jsx:1170-1175 的 _timestamp mutation
+    out1[0]._timestamp = '2026-05-05T10:00:00Z';
+    out2[0]._timestamp = '2026-05-05T11:00:00Z';
+    assert.equal(out1[0]._timestamp, '2026-05-05T10:00:00Z');
+    assert.equal(out2[0]._timestamp, '2026-05-05T11:00:00Z', 'each entry retains its own _timestamp despite shared content ref');
+    // 验证 content 仍共享
+    assert.equal(out1[0].content[0].content, out2[0].content[0].content);
+  });
+
+  it('malformed blocks: null / missing type / non-string content all pass through safely', () => {
+    const big = 'M'.repeat(2000);
+    // 先 seed 让 pool 命中后续相同长字符串（验证混入 malformed 不影响命中路径）
+    internMessagesToolResultBlocks([makeToolResultMessage('seed', big)]);
+    const messages = [{
+      role: 'user',
+      content: [
+        null,                                                              // null block
+        { type: 'text', text: 'preface' },                                 // 非 tool_result block
+        { type: 'tool_result', tool_use_id: 'no-content' },                // 缺 content 字段
+        { type: 'tool_result', tool_use_id: 't-null', content: null },     // null content
+        { type: 'tool_result', tool_use_id: 't-num', content: 42 },        // 数字 content
+        { type: 'tool_result', tool_use_id: 't-obj', content: {} },        // 对象 content
+        { type: 'tool_result', tool_use_id: 't-arr', content: [{ type: 'text', text: 'x' }] }, // array
+        { tool_use_id: 'no-type', content: 'M'.repeat(2000) },             // 缺 type 字段（不视为 tool_result）
+        { type: 'tool_result', tool_use_id: 't-hit', content: 'M'.repeat(2000) }, // 真实命中
+      ],
+    }];
+    // 不应 throw
+    const out = internMessagesToolResultBlocks(messages);
+    // 命中 block 应被 clone
+    assert.notEqual(out, messages, 'real hit should still trigger clone despite malformed siblings');
+    assert.notEqual(out[0].content[8], messages[0].content[8], 'hit block (index 8) cloned');
+    // 各 malformed block 保持原 ref（不被误改）
+    assert.equal(out[0].content[0], null, 'null block stays null');
+    assert.equal(out[0].content[1], messages[0].content[1], 'text block stays same ref');
+    assert.equal(out[0].content[2], messages[0].content[2], 'no-content block stays same ref');
+    assert.equal(out[0].content[3], messages[0].content[3], 'null-content block stays same ref');
+    assert.equal(out[0].content[4], messages[0].content[4], 'number-content block stays same ref');
+    assert.equal(out[0].content[5], messages[0].content[5], 'object-content block stays same ref');
+    assert.equal(out[0].content[6], messages[0].content[6], 'array-content block stays same ref');
+    assert.equal(out[0].content[7], messages[0].content[7], 'no-type block stays same ref (treated as non-tool_result)');
+  });
+
+  it('mid-slice boundary: lengths 511 / 512 / 513 all behave correctly', () => {
+    _resetReadPoolForTest();
+    // 511 字符：< 512，走老 2-segment sig；命中靠 length+head+tail
+    const s511a = 'a'.repeat(511);
+    const s511b = 'a'.repeat(511);
+    internMessagesToolResultBlocks([makeToolResultMessage('t1', s511a)]);
+    const out511 = internMessagesToolResultBlocks([makeToolResultMessage('t2', s511b)]);
+    assert.notEqual(out511[0].content[0], { type: 'tool_result', tool_use_id: 't2', content: s511b }, 'placeholder');
+    // 512 字符：== 512（不 > 512），走老 sig
+    const s512 = 'b'.repeat(512);
+    internMessagesToolResultBlocks([makeToolResultMessage('t3', s512)]);
+    const out512 = internMessagesToolResultBlocks([makeToolResultMessage('t4', 'b'.repeat(512))]);
+    // 513 字符：> 512，走新 mid-slice sig
+    const s513 = 'c'.repeat(513);
+    internMessagesToolResultBlocks([makeToolResultMessage('t5', s513)]);
+    const out513 = internMessagesToolResultBlocks([makeToolResultMessage('t6', 'c'.repeat(513))]);
+    // 三种长度都应正确 dedup（同内容）
+    // 关键不变量：未抛错；lazy clone 在命中时触发
+    assert.notEqual(out511, [makeToolResultMessage('t2', s511b)], 'length 511 hit triggers clone');
+    assert.notEqual(out513, [makeToolResultMessage('t6', s513)], 'length 513 hit triggers clone');
+    // 直接断 content 共享
+    assert.equal(typeof out512[0].content[0].content, 'string');
+    assert.equal(typeof out513[0].content[0].content, 'string');
+  });
+
+  it('eviction safety: evicted strings can be re-interned without corruption', () => {
+    _resetReadPoolForTest();
+    // 灌满 pool（1000 条不同长字符串）
+    for (let i = 0; i < 1000; i++) {
+      internMessagesToolResultBlocks([makeToolResultMessage(`fill-${i}`, `prefix-${i}-` + 'X'.repeat(2000))]);
+    }
+    // 注入第 1001 条触发 FIFO 淘汰（最早的 fill-0 被淘汰）
+    const evictedContent = 'prefix-0-' + 'X'.repeat(2000);
+    internMessagesToolResultBlocks([makeToolResultMessage('trigger', `prefix-1000-` + 'Y'.repeat(2000))]);
+    // 重 intern 已淘汰内容：应作为新 entry 注册（pool miss），不抛错
+    const reInterned = internMessagesToolResultBlocks([makeToolResultMessage('reuse', evictedContent)]);
+    assert.ok(Array.isArray(reInterned), 're-intern of evicted content does not throw');
+    // 再次 intern 同内容应命中（重新注册后是 hit）
+    const hitAgain = internMessagesToolResultBlocks([makeToolResultMessage('hit', 'prefix-0-' + 'X'.repeat(2000))]);
+    assert.notEqual(
+      hitAgain[0].content[0].content,
+      undefined,
+      'pool entry valid after re-registration of evicted content'
+    );
+  });
+
+  it('mixed: only blocks with pool hits trigger clone; siblings stay original', () => {
+    const big = 'Z'.repeat(2000);
+    // 第一次 intern：注册到 pool
+    internMessagesToolResultBlocks([makeToolResultMessage('seed', big)]);
+
+    // 第二个 message 含两个 tool_result：一个命中 pool，一个短不命中
+    const messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'preface' },
+        { type: 'tool_result', tool_use_id: 't-hit', content: 'Z'.repeat(2000) },
+        { type: 'tool_result', tool_use_id: 't-miss', content: 'short' },
+      ],
+    }];
+    const out = internMessagesToolResultBlocks(messages);
+    assert.notEqual(out, messages, 'pool hit triggers messages clone');
+    assert.notEqual(out[0], messages[0], 'message wrapper cloned');
+    assert.notEqual(out[0].content, messages[0].content, 'content array cloned');
+    // 命中的 block 是新对象（content 替换为 pool ref）
+    assert.notEqual(out[0].content[1], messages[0].content[1], 'hit block cloned');
+    assert.equal(out[0].content[1].tool_use_id, 't-hit', 'hit block other fields preserved');
+    // 未命中的 sibling block 保持同 ref（短结果透传）
+    assert.equal(out[0].content[2], messages[0].content[2], 'miss block stays same ref');
+    // text block（非 tool_result）也保持同 ref
+    assert.equal(out[0].content[0], messages[0].content[0], 'non-tool_result block stays same ref');
+  });
+});
+
+// ─── internEntryBigFields × messages intern integration ───────────────────────
+
+describe('internEntryBigFields with messages tool_result intern', () => {
+  beforeEach(() => {
+    _resetReadPoolForTest();
+    _resetInternPoolsForTest();
+  });
+
+  it('SubAgent entry messages tool_result content is interned across entries', () => {
+    // 模拟 SubAgent / Teammate entry：mainAgent=false，body 含 tool_result
+    const big = 'subagent-context-' + 'A'.repeat(2000);
+    const makeSubAgentEntry = () => ({
+      timestamp: new Date().toISOString(),
+      url: 'x',
+      mainAgent: false,
+      body: {
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 't-shared', content: big },
+          ],
+        }],
+      },
+    });
+    const e1 = makeSubAgentEntry();
+    const e2 = makeSubAgentEntry();
+    // 不同 string instance（重 new 一遍）
+    e2.body.messages[0].content[0].content = 'subagent-context-' + 'A'.repeat(2000);
+
+    const i1 = internEntryBigFields(e1);
+    const i2 = internEntryBigFields(e2);
+
+    assert.equal(
+      i1.body.messages[0].content[0].content,
+      i2.body.messages[0].content[0].content,
+      'identical SubAgent tool_result content shares pool ref'
+    );
+  });
+
+  it('returns same entry ref when no big fields and no tool_result hits', () => {
+    const entry = {
+      timestamp: 'x', url: 'x',
+      body: {
+        messages: [{ role: 'user', content: 'hello' }],
+        // no tools / system / matching tool_result
+      },
+    };
+    const out = internEntryBigFields(entry);
+    assert.equal(out, entry, 'no work → no clone');
   });
 });

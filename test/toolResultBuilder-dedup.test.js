@@ -10,6 +10,7 @@ import {
   internToolResult,
   _resetReadPoolForTest,
   _getReadPoolSizeForTest,
+  _getReadPoolEvictionsForTest,
 } from '../src/utils/readResultPool.js';
 
 describe('internReadResult', () => {
@@ -91,6 +92,57 @@ describe('internReadResult', () => {
     internReadResult(justBelow);
     internReadResult('X'.repeat(255));
     assert.equal(_getReadPoolSizeForTest(), 0, '< 256 must skip pool');
+  });
+});
+
+describe('sig hardening (mid-slice)', () => {
+  it('should distinguish strings that share length + first 64 + last 64 but differ in the middle', () => {
+    _resetReadPoolForTest();
+    const head = 'H'.repeat(64);
+    const tail = 'T'.repeat(64);
+    const len = 1000;
+    const midLen = len - head.length - tail.length;
+    // 两个串：head + mid_A + tail vs head + mid_B + tail，等长、同前缀、同后缀，仅中段不同。
+    // 老 sig（length + first 64 + last 64）会碰撞；新 sig（加 mid-64）应区分开。
+    const a = head + 'A'.repeat(midLen) + tail;
+    const b = head + 'B'.repeat(midLen) + tail;
+    internReadResult(a);
+    internReadResult(b);
+    assert.equal(_getReadPoolSizeForTest(), 2, 'mid-slice must distinguish length+head+tail collisions');
+  });
+
+  it('should still dedup identical content (mid-slice is additive, not replacing)', () => {
+    _resetReadPoolForTest();
+    const s = 'X'.repeat(2000);
+    const r1 = internReadResult(s);
+    const r2 = internReadResult('X'.repeat(2000));
+    assert.equal(r1, r2);
+    assert.equal(_getReadPoolSizeForTest(), 1, 'identical content stays single pool entry');
+  });
+
+  it('strings <= 512 chars use original 2-segment sig (no mid-slice)', () => {
+    _resetReadPoolForTest();
+    // 边界以下不走 mid-slice 分支，行为应与历史一致
+    const s1 = 'X'.repeat(400);
+    const s2 = 'X'.repeat(400);
+    const r1 = internReadResult(s1);
+    const r2 = internReadResult(s2);
+    assert.equal(r1, r2);
+    assert.equal(_getReadPoolSizeForTest(), 1);
+  });
+});
+
+describe('eviction counter', () => {
+  it('starts at 0 after reset and increments on FIFO eviction', () => {
+    _resetReadPoolForTest();
+    assert.equal(_getReadPoolEvictionsForTest(), 0, 'reset clears counter');
+    // 灌满 pool（1000 条）+ 1 条触发首次淘汰
+    for (let i = 0; i < 1000; i++) {
+      internReadResult(`prefix-${i}-` + 'X'.repeat(2000));
+    }
+    assert.equal(_getReadPoolEvictionsForTest(), 0, 'first 1000 entries should not evict');
+    internReadResult(`prefix-trigger-` + 'X'.repeat(2000));
+    assert.equal(_getReadPoolEvictionsForTest(), 1, 'one over cap → one eviction');
   });
 });
 
