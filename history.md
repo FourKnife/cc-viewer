@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.241 (2026-05-05)
+
+- perf(theme): `themeConfig` getter 改为返回模块顶层 `Object.freeze` 常量（LIGHT/DARK_THEME_CONFIG），消除每次 render 返回新 `{algorithm, token: {...}}` 字面量。旧实现导致 antd v5 cssinjs `useTheme` 的 `useMemo` cache 永远 miss → `DesignTokenContext.Provider` value 引用变 → 所有 useToken 消费者重渲染 + 整棵 antd 子树（Tooltip/Dropdown/EllipsisTooltip 等）重 mount。**Chrome Performance trace 实测同条件对比**（baseline 13.5s / new 25s 等比归一）：antd `R` 函数总耗时 5344ms (39.4%) → **260ms (1.04%)**（−95%）；`Vk` self 446 → 4.2ms（−99%）；`_objectSpread2` self 369 → 7.2ms（−98%）；`Yi` 子组件 mount 树 incl 2718ms → 47.8ms（−98%）；GC 总耗时 6242ms (46.1%) → **703ms (2.8%)**（−89%）；堆分配速率 ~120 MB/s → **4.8 MB/s**（−96%）；DOM totalObjects 106 796 → 79 982（−25%）；用户代码态 long task > 200ms 数量 → 0。修复"页面长时间卡死 + 滚动掉帧"主因
+
 ## 1.6.240 (2026-05-05)
 
 - perf(entry-slim): raw payload tool_result 内容 intern（B 项 / v5）—— `internEntryBigFields` 扩展 walk `body.messages[*].content[*]`，对 `type='tool_result'` 且 string content (>= 256) 的 block 走 readResultPool 共享。SubAgent / Teammate entry 不被 slim 路径首次获得 raw payload dedup（v4 仅覆盖派生 toolResultMap.resultText 视图层，raw payload 此前每个 entry 独立分配）。**浏览器 console diag 实测：综合 hitRate 97.6% / v5 自身 41261 calls / 18418 hits / 0 evictions / poolSize 594，估算回收 36-92 MB raw payload 重复**。新增 `internToolResultIfPooled` 命中-aware 变体，解决 JS string === 是值比较导致 lazy-clone 失效的关键 bug（设计 review 阶段识别）；sig 加 mid-64 切片防御 length+前后缀重合的结构化输出碰撞；新增 `_poolEvictions` 诊断计数器

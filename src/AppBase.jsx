@@ -23,6 +23,35 @@ export const MAX_SESSIONS = (isMobile && !isPad) ? 30 : 100;
 // /clear 后乐观水位：把上下文血条压到这个百分比，下一次 context_window SSE 推送会自动覆盖回真实值
 export const OPTIMISTIC_CLEAR_PERCENT = 5;
 
+// AntD 主题配置：模块顶层冻结常量。
+// 旧实现是 getter 每次 render 返回新字面量，导致 antd cssinjs useTheme cache 永远 miss、
+// flattenToken 反复跑。顶层常量保证主题不变时引用稳定。
+const LIGHT_THEME_CONFIG = Object.freeze({
+  algorithm: theme.defaultAlgorithm,
+  token: Object.freeze({
+    colorPrimary: '#0969DA',
+    colorBgContainer: '#FFFFFF',
+    colorBgLayout: '#FAFAFA',
+    colorBgElevated: '#FFFFFF',
+    colorBorder: '#E0E0E0',
+    controlOutline: 'transparent',
+    controlOutlineWidth: 0,
+  }),
+});
+
+const DARK_THEME_CONFIG = Object.freeze({
+  algorithm: theme.darkAlgorithm,
+  token: Object.freeze({
+    colorPrimary: '#1668dc',
+    colorBgContainer: '#111',
+    colorBgLayout: '#0a0a0a',
+    colorBgElevated: '#1e1e1e',
+    colorBorder: '#2a2a2a',
+    controlOutline: 'transparent',
+    controlOutlineWidth: 0,
+  }),
+});
+
 /**
  * 共享基类：包含 PC 和 Mobile 通用的状态管理、SSE 通信、数据处理、偏好设置等逻辑。
  * 子类 App (PC) 和 Mobile 各自实现 render() 方法。
@@ -1915,34 +1944,12 @@ class AppBase extends React.Component {
    * 一层 CSSVarRegister.path + flattenToken；4 处 ConfigProvider + 主题切换 + 大量 antd
    * 组件叠加，cache miss 路径被放大。antd 文档宣传的 20-35% 收益建立在「单 ConfigProvider
    * + 主题不切换」理想场景，本仓库不符合。结论：保持 hash style，不要开 cssVar。
+   *
+   * 引用稳定性：返回模块顶层冻结常量（LIGHT_THEME_CONFIG / DARK_THEME_CONFIG），
+   * 主题不变时 React 每次 render 都拿到同一引用 → cssinjs useTheme useMemo 真正命中。
    */
   get themeConfig() {
-    if (this.state.themeColor === 'light') {
-      return {
-        algorithm: theme.defaultAlgorithm,
-        token: {
-          colorPrimary: '#0969DA',
-          colorBgContainer: '#FFFFFF',
-          colorBgLayout: '#FAFAFA',
-          colorBgElevated: '#FFFFFF',
-          colorBorder: '#E0E0E0',
-          controlOutline: 'transparent',
-          controlOutlineWidth: 0,
-        },
-      };
-    }
-    return {
-      algorithm: theme.darkAlgorithm,
-      token: {
-        colorPrimary: '#1668dc',
-        colorBgContainer: '#111',
-        colorBgLayout: '#0a0a0a',
-        colorBgElevated: '#1e1e1e',
-        colorBorder: '#2a2a2a',
-        controlOutline: 'transparent',
-        controlOutlineWidth: 0,
-      },
-    };
+    return this.state.themeColor === 'light' ? LIGHT_THEME_CONFIG : DARK_THEME_CONFIG;
   }
 }
 
