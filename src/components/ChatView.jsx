@@ -1160,12 +1160,11 @@ class ChatView extends React.Component {
       const content = msg.content;
       const ts = msg._timestamp || null;
       const reqIdx = ts ? tsToIndex[ts] : undefined;
-      // cacheTotalTokens 单独传给 assistant 渲染处（不进 viewReqProps），
-      // 避免 user 消息也接到该 prop 触发 SCU streaming 期间的虚假重渲。
+      // cacheTotalTokens 仅传给 assistant 渲染处，避免 user 消息也接到该 prop 触发 SCU streaming 期间的虚假重渲。
       const cacheTotalTokens = reqIdx != null
         ? (requestCacheTokenMap?.get(reqIdx) ?? 0)
         : null;
-      const viewReqProps = reqIdx != null && onViewRequest ? { requestIndex: reqIdx, onViewRequest, isHistoryLog } : { isHistoryLog };
+      const hasViewRequest = reqIdx != null && onViewRequest;
       const modelInfo = resolveModelInfo(ts, msg.role);
 
       if (msg.role === 'user') {
@@ -1180,7 +1179,7 @@ class ChatView extends React.Component {
             // 渲染 slash command 作为独立用户输入
             for (let ci = 0; ci < commands.length; ci++) {
               renderedMessages.push(
-                <ChatMessage key={`${keyPrefix}-cmd-${mi}-${ci}`} role="user" text={commands[ci]} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} {...viewReqProps} />
+                <ChatMessage key={`${keyPrefix}-cmd-${mi}-${ci}`} role="user" text={commands[ci]} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} requestIndex={hasViewRequest ? reqIdx : undefined} onViewRequest={hasViewRequest ? onViewRequest : undefined} isHistoryLog={isHistoryLog} />
               );
             }
             // 渲染 skill 加载块
@@ -1188,14 +1187,14 @@ class ChatView extends React.Component {
               const nameMatch = sb.text.match(/^#\s+(.+)$/m);
               const skillName = nameMatch ? nameMatch[1] : 'Skill';
               renderedMessages.push(
-                <ChatMessage key={`${keyPrefix}-skill-${mi}`} role="skill-loaded" text={sb.text} skillName={skillName} timestamp={ts} {...viewReqProps} />
+                <ChatMessage key={`${keyPrefix}-skill-${mi}`} role="skill-loaded" text={sb.text} skillName={skillName} timestamp={ts} requestIndex={hasViewRequest ? reqIdx : undefined} onViewRequest={hasViewRequest ? onViewRequest : undefined} isHistoryLog={isHistoryLog} />
               );
             }
             // 渲染普通用户文本块
             for (let ti = 0; ti < textBlocks.length; ti++) {
               const isPlan = /Implement the following plan:/i.test(textBlocks[ti].text || '');
               renderedMessages.push(
-                <ChatMessage key={`${keyPrefix}-user-${mi}-${ti}`} role={isPlan ? 'plan-prompt' : 'user'} text={textBlocks[ti].text} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} {...viewReqProps} />
+                <ChatMessage key={`${keyPrefix}-user-${mi}-${ti}`} role={isPlan ? 'plan-prompt' : 'user'} text={textBlocks[ti].text} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} requestIndex={hasViewRequest ? reqIdx : undefined} onViewRequest={hasViewRequest ? onViewRequest : undefined} isHistoryLog={isHistoryLog} />
               );
             }
             // 渲染 teammate-message 块
@@ -1210,7 +1209,9 @@ class ChatView extends React.Component {
                   toolName={tm.status || null}
                   timestamp={ts}
                   modelInfo={modelInfo}
-                  {...viewReqProps}
+                  requestIndex={hasViewRequest ? reqIdx : undefined}
+                  onViewRequest={hasViewRequest ? onViewRequest : undefined}
+                  isHistoryLog={isHistoryLog}
                 />
               );
             }
@@ -1224,7 +1225,9 @@ class ChatView extends React.Component {
                   taskNotification={tn}
                   timestamp={ts}
                   modelInfo={modelInfo}
-                  {...viewReqProps}
+                  requestIndex={hasViewRequest ? reqIdx : undefined}
+                  onViewRequest={hasViewRequest ? onViewRequest : undefined}
+                  isHistoryLog={isHistoryLog}
                 />
               );
             }
@@ -1241,14 +1244,16 @@ class ChatView extends React.Component {
                   taskNotification={strTnBlocks[tni]}
                   timestamp={ts}
                   modelInfo={modelInfo}
-                  {...viewReqProps}
+                  requestIndex={hasViewRequest ? reqIdx : undefined}
+                  onViewRequest={hasViewRequest ? onViewRequest : undefined}
+                  isHistoryLog={isHistoryLog}
                 />
               );
             }
           } else if (!isSystemText(content)) {
             const isPlan = /Implement the following plan:/i.test(content);
             renderedMessages.push(
-              <ChatMessage key={`${keyPrefix}-user-${mi}`} role={isPlan ? 'plan-prompt' : 'user'} text={content} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} {...viewReqProps} />
+              <ChatMessage key={`${keyPrefix}-user-${mi}`} role={isPlan ? 'plan-prompt' : 'user'} text={content} timestamp={ts} userProfile={userProfile} modelInfo={modelInfo} requestIndex={hasViewRequest ? reqIdx : undefined} onViewRequest={hasViewRequest ? onViewRequest : undefined} isHistoryLog={isHistoryLog} />
             );
           }
         }
@@ -1265,14 +1270,14 @@ class ChatView extends React.Component {
           // 只在有非系统内容时才渲染
           if (filteredContent.length > 0) {
             renderedMessages.push(
-              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={filteredContent} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} planFileContents={this.state.planFileContents} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activePtyPlanId={this.state.pendingPtyPlan?.id ?? null} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} cacheTotalTokens={cacheTotalTokens} {...viewReqProps} />
+              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={filteredContent} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} planFileContents={this.state.planFileContents} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activePtyPlanId={this.state.pendingPtyPlan?.id ?? null} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} cacheTotalTokens={cacheTotalTokens} requestIndex={hasViewRequest ? reqIdx : undefined} onViewRequest={hasViewRequest ? onViewRequest : undefined} isHistoryLog={isHistoryLog} />
             );
           }
         } else if (typeof content === 'string') {
           // 过滤字符串类型的系统文本
           if (!isSystemText(content)) {
             renderedMessages.push(
-              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} planFileContents={this.state.planFileContents} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activePtyPlanId={this.state.pendingPtyPlan?.id ?? null} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} cacheTotalTokens={cacheTotalTokens} {...viewReqProps} />
+              <ChatMessage key={`${keyPrefix}-asst-${mi}`} role="assistant" content={[{ type: 'text', text: content }]} toolResultMap={toolResultMap} readContentMap={readContentMap} editSnapshotMap={editSnapshotMap} askAnswerMap={mergedAskAnswerMap} planApprovalMap={planApprovalMap} latestPlanContent={latestPlanContent} planFileContents={this.state.planFileContents} timestamp={ts} modelInfo={modelInfo} collapseToolResults={collapseToolResults} expandThinking={expandThinking} showFullToolContent={showFullToolContent} showThinkingSummaries={showThinkingSummaries} ptyPrompt={this.state.ptyPrompt} activePlanPrompt={activePlanPrompt} activePtyPlanId={this.state.pendingPtyPlan?.id ?? null} activeDangerousPrompt={activeDangerousPrompt} lastPendingPlanId={msgLastPlanId} lastPendingAskId={msgLastAskId} onPlanApprovalClick={this.handlePromptOptionClick} onPlanFeedbackSubmit={this.handlePlanFeedbackSubmit} onDangerousApprovalClick={this.handlePromptOptionClick} onAskQuestionSubmit={this.handleAskQuestionSubmit} cliMode={this.props.cliMode} onOpenFile={this.handleOpenToolFilePath} cacheTotalTokens={cacheTotalTokens} requestIndex={hasViewRequest ? reqIdx : undefined} onViewRequest={hasViewRequest ? onViewRequest : undefined} isHistoryLog={isHistoryLog} />
             );
           }
         }
