@@ -46,6 +46,7 @@ class Mobile extends AppBase {
       // null=loading / false=失败 / 数组=加载结果。workspace 切换由 componentDidUpdate + seq 控制。
       _fsSkills: null,
       _memory: null,
+      _memoryRefreshing: false,
       _memoryDetail: null,
       calibrationModel: (v => CALIBRATION_MODELS.some(m => m.value === v) ? v : 'auto')(localStorage.getItem('ccv_calibrationModel') || 'auto'),
     });
@@ -112,6 +113,31 @@ class Mobile extends AppBase {
     } catch {
       if (seq === this._memorySeq) this.setState({ _memory: false });
     }
+  };
+
+  // 与 AppHeader.handleRefreshMemory 同语义：用户主动刷新带 toast 反馈，
+  // stale（workspace 中途切换）保持静默不误报失败。
+  handleRefreshMemory = async () => {
+    if (this.state._memoryRefreshing) return;
+    this.setState({ _memoryRefreshing: true });
+    const seq = ++this._memorySeq;
+    let ok = false;
+    let stale = false;
+    try {
+      const r = await fetch(apiUrl('/api/project-memory'));
+      const data = await r.json();
+      if (seq !== this._memorySeq) { stale = true; }
+      else if (!r.ok) { this.setState({ _memory: false }); }
+      else { this.setState({ _memory: data }); ok = true; }
+    } catch {
+      if (seq !== this._memorySeq) stale = true;
+      else this.setState({ _memory: false });
+    } finally {
+      if (!stale) this.setState({ _memoryRefreshing: false });
+    }
+    if (stale) return;
+    if (ok) message.success(t('ui.memoryRefreshSuccess'));
+    else message.error(t('ui.memoryRefreshFailed'), 5);
   };
 
   loadMemoryDetail = async (name) => {
@@ -202,6 +228,12 @@ class Mobile extends AppBase {
       this._modeSwitchDialog.destroy();
       this._modeSwitchDialog = null;
     }
+    // 与 AppHeader.componentWillUnmount 对齐：让在途 reloadFsSkills / loadMemory /
+    // handleRefreshMemory / loadMemoryDetail 的回包 seq 校验失败 → 不会 setState 到
+    // 已卸载组件，也不会触发 toast。
+    this._fsSkillsSeq++;
+    this._memorySeq++;
+    this._memoryDetailSeq++;
     super.componentWillUnmount();
   }
 
@@ -211,7 +243,7 @@ class Mobile extends AppBase {
     if (prevState.projectName !== this.state.projectName) {
       this._fsSkillsSeq++;
       this._memorySeq++;
-      this.setState({ _fsSkills: null, _memory: null, _memoryDetail: null });
+      this.setState({ _fsSkills: null, _memory: null, _memoryDetail: null, _memoryRefreshing: false });
     }
   }
 
@@ -563,9 +595,11 @@ class Mobile extends AppBase {
                         contextPercent={contextPercent}
                         fsSkills={this.state._fsSkills}
                         memory={this.state._memory}
+                        memoryRefreshing={this.state._memoryRefreshing}
                         calibrationModel={this.state.calibrationModel}
                         onCalibrationModelChange={this.handleCalibrationModelChange}
                         onOpenMemoryDetail={this.loadMemoryDetail}
+                        onRefreshMemory={this.handleRefreshMemory}
                       />
                     ) : <div className={styles.cachePopoverPlaceholder} />}
                   >
@@ -780,9 +814,11 @@ class Mobile extends AppBase {
                       contextPercent={mobileContextPercent}
                       fsSkills={this.state._fsSkills}
                       memory={this.state._memory}
+                      memoryRefreshing={this.state._memoryRefreshing}
                       calibrationModel={this.state.calibrationModel}
                       onCalibrationModelChange={this.handleCalibrationModelChange}
                       onOpenMemoryDetail={this.loadMemoryDetail}
+                      onRefreshMemory={this.handleRefreshMemory}
                     />
                   )}
                 </div>

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.242 (2026-05-05)
+
+- feat(memory): AppHeader / Mobile 血条 popover「持久记忆」区新增"刷新"按钮（图标+文字 + spin loading），主动拉取 `/api/project-memory` 并 `message.success/error` 反馈；与 lazy-load 静默失败策略区分（lazy-load 仅显示区内 errorBody，主动刷新失败 toast 5s）。三态契约：`null` 加载中（disabled+tooltip）/ `false` 失败可重试 / `{exists:false}` 无 MEMORY.md 文件（disabled+tooltip）/ `{exists:true}` 启用。seq 防 stale + 连点守卫 + workspace 切换复位 `_memoryRefreshing`。LiveTagPopover 中间层透传 `memoryRefreshing` / `onRefreshMemory` props。新增 i18n key `ui.memoryRefresh` / `ui.memoryRefreshSuccess` / `ui.memoryRefreshFailed` 全 18 语言；Mobile.jsx `componentWillUnmount` 与 AppHeader 对齐 seq 自增（`_fsSkillsSeq` / `_memorySeq` / `_memoryDetailSeq`）防止卸载后回包污染
+- chore(ultraplan): 移除 UltraPlan 弹窗的 200K 上下文窗口警告（原在模型 context < 1M 时显示 "请先执行 /clear" 黄色提示）—— 删除 `UltraPlanModal.jsx` modal + `TerminalPanel.jsx` popover 两处独立渲染、关联 CSS 类（`.contextWarning` / `.ultraplanContextWarning`）、i18n key `ui.ultraplan.contextWarning` 全 18 语言条目，及 `ChatView.jsx` / `TerminalPanel.jsx` / `UltraPlanModal.jsx` 不再使用的 `getModelMaxTokens` import 和 `modelName` prop
+
 ## 1.6.241 (2026-05-05)
 
 - perf(theme): `themeConfig` getter 改为返回模块顶层 `Object.freeze` 常量（LIGHT/DARK_THEME_CONFIG），消除每次 render 返回新 `{algorithm, token: {...}}` 字面量。旧实现导致 antd v5 cssinjs `useTheme` 的 `useMemo` cache 永远 miss → `DesignTokenContext.Provider` value 引用变 → 所有 useToken 消费者重渲染 + 整棵 antd 子树（Tooltip/Dropdown/EllipsisTooltip 等）重 mount。**Chrome Performance trace 实测同条件对比**（baseline 13.5s / new 25s 等比归一）：antd `R` 函数总耗时 5344ms (39.4%) → **260ms (1.04%)**（−95%）；`Vk` self 446 → 4.2ms（−99%）；`_objectSpread2` self 369 → 7.2ms（−98%）；`Yi` 子组件 mount 树 incl 2718ms → 47.8ms（−98%）；GC 总耗时 6242ms (46.1%) → **703ms (2.8%)**（−89%）；堆分配速率 ~120 MB/s → **4.8 MB/s**（−96%）；DOM totalObjects 106 796 → 79 982（−25%）；用户代码态 long task > 200ms 数量 → 0。修复"页面长时间卡死 + 滚动掉帧"主因

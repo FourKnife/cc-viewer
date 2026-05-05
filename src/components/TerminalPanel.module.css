@@ -864,17 +864,6 @@
   color: #fff;
 }
 
-.ultraplanContextWarning {
-  margin: 0 14px 8px;
-  padding: 6px 10px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--warning-text, #b45309);
-  background: var(--warning-bg, #fef3c7);
-  border: 1px solid var(--warning-border, #fde68a);
-  border-radius: 6px;
-}
-
 .ultraplanTextarea {
   margin: 0 14px;
   padding: 8px 10px;

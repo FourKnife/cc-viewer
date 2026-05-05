@@ -23,10 +23,12 @@ function LiveTagPopover({
   ctxColor,
   fsSkills,
   memory,
+  memoryRefreshing,
   calibrationModel,
   onCalibrationModelChange,
   onOpenMemoryDetail,
   onOpenSkillsModal,
+  onRefreshMemory,
   projectName,
 }) {
   // 用 CSS 变量替代 inline style 字面量,稳定 ctxColor / contextPercent 时 triggerStyle 引用不变。
@@ -52,10 +54,12 @@ function LiveTagPopover({
           contextPercent={contextPercent}
           fsSkills={fsSkills}
           memory={memory}
+          memoryRefreshing={memoryRefreshing}
           calibrationModel={calibrationModel}
           onCalibrationModelChange={onCalibrationModelChange}
           onOpenMemoryDetail={onOpenMemoryDetail}
           onOpenSkillsModal={onOpenSkillsModal}
+          onRefreshMemory={onRefreshMemory}
         />
       ) : <div className={styles.cachePopoverPlaceholder} />}
       trigger="hover"

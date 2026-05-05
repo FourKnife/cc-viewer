@@ -20,7 +20,6 @@ import styles from './TerminalPanel.module.css';
 import { BUILTIN_PRESETS } from '../utils/builtinPresets.js';
 import { buildLocalUltraplan } from '../utils/ultraplanTemplates';
 import { buildBracketPasteSubmitChunks, BRACKET_PASTE_SUBMIT_SETTLE_MS } from '../utils/ptyChunkBuilder';
-import { getModelMaxTokens } from '../utils/helpers';
 import ConceptHelp from './ConceptHelp';
 import CustomUltraplanEditModal from './CustomUltraplanEditModal';
 import { TerminalWriteQueue } from '../utils/terminalWriteQueue';
@@ -1568,9 +1567,6 @@ class TerminalPanel extends React.Component {
                         </svg>
                       </button>
                     </div>
-                    {(!this.props.modelName || getModelMaxTokens(this.props.modelName) < 1000000) && (
-                      <div className={styles.ultraplanContextWarning}>{t('ui.ultraplan.contextWarning')}</div>
-                    )}
                     {this.state.ultraplanFiles.length > 0 && (
                       <div className={styles.ultraplanFileList}>
                         {this.state.ultraplanFiles.map((f, i) => {

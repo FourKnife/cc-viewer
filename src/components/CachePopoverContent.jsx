@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { Popover, Select, Button, Alert, Modal } from 'antd';
+import { Popover, Select, Button, Alert, Modal, Tooltip } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { extractCachedContent, parseCachedTools, extractLoadedSkills } from '../utils/helpers';
 import { BUILTIN_SKILL_NAMES, mergeActiveSkills } from '../utils/skillsParser';
 import { t } from '../i18n';
@@ -34,6 +35,8 @@ export default function CachePopoverContent({
   onCalibrationModelChange,
   onOpenMemoryDetail,
   onOpenSkillsModal,
+  onRefreshMemory,
+  memoryRefreshing = false,
 }) {
   const [sectionCollapsed, setSectionCollapsed] = useState({});
   // 手机端 chip 描述 Modal 的当前条目；null = 关。{ title, description } 形态由 chip render 函数填入。
@@ -294,8 +297,40 @@ export default function CachePopoverContent({
           </div>
         )}
         <div className={`${styles.cacheSection} ${styles.cacheSectionBordered}`}>
-          <div className={styles.cacheSectionLabel}>
-            {t('ui.persistentMemory')}{memoryCount !== null ? ` (${memoryCount})` : ''}
+          <div className={styles.cacheSectionHeader}>
+            <div className={styles.cacheSectionLabel}>
+              {t('ui.persistentMemory')}{memoryCount !== null ? ` (${memoryCount})` : ''}
+            </div>
+            {onRefreshMemory && (() => {
+              // 三态契约 → 刷新按钮的 disable / tooltip 决策：
+              //   null  = lazy-load 进行中     → disabled + 提示"加载中"
+              //   false = lazy-load 失败       → enabled（允许重试）
+              //   {exists:false} = 无 MEMORY.md → disabled + 提示"无记忆文件"
+              //   {exists:true , content}      → enabled（正常刷新）
+              const isLoading = memory === null;
+              const isMissingFile = memory && memory.exists === false;
+              const refreshDisabled = isLoading || isMissingFile;
+              const tooltipTitle = isLoading ? t('ui.memoryLoading')
+                : isMissingFile ? t('ui.memoryNotFound')
+                : '';
+              const btn = (
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  loading={memoryRefreshing}
+                  disabled={refreshDisabled}
+                  onClick={onRefreshMemory}
+                >
+                  {t('ui.memoryRefresh')}
+                </Button>
+              );
+              // antd v5 disabled Button 不响应 mouse events，Tooltip 需 span 包裹才能触发。
+              return tooltipTitle ? (
+                <Tooltip title={tooltipTitle}>
+                  <span>{btn}</span>
+                </Tooltip>
+              ) : btn;
+            })()}
           </div>
           {memoryBody}
         </div>

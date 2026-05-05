@@ -28,7 +28,6 @@ import UltraPlanModal from './UltraPlanModal';
 import { TerminalWsContext } from './TerminalWsContext';
 import CustomUltraplanEditModal from './CustomUltraplanEditModal';
 import { buildLocalUltraplan } from '../utils/ultraplanTemplates';
-import { getModelMaxTokens } from '../utils/helpers';
 import { Virtuoso } from 'react-virtuoso';
 import { isMobile, isIOS, isPad } from '../env';
 import { t } from '../i18n';
@@ -4037,7 +4036,6 @@ class ChatView extends React.Component {
               variant={this.state.ultraplanVariant}
               prompt={this.state.ultraplanPrompt}
               files={this.state.ultraplanFiles}
-              modelName={this._reqScanCache?.modelName}
               agentTeamEnabled={this.state.agentTeamEnabled}
               customExperts={this.state.customUltraplanExperts}
               onClose={() => this.setState({ ultraplanModalOpen: false })}

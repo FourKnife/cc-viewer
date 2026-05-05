@@ -55,6 +55,9 @@ class AppHeader extends React.Component {
       // 当前项目「持久记忆」入口 MEMORY.md：null=未加载 / false=失败 / { exists, dir, indexPath, content }。
       // 与 _fsSkills 同样依赖 projectName 切换作废 + seq 防回包污染。
       _memory: null,
+      // 用户主动点击"刷新记忆"按钮的 spin 状态。与 _memory===null 区分：
+      // null 是 lazy-load 空态（按钮 disabled），_memoryRefreshing 是用户触发的显式刷新。
+      _memoryRefreshing: false,
       // 点击记忆链接时拉起的明细 Modal 状态：null=关 / { name, content?, error?, loading? }
       _memoryDetail: null };
     this._countdownTimer = null;
@@ -92,7 +95,7 @@ class AppHeader extends React.Component {
       if (!this.props.isLocalLog && this.props.projectName) this.reloadFsSkills();
       // _memory 同样作废 —— 沿用 _fsSkills 的失效策略，下次 popover 打开时按需重拉。
       this._memorySeq++;
-      this.setState({ _memory: null, _memoryDetail: null });
+      this.setState({ _memory: null, _memoryDetail: null, _memoryRefreshing: false });
     }
   }
 
@@ -139,6 +142,32 @@ class AppHeader extends React.Component {
     } catch {
       if (seq === this._memorySeq) this.setState({ _memory: false });
     }
+  };
+
+  // 用户主动点击"刷新记忆"按钮：自管 seq 三态（ok/stale/fail）以决定 toast。
+  // 与 loadMemory 区分的原因：lazy-load 失败不打扰用户，只在 popover 内显示 memoryLoadError；
+  // 主动刷新失败要 message.error 明确反馈。stale（workspace 中途切换）保持静默，避免误报。
+  handleRefreshMemory = async () => {
+    if (this.state._memoryRefreshing) return;
+    this.setState({ _memoryRefreshing: true });
+    const seq = ++this._memorySeq;
+    let ok = false;
+    let stale = false;
+    try {
+      const r = await fetch(apiUrl('/api/project-memory'));
+      const data = await r.json();
+      if (seq !== this._memorySeq) { stale = true; }
+      else if (!r.ok) { this.setState({ _memory: false }); }
+      else { this.setState({ _memory: data }); ok = true; }
+    } catch {
+      if (seq !== this._memorySeq) stale = true;
+      else this.setState({ _memory: false });
+    } finally {
+      if (!stale) this.setState({ _memoryRefreshing: false });
+    }
+    if (stale) return;
+    if (ok) message.success(t('ui.memoryRefreshSuccess'));
+    else message.error(t('ui.memoryRefreshFailed'), 5);
   };
 
   // 血条 Popover 开关:打开时按需拉 _fsSkills / _memory(避免页面初始化就发两条请求)。
@@ -1326,10 +1355,12 @@ class AppHeader extends React.Component {
                 ctxColor={ctxColor}
                 fsSkills={this.state._fsSkills}
                 memory={this.state._memory}
+                memoryRefreshing={this.state._memoryRefreshing}
                 calibrationModel={this.state.calibrationModel}
                 onCalibrationModelChange={this.handleCalibrationModelChange}
                 onOpenMemoryDetail={this.loadMemoryDetail}
                 onOpenSkillsModal={this.handleOpenSkillsModal}
+                onRefreshMemory={this.handleRefreshMemory}
                 projectName={projectName}
               />
             );
