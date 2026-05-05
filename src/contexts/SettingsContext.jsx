@@ -1,4 +1,4 @@
-import React, { createContext } from 'react';
+import React, { createContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { apiUrl } from '../utils/apiUrl';
 import { setLang } from '../i18n';
 import { setClaudeConfigDir } from '../utils/tClaude';
@@ -20,74 +20,78 @@ export const SettingsContext = createContext({
   updateClaudeSettings: () => Promise.resolve(null),
 });
 
-export class SettingsProvider extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { claudeSettings: null, preferences: null };
-    this._unmounted = false;
+export function SettingsProvider({ children }) {
+  const [claudeSettings, setClaudeSettings] = useState(null);
+  const [preferences, setPreferences] = useState(null);
+  const mountedRef = useRef(true);
 
-    // constructor 里立即 fire,确保 AppBase.componentDidMount 时 Promise 已可用。
-    // 全局副作用(setLang / setClaudeConfigDir)在 then 内执行,与原 AppBase 行为等价。
-    this._prefsReady = fetch(apiUrl('/api/preferences'))
+  // useState 的 lazy 初始化器同步启动 fetch,首次 render 时 Promise 已 in-flight,
+  // 保证消费方(AppBase.componentDidMount)拿到的是真实数据 Promise 而非兜底 Promise。
+  // setLang / setClaudeConfigDir 全局副作用在 fetch 回包时立即执行,不等 useEffect。
+  const [readyPromises] = useState(() => {
+    const prefsReady = fetch(apiUrl('/api/preferences'))
       .then(res => res.json())
       .then(data => {
-        if (typeof data.claudeConfigDir === 'string') setClaudeConfigDir(data.claudeConfigDir);
-        if (data.lang) setLang(data.lang);
-        if (!this._unmounted) this.setState({ preferences: data });
+        if (typeof data?.claudeConfigDir === 'string') setClaudeConfigDir(data.claudeConfigDir);
+        if (data?.lang) setLang(data.lang);
         return data;
       })
       .catch(() => ({}));
-
-    this._claudeSettingsReady = fetch(apiUrl('/api/claude-settings'))
+    const claudeReady = fetch(apiUrl('/api/claude-settings'))
       .then(res => res.ok ? res.json() : {})
-      .then(data => {
-        if (!this._unmounted) this.setState({ claudeSettings: data });
-        return data;
-      })
       .catch(() => ({}));
-  }
+    return { prefsReady, claudeReady };
+  });
 
-  componentWillUnmount() {
-    this._unmounted = true;
-  }
+  useEffect(() => {
+    // effect 入口重置 mountedRef:StrictMode/HMR 下 mount → cleanup → remount 时 ref 对象复用,
+    // 仅靠 useRef(true) 初始化无法在 remount 时重置,会让后续 setState 永远被跳过。
+    mountedRef.current = true;
+    readyPromises.prefsReady.then(data => {
+      if (mountedRef.current && data) setPreferences(data);
+    });
+    readyPromises.claudeReady.then(data => {
+      if (mountedRef.current && data) setClaudeSettings(data);
+    });
+    return () => { mountedRef.current = false; };
+  }, [readyPromises]);
 
-  updatePreferences = (patch) => {
-    // 乐观写本地缓存(与原 fire-and-forget 等价,不做回滚)。
-    // setState 触发 Provider re-render → 子树拿到新 preferences 引用 → componentDidUpdate 接力 reload。
-    if (!this._unmounted) {
-      this.setState(prev => ({ preferences: { ...(prev.preferences || {}), ...patch } }));
+  // 乐观写本地缓存(与原 fire-and-forget 等价,不做回滚)。
+  // setState 触发 Provider re-render → 子树拿到新 preferences 引用 → componentDidUpdate 接力 reload。
+  const updatePreferences = useCallback((patch) => {
+    if (mountedRef.current) {
+      setPreferences(prev => ({ ...(prev || {}), ...patch }));
     }
     return fetch(apiUrl('/api/preferences'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }).then(r => r.ok ? r.json() : null).catch(() => null);
-  };
+  }, []);
 
-  updateClaudeSettings = (patch) => {
-    if (!this._unmounted) {
-      this.setState(prev => ({ claudeSettings: { ...(prev.claudeSettings || {}), ...patch } }));
+  const updateClaudeSettings = useCallback((patch) => {
+    if (mountedRef.current) {
+      setClaudeSettings(prev => ({ ...(prev || {}), ...patch }));
     }
     return fetch(apiUrl('/api/claude-settings'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }).then(r => r.ok ? r.json() : null).catch(() => null);
-  };
+  }, []);
 
-  render() {
-    const value = {
-      claudeSettings: this.state.claudeSettings,
-      preferences: this.state.preferences,
-      _prefsReady: this._prefsReady,
-      _claudeSettingsReady: this._claudeSettingsReady,
-      updatePreferences: this.updatePreferences,
-      updateClaudeSettings: this.updateClaudeSettings,
-    };
-    return (
-      <SettingsContext.Provider value={value}>
-        {this.props.children}
-      </SettingsContext.Provider>
-    );
-  }
+  const value = useMemo(() => ({
+    claudeSettings,
+    preferences,
+    _prefsReady: readyPromises.prefsReady,
+    _claudeSettingsReady: readyPromises.claudeReady,
+    updatePreferences,
+    updateClaudeSettings,
+  }), [claudeSettings, preferences, readyPromises, updatePreferences, updateClaudeSettings]);
+
+  return (
+    <SettingsContext.Provider value={value}>
+      {children}
+    </SettingsContext.Provider>
+  );
 }
