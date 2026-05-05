@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   internReadResult,
+  internToolResult,
   _resetReadPoolForTest,
   _getReadPoolSizeForTest,
 } from '../src/utils/readResultPool.js';
@@ -90,5 +91,42 @@ describe('internReadResult', () => {
     internReadResult(justBelow);
     internReadResult('X'.repeat(255));
     assert.equal(_getReadPoolSizeForTest(), 0, '< 256 must skip pool');
+  });
+});
+
+describe('internToolResult (generic)', () => {
+  it('shares pool with internReadResult (same content → same ref)', () => {
+    _resetReadPoolForTest();
+    const s = 'X'.repeat(2000);
+    const r1 = internReadResult(s);
+    const r2 = internToolResult(s);
+    assert.equal(r1, r2, 'cross-API content sharing');
+    assert.equal(_getReadPoolSizeForTest(), 1, 'shared pool, single entry');
+  });
+
+  it('dedups Bash-like output across many entries', () => {
+    _resetReadPoolForTest();
+    const diff = 'diff --git a/x b/x\n' + 'L'.repeat(2000);
+    const refs = [];
+    for (let i = 0; i < 50; i++) refs.push(internToolResult(diff));
+    assert.equal(_getReadPoolSizeForTest(), 1, '50 calls → 1 pool entry');
+    for (let i = 1; i < 50; i++) {
+      assert.equal(refs[i], refs[0], `call ${i} shares ref with first`);
+    }
+  });
+
+  it('passes through short results unchanged', () => {
+    _resetReadPoolForTest();
+    const r = internToolResult('short bash output');
+    assert.equal(r, 'short bash output');
+    assert.equal(_getReadPoolSizeForTest(), 0, 'short input must skip pool');
+  });
+
+  it('passes through non-string inputs unchanged', () => {
+    _resetReadPoolForTest();
+    assert.equal(internToolResult(null), null);
+    assert.equal(internToolResult(undefined), undefined);
+    assert.equal(internToolResult(42), 42);
+    assert.equal(_getReadPoolSizeForTest(), 0);
   });
 });

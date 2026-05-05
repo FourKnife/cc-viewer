@@ -46,3 +46,15 @@ export function _resetReadPoolForTest() {
 export function _getReadPoolSizeForTest() {
   return _readResultPool.size;
 }
+
+/**
+ * 通用版：Read 之外的所有 tool_result（Bash/Grep/Glob/MCP/...）也走同一 pool。
+ * 算法与 internReadResult 完全相同（同 _readResultSig + 同 _readResultPool），
+ * 名字区分只是语义上的扩展，便于 toolResultBuilder.js 默认全 intern。
+ *
+ * @param {string} s - tool_result 的 resultText 原文
+ * @returns {string} 池化后的字符串引用
+ */
+export function internToolResult(s) {
+  return internReadResult(s);
+}

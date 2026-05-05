@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.239 (2026-05-05)
+
+- perf(tool-result-pool): 通用化 Read 专属 intern pool，默认覆盖所有 tool_result（Bash/Grep/Glob/MCP/Task/...）—— phase4 retainer 实证派生层 89.3% hitRate / git diff 69 副本 → 3 unique pool entry / entry-slim.js cat-n 121 → 7 entry，~15-30MB 派生层 dedup；sig 不带 toolName 前缀让 MainAgent 与 SubAgent 同内容字符串共享同一引用，自动覆盖未来新增 tool 类型
+
+---
+
 ## 1.6.238 (2026-05-05)
 
 - perf(entry-slim): 全局 intern pool + Read tool_result content-hash dedup（堆 v3 实测从 531MB → 189MB / 节省 65%；Bash 描述 678 份 → 4 份；解决 1.6.237 fullEntry 累积根因）
