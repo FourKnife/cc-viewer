@@ -12,6 +12,7 @@ import { SettingsContext } from '../contexts/SettingsContext';
 import ConceptHelp from './ConceptHelp';
 import OpenFolderIcon from './OpenFolderIcon';
 import CachePopoverContent from './CachePopoverContent';
+import LiveTagPopover from './LiveTagPopover';
 import MemoryDetailModal from './MemoryDetailModal';
 import appConfig from '../config.json';
 import { OPTIMISTIC_CLEAR_PERCENT } from '../AppBase';
@@ -138,6 +139,15 @@ class AppHeader extends React.Component {
     } catch {
       if (seq === this._memorySeq) this.setState({ _memory: false });
     }
+  };
+
+  // 血条 Popover 开关:打开时按需拉 _fsSkills / _memory(避免页面初始化就发两条请求)。
+  // 提取为 class field 后引用稳定,LiveTagPopover memo 不会因 callback 引用变化而失效。
+  handleCachePopoverOpenChange = (open) => {
+    this.setState({ _cachePopoverOpen: open });
+    if (!open) this._cacheScrollInited = false;
+    if (open && this.state._fsSkills === null && !this.props.isLocalLog) this.reloadFsSkills();
+    if (open && this.state._memory === null) this.loadMemory();
   };
 
   // 加载明细文件：name 必须是单段 .md basename（前端先校验，server 再校验一遍）。
@@ -1304,46 +1314,24 @@ class AppHeader extends React.Component {
             if (contextBarOptimistic) contextPercent = OPTIMISTIC_CLEAR_PERCENT;
             const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
 
-            return isLocalLog ? (
-              <Tag className={`${styles.liveTag} ${styles.liveTagHistory}`}>
-                <span className={styles.liveTagText}>{t('ui.historyLog', { file: localLogFile })}</span>
-              </Tag>
-            ) : (
-              <Popover
-                content={this.state._cachePopoverOpen ? (
-                  <CachePopoverContent
-                    requests={requests}
-                    serverCachedContent={serverCachedContent}
-                    contextPercent={contextPercent}
-                    fsSkills={this.state._fsSkills}
-                    memory={this.state._memory}
-                    calibrationModel={this.state.calibrationModel}
-                    onCalibrationModelChange={this.handleCalibrationModelChange}
-                    onOpenMemoryDetail={this.loadMemoryDetail}
-                    onOpenSkillsModal={this.handleOpenSkillsModal}
-                  />
-                ) : <div className={styles.cachePopoverPlaceholder} />}
-                trigger="hover"
-                placement="bottomLeft"
-                overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: '8px 8px' }}
-                onOpenChange={(open) => {
-                  this.setState({ _cachePopoverOpen: open });
-                  if (!open) this._cacheScrollInited = false;
-                  // 首次打开 + 未加载 + live-tail → 拉一次文件系统权威数据
-                  if (open && this.state._fsSkills === null && !this.props.isLocalLog) this.reloadFsSkills();
-                  // 持久记忆同样按需拉取（不区分 live-tail / local-log，记忆始终对应当前 cwd）
-                  if (open && this.state._memory === null) this.loadMemory();
-                }}
-              >
-                <span className={styles.liveTag} style={{ borderColor: ctxColor, color: ctxColor }}>
-                  <span className={styles.liveTagFill} style={{ width: `${contextPercent}%`, backgroundColor: ctxColor }} />
-                  <span className={styles.liveTagContent}>
-                    <span className={styles.liveTagText}>
-                      {t('ui.liveMonitoring')}{projectName ? `:${projectName}` : ''}
-                    </span>
-                  </span>
-                </span>
-              </Popover>
+            return (
+              <LiveTagPopover
+                isLocalLog={isLocalLog}
+                localLogFile={localLogFile}
+                cachePopoverOpen={this.state._cachePopoverOpen}
+                onOpenChange={this.handleCachePopoverOpenChange}
+                requests={requests}
+                serverCachedContent={serverCachedContent}
+                contextPercent={contextPercent}
+                ctxColor={ctxColor}
+                fsSkills={this.state._fsSkills}
+                memory={this.state._memory}
+                calibrationModel={this.state.calibrationModel}
+                onCalibrationModelChange={this.handleCalibrationModelChange}
+                onOpenMemoryDetail={this.loadMemoryDetail}
+                onOpenSkillsModal={this.handleOpenSkillsModal}
+                projectName={projectName}
+              />
             );
           })()}
           {updateInfo && (
