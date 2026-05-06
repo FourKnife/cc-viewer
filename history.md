@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.243 (2026-05-06)
+
+- feat(skills): 新增 `/api/skills/import` 上传接口 + 移动端 cache popover 抽屉「添加 skill / 管理」入口。前端三入口（文件夹 / .zip / SKILL.md）：PC 走 antd Dropdown，移动端（含 iPad）去 dropdown 直接 onClick → `.zip,.md` 文件选择器（webkitdirectory 在移动端浏览器普遍不支持，已 feature detect 隐藏文件夹项）。文件夹入口前端 JSZip 打包后复用 zip 通道。新组件 `SkillsManagerModal.jsx` + 独立 css module 解除对 AppHeader.module.css 的硬耦合；AppHeader / Mobile 共用，状态机（_skillsModal: open/loading/skills/error/toggling）与 toggle 乐观更新 + 失败回滚同构（短期接受重复，与既有 reloadFsSkills 一致）。新增 i18n key `ui.skills.add/addFolder/addZip/addMd/folderMissingSkillMd/uploadSuccess/uploadFailed/invalidType/zipMissingSkillMd` 全 18 语言；移除已弃用的 `ui.skillEnabled` / `ui.skillDisabled`（toggle 成功不再弹 toast，Switch 状态本身已反馈）；handleToggleSkill reload 后用 orderMap 保留 modal 显示顺序避免 card 跳位
+- security(skills-import): 多层防御
+  - **Zip Slip**：`resolve(targetDir) + sep` 后缀比较防 prefix 攻击（`my-skill-evil/x` 不能以 `my-skill` startsWith 通过）+ entry 名 `..` 过滤双层
+  - **Symlink 拒绝**：检测 zip entry attr 高 16 位 unix mode `0o170000 == 0o120000` 直接 400
+  - **Zip Bomb 双层**：第一层 `header.size` 廉价初检（单文件≤50MB / 总≤200MB）；第二层 `getData().length` 真实复核防 header 谎报
+  - **multipart boundary 加固**：正则改 `[^;]+` 终止 + 长度封顶 200 + 引号去除
+  - **文件名 Unicode 净化**：NFKC 规范化 + 控制字符 + 零宽/方向覆盖字符过滤防 homoglyph / RLO 混淆
+  - **错误信息脱敏**：5xx 返 `'server_error'` 不暴露内部路径
+  - **TOCTOU 修复**：`existsSync + mkdirSync(recursive:true)` → 原子 `mkdirSync()` + try/catch EEXIST 消除竞争窗口
+- perf(context-tokens): AppHeader.jsx + Mobile.jsx 把 contextPercent 与 contextTokens 的两次反向扫描 requests 合并成单次循环（`lastMainAgent` + `lastTotalTokens` 共用），`calibration / precise / fallback` 三分支复用同一遍历结果。200 条 requests 场景每 render 节省 ~5-10ms
+- ui(mobile): cache popover 抽屉里 SkillsManagerModal 适配 zoom: 0.6 抽屉 ——`width: calc(100vw - 8px)` 贴边 + body `zoom: 0.6` 与抽屉同步避免字号偏大；PC 端 `min(1200px, calc(100vw - 80px))` 不变
+- deps: 新增 `adm-zip@^0.5.17`（dependency，server 端 zip 解压）+ `jszip@^3.10.1`（devDependency，前端 dynamic import，Vite 打包成独立 chunk）
+- test: 新增 `test/skills-import.test.js` 14 case（happy path 4 / rejections 5 / security defenses 5 含 symlink / zip bomb / zip slip / sep-suffix prefix attack）；全量 1582/1582 pass
+
 ## 1.6.242 (2026-05-05)
 
 - feat(memory): AppHeader / Mobile 血条 popover「持久记忆」区新增"刷新"按钮（图标+文字 + spin loading），主动拉取 `/api/project-memory` 并 `message.success/error` 反馈；与 lazy-load 静默失败策略区分（lazy-load 仅显示区内 errorBody，主动刷新失败 toast 5s）。三态契约：`null` 加载中（disabled+tooltip）/ `false` 失败可重试 / `{exists:false}` 无 MEMORY.md 文件（disabled+tooltip）/ `{exists:true}` 启用。seq 防 stale + 连点守卫 + workspace 切换复位 `_memoryRefreshing`。LiveTagPopover 中间层透传 `memoryRefreshing` / `onRefreshMemory` props。新增 i18n key `ui.memoryRefresh` / `ui.memoryRefreshSuccess` / `ui.memoryRefreshFailed` 全 18 语言；Mobile.jsx `componentWillUnmount` 与 AppHeader 对齐 seq 自增（`_fsSkillsSeq` / `_memorySeq` / `_memoryDetailSeq`）防止卸载后回包污染

@@ -1444,10 +1444,6 @@ class TerminalPanel extends React.Component {
         <input type="file" ref={this.fileInputRef} className={styles.hiddenFileInput} onChange={this.handleFileUpload} />
         {(!isMobile || isPad) && (
           <div className={styles.terminalToolbar}>
-            <button className={styles.toolbarBtn} onClick={() => this.fileInputRef.current?.click()} title={t('ui.terminal.upload')}>
-              <UploadIcon />
-              <span>{t('ui.terminal.upload')}</span>
-            </button>
             {this.state.agentTeamEnabled ? (
               <Popover
                 trigger="hover"
@@ -1648,6 +1644,9 @@ class TerminalPanel extends React.Component {
                 </button>
               </Popover>
             )}
+            <button className={styles.toolbarBtn} onClick={() => this.fileInputRef.current?.click()} title={t('ui.terminal.upload')}>
+              <UploadIcon />
+            </button>
             {(() => {
               // i18n 是单句 "X？Y。" 结构，按 ? / ？ 拆成 Popconfirm 的 title + description 以换行呈现
               const confirmFull = t('ui.chatInput.clearContextConfirm');
@@ -1666,7 +1665,6 @@ class TerminalPanel extends React.Component {
                 >
                   <button className={styles.toolbarBtn} title={t('ui.chatInput.clearContext')}>
                     <TrashIcon />
-                    <span>{t('ui.chatInput.clearContext')}</span>
                   </button>
                 </Popconfirm>
               );

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ConfigProvider, Spin, Button, Badge, Switch, Select, Modal, Popover, message } from 'antd';
+import { ConfigProvider, Spin, Button, Badge, Switch, Select, Modal, message } from 'antd';
 import { BranchesOutlined, DownloadOutlined, DeleteOutlined, RollbackOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import AppBase, { styles, OPTIMISTIC_CLEAR_PERCENT } from './AppBase';
 import { isIOS, isPad, setViewMode } from './env';
@@ -15,6 +15,7 @@ import MobileFileExplorer from './components/MobileFileExplorer';
 import MobileStats from './components/MobileStats';
 import CachePopoverContent from './components/CachePopoverContent';
 import MemoryDetailModal from './components/MemoryDetailModal';
+import SkillsManagerModal from './components/SkillsManagerModal';
 import OpenFolderIcon from './components/OpenFolderIcon';
 import appConfig from './config.json';
 import { t } from './i18n';
@@ -48,6 +49,8 @@ class Mobile extends AppBase {
       _memory: null,
       _memoryRefreshing: false,
       _memoryDetail: null,
+      // 与 AppHeader._skillsModal 同结构；toggling 用 Set 跟踪正在切换的 skill key。
+      _skillsModal: { open: false, loading: false, skills: [], error: null, toggling: new Set() },
       calibrationModel: (v => CALIBRATION_MODELS.some(m => m.value === v) ? v : 'auto')(localStorage.getItem('ccv_calibrationModel') || 'auto'),
     });
     this._lastContextPercent = 0;
@@ -99,6 +102,110 @@ class Mobile extends AppBase {
         this.setState(prev => ({ _fsSkills: Array.isArray(prev._fsSkills) ? prev._fsSkills : false }));
       }
       return { ok: false, reason: e.message || 'network' };
+    }
+  };
+
+  // 打开 skills 管理 modal。同时关闭 cache 抽屉避免两个 overlay 叠加。
+  // 与 AppHeader.handleOpenSkillsModal 同语义；区别只在于关闭 cache UI 的字段名（mobileCachePanelVisible vs _cachePopoverOpen）。
+  handleOpenSkillsModal = async () => {
+    const cached = this.state._fsSkills;
+    const needFetch = !Array.isArray(cached);
+    this.setState(prev => ({
+      _skillsModal: {
+        open: true,
+        loading: needFetch,
+        skills: Array.isArray(cached) ? cached : [],
+        error: null,
+        toggling: prev._skillsModal?.toggling || new Set(),
+      },
+      mobileCachePanelVisible: false,
+    }), () => this._onCachePanelOpenChange(false));
+    if (needFetch) {
+      const result = await this.reloadFsSkills();
+      this.setState(prev => ({
+        _skillsModal: {
+          ...prev._skillsModal,
+          loading: false,
+          skills: result.ok ? result.skills : [],
+          error: result.ok ? null : result.reason,
+        },
+      }));
+    }
+  };
+
+  // 切换 skill 启用状态，乐观更新 + 失败回滚（与 AppHeader.handleToggleSkill 同实现）
+  handleToggleSkill = async (skill) => {
+    const key = `${skill.source}-${skill.name}`;
+    if (this.state._skillsModal?.toggling?.has(key)) return;
+    const enable = !skill.enabled;
+    const flipEnabled = (target) => (s) =>
+      (s.source === skill.source && s.name === skill.name) ? { ...s, enabled: target } : s;
+    this.setState(prev => {
+      const next = new Set(prev._skillsModal.toggling); next.add(key);
+      return {
+        _skillsModal: {
+          ...prev._skillsModal,
+          toggling: next,
+          skills: prev._skillsModal.skills.map(flipEnabled(enable)),
+        },
+      };
+    });
+    try {
+      const r = await fetch(apiUrl('/api/skills/toggle'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: skill.source, name: skill.name, enable }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        this.setState(prev => ({
+          _skillsModal: {
+            ...prev._skillsModal,
+            skills: prev._skillsModal.skills.map(flipEnabled(!enable)),
+          },
+        }));
+        if (data.code === 'DEST_CONFLICT') {
+          message.error(t('ui.skillToggleConflict', { name: skill.name }));
+        } else {
+          message.error(t('ui.skillToggleFailed', { reason: data.error || 'unknown' }));
+        }
+        return;
+      }
+      // 切换成功不弹 toast：Switch 状态本身已反馈
+      this.setState(prev => ({
+        _fsSkills: Array.isArray(prev._fsSkills)
+          ? prev._fsSkills.map(s => (s.source === skill.source && s.name === skill.name) ? { ...s, enabled: enable } : s)
+          : prev._fsSkills,
+      }));
+      // 重拉对齐权威数据，但保持 modal 显示顺序避免 toggle 后 card 跳位（与 AppHeader 同语义）
+      const result = await this.reloadFsSkills();
+      if (result.ok) {
+        this.setState(prev => {
+          const orderMap = new Map(prev._skillsModal.skills.map((s, i) => [`${s.source}-${s.name}`, i]));
+          const merged = [...result.skills].sort((a, b) => {
+            const ai = orderMap.get(`${a.source}-${a.name}`);
+            const bi = orderMap.get(`${b.source}-${b.name}`);
+            if (ai === undefined && bi === undefined) return 0;
+            if (ai === undefined) return 1;
+            if (bi === undefined) return -1;
+            return ai - bi;
+          });
+          return { _skillsModal: { ...prev._skillsModal, skills: merged } };
+        });
+      }
+    } catch (e) {
+      this.setState(prev => ({
+        _skillsModal: {
+          ...prev._skillsModal,
+          skills: prev._skillsModal.skills.map(flipEnabled(!enable)),
+        },
+      }));
+      message.error(t('ui.skillToggleFailed', { reason: e.message }));
+    } finally {
+      this.setState(prev => {
+        const next = new Set(prev._skillsModal.toggling); next.delete(key);
+        return { _skillsModal: { ...prev._skillsModal, toggling: next } };
+      });
     }
   };
 
@@ -159,7 +266,7 @@ class Mobile extends AppBase {
     }
   };
 
-  // popover/抽屉打开瞬间懒加载（iPad antd Popover 的 onOpenChange、手机点击血条的 onClick 都会调用）。
+  // 抽屉打开瞬间懒加载（iPad / 手机点击血条的 onClick 都会调用）。
   // 仅在 open=true 且数据未加载（null）时触发 fetch，与 AppHeader.onOpenChange 同语义。
   _onCachePanelOpenChange = (open) => {
     if (open && this.state._fsSkills === null && !this._isLocalLog) this.reloadFsSkills();
@@ -478,24 +585,31 @@ class Mobile extends AppBase {
       if (isMainAgent(filteredRequests[i]) && effective) { mobileModelName = effective; break; }
     }
 
-    // contextPercent 计算抽到 render 顶部：header 血条 + 手机抽屉里的 CachePopoverContent 都要用同一份。
+    // contextPercent 计算抽到 render 顶部：header 血条 + 抽屉里的 CachePopoverContent 都要用同一份。
     // 与原 IIFE 同语义；side effect（_lastContextPercent 更新）也搬上来一次性做完。
+    // 反向找最后一条带 usage 的 MainAgent 一次，contextPercent 与 mobileContextTokens 共用
+    // （以前 mobileContextTokens 单独扫 + fallback 分支再扫，是 2*O(N)）
     let mobileContextPercent = 0;
+    let mobileContextTokens = 0;
     if (!mobileIsLocalLog) {
       const contextWindow = this.state.contextWindow;
-      if (contextWindow?.used_percentage != null) {
-        mobileContextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / 83.5 * 100)));
-      } else if (filteredRequests.length > 0) {
+      let lastMainAgent = null;
+      if (filteredRequests.length > 0) {
         for (let i = filteredRequests.length - 1; i >= 0; i--) {
           if (isMainAgent(filteredRequests[i]) && filteredRequests[i].response?.body?.usage) {
-            const u = filteredRequests[i].response.body.usage;
-            const total = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-            const maxTokens = contextWindow?.context_window_size || getModelMaxTokens(getEffectiveModel(filteredRequests[i]) || this.state.settingsModel);
-            const usable = maxTokens * 0.835;
-            if (usable > 0 && total > 0) mobileContextPercent = Math.min(100, Math.max(0, Math.round(total / usable * 100)));
+            lastMainAgent = filteredRequests[i];
+            const u = lastMainAgent.response.body.usage;
+            mobileContextTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
             break;
           }
         }
+      }
+      if (contextWindow?.used_percentage != null) {
+        mobileContextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / 83.5 * 100)));
+      } else if (lastMainAgent) {
+        const maxTokens = contextWindow?.context_window_size || getModelMaxTokens(getEffectiveModel(lastMainAgent) || this.state.settingsModel);
+        const usable = maxTokens * 0.835;
+        if (usable > 0 && mobileContextTokens > 0) mobileContextPercent = Math.min(100, Math.max(0, Math.round(mobileContextTokens / usable * 100)));
       }
       if (mobileContextPercent === 0 && this._lastContextPercent > 0) mobileContextPercent = this._lastContextPercent;
       else this._lastContextPercent = mobileContextPercent;
@@ -544,25 +658,22 @@ class Mobile extends AppBase {
               const contextPercent = mobileContextPercent;
               const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
               const ctxLabel = `${t('ui.liveMonitoring')}${this.state.projectName ? `: ${this.state.projectName}` : ''}`;
-              // 血条本体——iPad 上作为 antd Popover 的 anchor，手机上作为按钮触发抽屉。
-              // mobileCachePanelVisible 同时控制 iPad popover 与手机 overlay：true 时才 mount
-              // CachePopoverContent（否则给占位 div / 不渲染），维持 commit 0914cc5 的
-              // "打开才解析 200 条"性能修复。
-              const tagRole = isPad ? undefined : 'button';
-              const tagTabIndex = isPad ? undefined : 0;
+              // 血条本体——iPad 与手机一致，作为按钮触发左侧抽屉（mobileCachePanelOverlay）。
+              // mobileCachePanelVisible=true 时才 mount CachePopoverContent，维持 commit 0914cc5
+              // 的"打开才解析 200 条"性能修复。
               const ctxTag = (
                 <span
                   className={styles.mobileCtxTag}
                   style={{ borderColor: ctxColor, color: ctxColor, cursor: 'pointer' }}
                   title={ctxLabel}
-                  role={tagRole}
-                  tabIndex={tagTabIndex}
+                  role="button"
+                  tabIndex={0}
                   aria-label={t('ui.openCachePanel')}
-                  onClick={isPad ? undefined : () => this.setState(prev => ({
+                  onClick={() => this.setState(prev => ({
                     ...this._closeAllMobileOverlays(),
                     mobileCachePanelVisible: !prev.mobileCachePanelVisible,
                   }), () => this._onCachePanelOpenChange(this.state.mobileCachePanelVisible))}
-                  onKeyDown={isPad ? undefined : (e) => {
+                  onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       this.setState(prev => ({
@@ -578,35 +689,6 @@ class Mobile extends AppBase {
                   </span>
                 </span>
               );
-              if (isPad) {
-                // iPad：antd Popover 受控（trigger=click），与 AppHeader QR popover 同模式——
-                // touch 设备 hover/focus 不可靠，不混合 ['click','hover'] 否则鼠标 iPad 上 hover 会与 click-close 打架。
-                return (
-                  <Popover
-                    open={this.state.mobileCachePanelVisible}
-                    onOpenChange={(open) => this.setState({ mobileCachePanelVisible: open }, () => this._onCachePanelOpenChange(open))}
-                    trigger={['click']}
-                    placement="bottomLeft"
-                    overlayInnerStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-hover)', borderRadius: 8, padding: '8px 8px' }}
-                    content={this.state.mobileCachePanelVisible ? (
-                      <CachePopoverContent
-                        requests={filteredRequests}
-                        serverCachedContent={this.state.serverCachedContent}
-                        contextPercent={contextPercent}
-                        fsSkills={this.state._fsSkills}
-                        memory={this.state._memory}
-                        memoryRefreshing={this.state._memoryRefreshing}
-                        calibrationModel={this.state.calibrationModel}
-                        onCalibrationModelChange={this.handleCalibrationModelChange}
-                        onOpenMemoryDetail={this.loadMemoryDetail}
-                        onRefreshMemory={this.handleRefreshMemory}
-                      />
-                    ) : <div className={styles.cachePopoverPlaceholder} />}
-                  >
-                    {ctxTag}
-                  </Popover>
-                );
-              }
               return ctxTag;
             })() : (
               <>
@@ -784,51 +866,58 @@ class Mobile extends AppBase {
               <MobileGitDiff visible={this.state.mobileGitDiffVisible} onClose={() => this.setState({ mobileGitDiffVisible: false })} />
             </div>
           </div>
-          {/* 手机端血条点击 → 从左侧划出的 cache popover 抽屉。iPad 用 antd Popover 不走这里。
-              内层与其它 overlay 同结构（zoom 0.6 缩放），visible 时才 mount CachePopoverContent
-              以保留懒加载语义；关闭按钮放标题行右侧。 */}
-          {/* 手机端血条点击 → 从左侧划出的 cache popover 抽屉。iPad 用 antd Popover 不走这里。
-              内层与其它 overlay 同结构（zoom 0.6 缩放），visible 时才 mount CachePopoverContent
-              以保留懒加载语义；关闭按钮放标题行右侧。 */}
-          {!isPad && (
-            <div className={`${styles.mobileCachePanelOverlay} ${this.state.mobileCachePanelVisible ? styles.mobileCachePanelOverlayVisible : ''}`}>
-              <div className={styles.mobileCachePanelInner}>
-                <div className={styles.mobileCachePanelHeader}>
-                  <span className={styles.mobileCachePanelTitle}>{t('ui.liveMonitoring')}{this.state.projectName ? `: ${this.state.projectName}` : ''}</span>
-                  <button
-                    className={styles.mobileCachePanelClose}
-                    onClick={() => this.setState({ mobileCachePanelVisible: false }, () => this._onCachePanelOpenChange(false))}
-                    aria-label={t('ui.closeCachePanel')}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                </div>
-                <div className={styles.mobileCachePanelBody}>
-                  {this.state.mobileCachePanelVisible && (
-                    <CachePopoverContent
-                      requests={filteredRequests}
-                      serverCachedContent={this.state.serverCachedContent}
-                      contextPercent={mobileContextPercent}
-                      fsSkills={this.state._fsSkills}
-                      memory={this.state._memory}
-                      memoryRefreshing={this.state._memoryRefreshing}
-                      calibrationModel={this.state.calibrationModel}
-                      onCalibrationModelChange={this.handleCalibrationModelChange}
-                      onOpenMemoryDetail={this.loadMemoryDetail}
-                      onRefreshMemory={this.handleRefreshMemory}
-                    />
-                  )}
-                </div>
+          {/* 移动端（含 iPad）血条点击 → 从左侧划出的 cache popover 抽屉。
+              内层 zoom 0.6 在 :global(html.pad-mode) 下被覆写为 1（见 App.module.css）。
+              visible 时才 mount CachePopoverContent 以保留懒加载语义；关闭按钮放标题行右侧。 */}
+          <div className={`${styles.mobileCachePanelOverlay} ${this.state.mobileCachePanelVisible ? styles.mobileCachePanelOverlayVisible : ''}`}>
+            <div className={styles.mobileCachePanelInner}>
+              <div className={styles.mobileCachePanelHeader}>
+                <span className={styles.mobileCachePanelTitle}>{t('ui.contextManagement')}</span>
+                <button
+                  className={styles.mobileCachePanelClose}
+                  onClick={() => this.setState({ mobileCachePanelVisible: false }, () => this._onCachePanelOpenChange(false))}
+                  aria-label={t('ui.closeCachePanel')}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              <div className={styles.mobileCachePanelBody}>
+                {this.state.mobileCachePanelVisible && (
+                  <CachePopoverContent
+                    requests={filteredRequests}
+                    serverCachedContent={this.state.serverCachedContent}
+                    contextPercent={mobileContextPercent}
+                    contextTokens={mobileContextTokens}
+                    fsSkills={this.state._fsSkills}
+                    onSkillImported={this.reloadFsSkills}
+                    onOpenSkillsModal={this.handleOpenSkillsModal}
+                    memory={this.state._memory}
+                    memoryRefreshing={this.state._memoryRefreshing}
+                    calibrationModel={this.state.calibrationModel}
+                    onCalibrationModelChange={this.handleCalibrationModelChange}
+                    onOpenMemoryDetail={this.loadMemoryDetail}
+                    onRefreshMemory={this.handleRefreshMemory}
+                  />
+                )}
               </div>
             </div>
-          )}
+          </div>
           <MemoryDetailModal
             detail={this.state._memoryDetail}
             onClose={() => this.setState({ _memoryDetail: null })}
             onOpenMemoryDetail={this.loadMemoryDetail}
+          />
+          <SkillsManagerModal
+            open={this.state._skillsModal?.open || false}
+            loading={this.state._skillsModal?.loading || false}
+            error={this.state._skillsModal?.error || null}
+            skills={this.state._skillsModal?.skills || []}
+            toggling={this.state._skillsModal?.toggling}
+            onToggle={(s) => this.handleToggleSkill(s)}
+            onClose={() => this.setState(prev => ({ _skillsModal: { ...prev._skillsModal, open: false } }))}
           />
           <div className={`${styles.mobileFileExplorerOverlay} ${this.state.mobileFileExplorerVisible ? styles.mobileFileExplorerOverlayVisible : ''}`}>
             <div className={styles.mobileFileExplorerInner}>
@@ -915,43 +1004,9 @@ class Mobile extends AppBase {
               </button>
             </div>
             <div className={styles.mobileSettingsBody}>
-              <div className={styles.mobileSettingsSectionTitle}>{t('ui.chatDisplaySwitches')}</div>
+              <div className={styles.mobileSettingsSectionTitle}>{t('ui.chatDisplay')}</div>
               <div className={styles.mobileSettingsRow}>
-                <span className={styles.mobileSettingsLabel}>{t('ui.collapseToolResults')}</span>
-                <Switch
-                  checked={!!this.state.collapseToolResults}
-                  onChange={this.handleCollapseToolResultsChange}
-                />
-              </div>
-              <div className={styles.mobileSettingsRow}>
-                <span className={styles.mobileSettingsLabel}>{t('ui.expandThinking')}</span>
-                <Switch
-                  checked={!!this.state.expandThinking}
-                  onChange={this.handleExpandThinkingChange}
-                />
-              </div>
-              <div className={styles.mobileSettingsRow}>
-                <span className={styles.mobileSettingsLabel}>{t('ui.showFullToolContent')}</span>
-                <Switch
-                  checked={!!this.state.showFullToolContent}
-                  onChange={this.handleShowFullToolContentChange}
-                />
-              </div>
-              <div className={styles.mobileSettingsSectionTitle}>{t('ui.themeColor')}</div>
-              <div className={styles.mobileSettingsRow}>
-                <Select
-                  size="small"
-                  value={this.state.themeColor || 'dark'}
-                  onChange={this.handleThemeColorChange}
-                  options={[
-                    { label: t('ui.themeColor.dark'), value: 'dark' },
-                    { label: t('ui.themeColor.light'), value: 'light' },
-                  ]}
-                  style={{ width: 140 }}
-                />
-              </div>
-              <div className={styles.mobileSettingsSectionTitle}>{t('ui.permission.autoApprove.setting')}</div>
-              <div className={styles.mobileSettingsRow}>
+                <span className={styles.mobileSettingsLabel}>{t('ui.permission.autoApprove.setting')}</span>
                 <Select
                   size="small"
                   value={this.state.autoApproveSeconds || 0}
@@ -974,7 +1029,6 @@ class Mobile extends AppBase {
                   <div className={styles.mobileSettingsRow}>
                     <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.modalEnabled')}</span>
                     <Switch
-                      size="small"
                       checked={this.state.approvalPrefs.modalEnabled !== false}
                       onChange={(checked) => this.handleApprovalPrefsChange({ modalEnabled: checked })}
                     />
@@ -982,13 +1036,48 @@ class Mobile extends AppBase {
                   <div className={styles.mobileSettingsRow}>
                     <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.soundEnabled')}</span>
                     <Switch
-                      size="small"
                       checked={!!this.state.approvalPrefs.soundEnabled}
                       onChange={(checked) => this.handleApprovalPrefsChange({ soundEnabled: checked })}
                     />
                   </div>
                 </>
               )}
+              <div className={styles.mobileSettingsRow}>
+                <span className={styles.mobileSettingsLabel}>{t('ui.expandThinking')}</span>
+                <Switch
+                  checked={!!this.state.expandThinking}
+                  onChange={this.handleExpandThinkingChange}
+                />
+              </div>
+              <div className={styles.mobileSettingsRow}>
+                <span className={styles.mobileSettingsLabel}>{t('ui.showFullToolContent')}</span>
+                <Switch
+                  checked={!!this.state.showFullToolContent}
+                  onChange={this.handleShowFullToolContentChange}
+                />
+              </div>
+              {this.state.showFullToolContent && (
+                <div className={styles.mobileSettingsRow}>
+                  <span className={styles.mobileSettingsLabel}>{t('ui.collapseToolResults')}</span>
+                  <Switch
+                    checked={!!this.state.collapseToolResults}
+                    onChange={this.handleCollapseToolResultsChange}
+                  />
+                </div>
+              )}
+              <div className={styles.mobileSettingsSectionTitle}>{t('ui.themeColor')}</div>
+              <div className={styles.mobileSettingsRow}>
+                <Select
+                  size="small"
+                  value={this.state.themeColor || 'dark'}
+                  onChange={this.handleThemeColorChange}
+                  options={[
+                    { label: t('ui.themeColor.dark'), value: 'dark' },
+                    { label: t('ui.themeColor.light'), value: 'light' },
+                  ]}
+                  style={{ width: 140 }}
+                />
+              </div>
             </div>
           </div>
           <div className={`${styles.mobilePromptOverlay} ${this.state.mobilePromptVisible ? styles.mobilePromptOverlayVisible : ''}`}>

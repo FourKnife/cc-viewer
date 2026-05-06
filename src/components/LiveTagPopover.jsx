@@ -20,7 +20,9 @@ function LiveTagPopover({
   requests,
   serverCachedContent,
   contextPercent,
+  contextTokens,
   ctxColor,
+  onSkillImported,
   fsSkills,
   memory,
   memoryRefreshing,
@@ -52,6 +54,7 @@ function LiveTagPopover({
           requests={requests}
           serverCachedContent={serverCachedContent}
           contextPercent={contextPercent}
+          contextTokens={contextTokens}
           fsSkills={fsSkills}
           memory={memory}
           memoryRefreshing={memoryRefreshing}
@@ -59,6 +62,7 @@ function LiveTagPopover({
           onCalibrationModelChange={onCalibrationModelChange}
           onOpenMemoryDetail={onOpenMemoryDetail}
           onOpenSkillsModal={onOpenSkillsModal}
+          onSkillImported={onSkillImported}
           onRefreshMemory={onRefreshMemory}
         />
       ) : <div className={styles.cachePopoverPlaceholder} />}

@@ -1,22 +1,29 @@
 import React, { useState, useRef } from 'react';
-import { Popover, Select, Button, Alert, Modal, Tooltip } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Popover, Select, Button, Alert, Modal, Tooltip, Dropdown, Space, message } from 'antd';
+import { ReloadOutlined, PlusOutlined, FolderOpenOutlined, FileZipOutlined, FileMarkdownOutlined, SettingOutlined } from '@ant-design/icons';
 import { extractCachedContent, parseCachedTools, extractLoadedSkills } from '../utils/helpers';
 import { BUILTIN_SKILL_NAMES, mergeActiveSkills } from '../utils/skillsParser';
 import { t } from '../i18n';
+import { apiUrl } from '../utils/apiUrl';
 import { renderMarkdown } from '../utils/markdown';
-import { isMobile, isPad } from '../env';
+import { isMobile } from '../env';
 import ConceptHelp from './ConceptHelp';
 import { parseMemoryLink } from '../utils/memoryLinkParser';
 import appConfig from '../config.json';
 import styles from './AppHeader.module.css';
 
-// 手机（非 iPad）：chip 描述用 click → 全屏 Modal 而非 hover Popover。
-// 抽屉容器有 zoom: 0.6 缩放，antd Popover 的 getBoundingClientRect 在 zoom 容器内会错位；
-// Modal portal 到 document.body 逃出 zoom 容器，定位恢复正确。PC/iPad 不受影响（zoom: 1）。
-const IS_MOBILE_PHONE = isMobile && !isPad;
+// 移动端（含 iPad）：chip 描述用 click → 全屏 Modal 而非 hover Popover。
+// 手机抽屉有 zoom: 0.6 缩放，antd Popover 的 getBoundingClientRect 在 zoom 容器内会错位；
+// Modal portal 到 document.body 逃出 zoom 容器，定位恢复正确。iPad 抽屉 zoom: 1
+// 不受 Popover 影响，但为保持移动端交互一致同样走 click → Modal 路径。
 
 const CALIBRATION_MODELS = appConfig.calibrationModels;
+
+// webkitdirectory 仅 Chromium 系（Chrome/Edge）+ 桌面版 Firefox/Safari 部分支持；
+// iOS Safari / 某些移动浏览器不支持，提前 detect 隐藏"添加文件夹"项避免静默失败。
+// SSR 安全：window 不存在时为 false（fallback 到不显示文件夹入口）。
+const SUPPORTS_DIRECTORY_UPLOAD = typeof document !== 'undefined'
+  && 'webkitdirectory' in document.createElement('input');
 
 // 头部 token 血条 hover/click 弹层的纯展示组件。父级负责：
 // (a) 用 isOpen 条件挂载（父级把 popover/抽屉的 open 状态映射到是否渲染本组件 vs 占位 div），
@@ -29,6 +36,7 @@ export default function CachePopoverContent({
   requests = [],
   serverCachedContent,
   contextPercent = 0,
+  contextTokens = 0,
   fsSkills,
   memory,
   calibrationModel = 'auto',
@@ -36,8 +44,75 @@ export default function CachePopoverContent({
   onOpenMemoryDetail,
   onOpenSkillsModal,
   onRefreshMemory,
+  onSkillImported,
   memoryRefreshing = false,
 }) {
+  const skillFileInputRef = useRef(null);
+  const skillFolderInputRef = useRef(null);
+
+  // skill 上传：dropdown 三入口（文件夹 / .zip / SKILL.md）共用 postSkillImport。
+  // 文件夹入口先在前端校验根目录有 SKILL.md（忽略大小写），再用 JSZip 打成 zip 复用 zip 通道。
+  const postSkillImport = async (file) => {
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const resp = await fetch(apiUrl('/api/skills/import'), { method: 'POST', body: form });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        let reason = data.error || resp.statusText;
+        if (data.code === 'INVALID_TYPE') reason = t('ui.skills.invalidType');
+        else if (data.code === 'MISSING_SKILL_MD') reason = t('ui.skills.zipMissingSkillMd');
+        message.error(t('ui.skills.uploadFailed', { reason }));
+        return;
+      }
+      message.success(t('ui.skills.uploadSuccess'));
+      onSkillImported?.();
+    } catch (err) {
+      message.error(t('ui.skills.uploadFailed', { reason: err?.message || 'network' }));
+    }
+  };
+
+  const handleSkillFileSelected = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.zip') && !lower.endsWith('.md')) {
+      message.error(t('ui.skills.invalidType'));
+      return;
+    }
+    await postSkillImport(file);
+  };
+
+  const handleSkillFolderSelected = async (e) => {
+    const fileList = e.target.files;
+    e.target.value = '';
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+    const hasRootSkillMd = files.some(f => {
+      const parts = (f.webkitRelativePath || '').split('/');
+      return parts.length === 2 && parts[1].toLowerCase() === 'skill.md';
+    });
+    if (!hasRootSkillMd) {
+      message.error(t('ui.skills.folderMissingSkillMd'));
+      return;
+    }
+    try {
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      for (const f of files) {
+        const rel = f.webkitRelativePath || f.name;
+        if (!rel || rel.includes('..')) continue;
+        zip.file(rel, f);
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const rootName = (files[0].webkitRelativePath || '').split('/')[0] || 'skill';
+      const zipFile = new File([blob], `${rootName}.zip`, { type: 'application/zip' });
+      await postSkillImport(zipFile);
+    } catch (err) {
+      message.error(t('ui.skills.uploadFailed', { reason: err?.message || 'pack failed' }));
+    }
+  };
   const [sectionCollapsed, setSectionCollapsed] = useState({});
   // 手机端 chip 描述 Modal 的当前条目；null = 关。{ title, description } 形态由 chip render 函数填入。
   const [chipModal, setChipModal] = useState(null);
@@ -92,9 +167,9 @@ export default function CachePopoverContent({
       ? <div className={styles.chipDetailBody}>{description}</div>
       : <div className={`${styles.chipDetailBody} ${styles.chipDetailEmpty}`}>{t('ui.noDescription')}</div>
   );
-  // PC / iPad：hover 触发 antd Popover；手机：click 触发全屏 Modal（避开 zoom 容器导致的 Popover 定位错位）。
+  // PC：hover 触发 antd Popover；移动端（含 iPad）：click 触发全屏 Modal。
   const renderMcpChip = ({ name, fullName, description }) => {
-    if (IS_MOBILE_PHONE) {
+    if (isMobile) {
       return (
         <span
           key={fullName}
@@ -121,7 +196,7 @@ export default function CachePopoverContent({
     );
   };
   const renderSkillChip = ({ name, description }) => {
-    if (IS_MOBILE_PHONE) {
+    if (isMobile) {
       return (
         <span
           key={name}
@@ -194,10 +269,55 @@ export default function CachePopoverContent({
     <div className={styles.toolChipGrid}>{skills.map(renderSkillChip)}</div>
   );
 
-  const skillsAction = onOpenSkillsModal ? (
-    <Button type="primary" size="small" onClick={() => onOpenSkillsModal()}>
-      {t('ui.skillManage')}
-    </Button>
+  const skillsAction = (onOpenSkillsModal || onSkillImported) ? (
+    <Space size={6}>
+      {onSkillImported && (
+        <>
+          {/* 移动端（含 iPad）抽屉里去掉 Dropdown，直接 Button onClick → 文件选择器（仅 .zip/.md）。
+              文件夹入口在移动端浏览器普遍不支持 webkitdirectory，已被 SUPPORTS_DIRECTORY_UPLOAD 兜底。 */}
+          {isMobile ? (
+            <Button size="small" icon={<PlusOutlined />} onClick={() => skillFileInputRef.current?.click()}>
+              {t('ui.skills.add')}
+            </Button>
+          ) : (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  ...(SUPPORTS_DIRECTORY_UPLOAD ? [{ key: 'folder', icon: <FolderOpenOutlined />, label: t('ui.skills.addFolder'), onClick: () => skillFolderInputRef.current?.click() }] : []),
+                  { key: 'zip', icon: <FileZipOutlined />, label: t('ui.skills.addZip'), onClick: () => skillFileInputRef.current?.click() },
+                  { key: 'md', icon: <FileMarkdownOutlined />, label: t('ui.skills.addMd'), onClick: () => skillFileInputRef.current?.click() },
+                ],
+              }}
+            >
+              <Button size="small" icon={<PlusOutlined />}>{t('ui.skills.add')}</Button>
+            </Dropdown>
+          )}
+          <input
+            type="file"
+            ref={skillFileInputRef}
+            style={{ display: 'none' }}
+            accept=".zip,.md"
+            onChange={handleSkillFileSelected}
+          />
+          {SUPPORTS_DIRECTORY_UPLOAD && !isMobile && (
+            <input
+              type="file"
+              ref={skillFolderInputRef}
+              style={{ display: 'none' }}
+              webkitdirectory=""
+              directory=""
+              onChange={handleSkillFolderSelected}
+            />
+          )}
+        </>
+      )}
+      {onOpenSkillsModal && (
+        <Button type="primary" size="small" icon={<SettingOutlined />} onClick={() => onOpenSkillsModal()}>
+          {t('ui.skillManage')}
+        </Button>
+      )}
+    </Space>
   ) : null;
 
   // 记忆区块标题尾部 (N)：仅对 [text](file.md) 形式计数；外链/锚点不计
@@ -242,11 +362,15 @@ export default function CachePopoverContent({
   })();
 
   const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
+  const cacheUsageText = contextTokens > 0
+    ? `${(contextTokens / 1000).toFixed(1)}K (${contextPercent}%)`
+    : `${contextPercent}%`;
   return (
     <div className={styles.cachePopover}>
       <div className={styles.cachePopoverHeader}>
         <div className={styles.cachePopoverTitle}>
-          <span className={styles.cachePercent} style={{ color: ctxColor }}>{contextPercent}%</span>
+          <span className={styles.cacheUsageLabel}>{t('ui.contextUsage')}</span>
+          <span className={styles.cachePercent} style={{ color: ctxColor }}>{cacheUsageText}</span>
           <span className={styles.cacheCalibrationLabel}>{t('ui.calibrationModelLabel')}</span>
           <Select
             size="small"

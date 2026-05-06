@@ -1,5 +1,5 @@
 import React from 'react';
-import { Space, Tag, Button, Dropdown, Popover, Modal, Collapse, Drawer, Switch, Radio, Tabs, Spin, Input, Table, Select, Tooltip, message } from 'antd';
+import { Space, Tag, Button, Dropdown, Popover, Modal, Collapse, Drawer, Switch, Radio, Tabs, Spin, Input, Table, Select, message } from 'antd';
 import { MessageOutlined, FileTextOutlined, ImportOutlined, DashboardOutlined, ExportOutlined, DownloadOutlined, SettingOutlined, BarChartOutlined, CodeOutlined, CopyOutlined, ApiOutlined, DeleteOutlined, ReloadOutlined, PlusOutlined, CloudDownloadOutlined, SwapOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { QRCodeCanvas } from 'qrcode.react';
 import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeToolUsageStats, computeSkillUsageStats, getModelMaxTokens, getEffectiveModel } from '../utils/helpers';
@@ -14,6 +14,7 @@ import OpenFolderIcon from './OpenFolderIcon';
 import CachePopoverContent from './CachePopoverContent';
 import LiveTagPopover from './LiveTagPopover';
 import MemoryDetailModal from './MemoryDetailModal';
+import SkillsManagerModal from './SkillsManagerModal';
 import appConfig from '../config.json';
 import { OPTIMISTIC_CLEAR_PERCENT } from '../AppBase';
 const CALIBRATION_MODELS = appConfig.calibrationModels;
@@ -199,16 +200,6 @@ class AppHeader extends React.Component {
       }
     }
   };
-
-  // 把 reloadFsSkills 的 reason code 映射成用户可读文案。
-  // 未知/服务端自带的文案（例如 data.error 原样透传）直接显示。
-  getSkillsLoadErrorLabel(reason) {
-    if (!reason || reason === 'stale' || reason === 'local_log') return '';
-    const mHttp = /^http:(\d+)$/.exec(reason);
-    if (mHttp) return t('ui.skillsLoadError.http', { status: mHttp[1] });
-    if (reason === 'network') return t('ui.skillsLoadError.network');
-    return reason;
-  }
 
   // 白名单式 SCU：render() 里读到的每个 props 字段都必须在此列出，否则父组件 setState
   // 不会触发 AppHeader 重渲染（症状：受控控件的 checked/value 卡住不更新）。
@@ -1219,12 +1210,6 @@ class AppHeader extends React.Component {
         onClick: this.handleShowPlugins,
       },
       {
-        key: 'switch-workspace',
-        icon: <ImportOutlined className={styles.iconMirror} />,
-        label: <span className={styles.disabledMenuItem}>{t('ui.switchWorkspace')}</span>,
-        disabled: true,
-      },
-      {
         key: 'process-management',
         icon: <DashboardOutlined />,
         label: t('ui.processManagement'),
@@ -1281,23 +1266,26 @@ class AppHeader extends React.Component {
             let contextPercent = 0;
             const calibration = CALIBRATION_MODELS.find(m => m.value === this.state.calibrationModel);
             const calibrationTokens = calibration?.tokens; // undefined for 'auto'
+            // 反向找最后一条带 usage 的 MainAgent 一次，contextPercent 与 contextTokens 共用
+            // （以前 calibration / fallback / contextTokens 三个分支各扫一次，是 3*O(N)）
+            let lastMainAgent = null;
+            let lastTotalTokens = 0;
+            if (!isLocalLog && requests.length > 0) {
+              for (let i = requests.length - 1; i >= 0; i--) {
+                if (isMainAgent(requests[i]) && requests[i].response?.body?.usage) {
+                  lastMainAgent = requests[i];
+                  const u = lastMainAgent.response.body.usage;
+                  lastTotalTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+                  break;
+                }
+              }
+            }
             if (!isLocalLog) {
               if (calibrationTokens && contextWindow?.used_percentage != null) {
                 // 校准模式 + 精确数据：用实际 token 数重新计算百分比
-                const getTotal = (req) => {
-                  const u = req.response?.body?.usage;
-                  return (u?.input_tokens || 0) + (u?.cache_creation_input_tokens || 0) + (u?.cache_read_input_tokens || 0);
-                };
-                let total = 0;
-                for (let i = requests.length - 1; i >= 0; i--) {
-                  if (isMainAgent(requests[i]) && requests[i].response?.body?.usage) {
-                    total = getTotal(requests[i]);
-                    break;
-                  }
-                }
-                if (total > 0) {
+                if (lastTotalTokens > 0) {
                   const usable = calibrationTokens * 0.835;
-                  contextPercent = Math.min(100, Math.max(0, Math.round(total / usable * 100)));
+                  contextPercent = Math.min(100, Math.max(0, Math.round(lastTotalTokens / usable * 100)));
                 } else {
                   // 无 token 数据时，按比例缩放 used_percentage
                   const origMax = contextWindow.context_window_size || 200000;
@@ -1313,22 +1301,12 @@ class AppHeader extends React.Component {
                 } else {
                   contextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / 83.5 * 100)));
                 }
-              } else if (requests.length > 0) {
+              } else if (lastMainAgent) {
                 // fallback：用最后一个 MainAgent 的 total input 估算
-                const getTotal = (req) => {
-                  const u = req.response?.body?.usage;
-                  return (u?.input_tokens || 0) + (u?.cache_creation_input_tokens || 0) + (u?.cache_read_input_tokens || 0);
-                };
-                for (let i = requests.length - 1; i >= 0; i--) {
-                  if (isMainAgent(requests[i]) && requests[i].response?.body?.usage) {
-                    const total = getTotal(requests[i]);
-                    const maxTokens = calibrationTokens || contextWindow?.context_window_size || getModelMaxTokens(getEffectiveModel(requests[i]) || this.state.settingsModel);
-                    const usable = maxTokens * 0.835;
-                    if (usable > 0 && total > 0) {
-                      contextPercent = Math.min(100, Math.max(0, Math.round(total / usable * 100)));
-                    }
-                    break;
-                  }
+                const maxTokens = calibrationTokens || contextWindow?.context_window_size || getModelMaxTokens(getEffectiveModel(lastMainAgent) || this.state.settingsModel);
+                const usable = maxTokens * 0.835;
+                if (usable > 0 && lastTotalTokens > 0) {
+                  contextPercent = Math.min(100, Math.max(0, Math.round(lastTotalTokens / usable * 100)));
                 }
               }
             }
@@ -1343,6 +1321,9 @@ class AppHeader extends React.Component {
             if (contextBarOptimistic) contextPercent = OPTIMISTIC_CLEAR_PERCENT;
             const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
 
+            // 上下文绝对值（独立于 contextPercent 的 calibration/precise 分支），给 cache popover "29.5K (11%)" 的 K 用
+            const contextTokens = lastTotalTokens;
+
             return (
               <LiveTagPopover
                 isLocalLog={isLocalLog}
@@ -1352,7 +1333,9 @@ class AppHeader extends React.Component {
                 requests={requests}
                 serverCachedContent={serverCachedContent}
                 contextPercent={contextPercent}
+                contextTokens={contextTokens}
                 ctxColor={ctxColor}
+                onSkillImported={this.reloadFsSkills}
                 fsSkills={this.state._fsSkills}
                 memory={this.state._memory}
                 memoryRefreshing={this.state._memoryRefreshing}
@@ -1584,50 +1567,7 @@ class AppHeader extends React.Component {
           onClose={() => this.setState({ settingsDrawerVisible: false })}
         >
           <div className={styles.settingsGroupBox}>
-            <div className={styles.settingsGroupTitle}>{t('ui.chatDisplaySwitches')}</div>
-            <div className={styles.settingsItem}>
-              <span className={styles.settingsLabel}>{t('ui.collapseToolResults')}</span>
-              <Switch
-                checked={!!collapseToolResults}
-                onChange={(checked) => onCollapseToolResultsChange && onCollapseToolResultsChange(checked)}
-              />
-            </div>
-            <div className={styles.settingsItem}>
-              <span className={styles.settingsLabel}>{t('ui.expandThinking')}</span>
-              <Switch
-                checked={!!expandThinking}
-                onChange={(checked) => onExpandThinkingChange && onExpandThinkingChange(checked)}
-              />
-            </div>
-            <div className={styles.settingsItem}>
-              <span className={styles.settingsLabel}>{t('ui.showFullToolContent')}</span>
-              <Switch
-                checked={!!showFullToolContent}
-                onChange={(checked) => onShowFullToolContentChange && onShowFullToolContentChange(checked)}
-              />
-            </div>
-          </div>
-          <div className={styles.settingsGroupBox}>
-            <div className={styles.settingsGroupTitle}>{t('ui.userPreferences')}</div>
-            <div className={styles.settingsItem}>
-              <span className={styles.settingsLabel}>{t('ui.resumeAutoChoice')}</span>
-              <Switch
-                checked={!!resumeAutoChoice}
-                onChange={(checked) => onResumeAutoChoiceToggle && onResumeAutoChoiceToggle(checked)}
-              />
-            </div>
-            {resumeAutoChoice && (
-              <div className={styles.settingsItem}>
-                <Radio.Group
-                  value={resumeAutoChoice}
-                  onChange={(e) => onResumeAutoChoiceChange && onResumeAutoChoiceChange(e.target.value)}
-                  size="small"
-                >
-                  <Radio value="continue">{t('ui.resumeAutoChoice.continue')}</Radio>
-                  <Radio value="new">{t('ui.resumeAutoChoice.new')}</Radio>
-                </Radio.Group>
-              </div>
-            )}
+            <div className={styles.settingsGroupTitle}>{t('ui.chatDisplay')}</div>
             <div className={styles.settingsItem}>
               <span className={styles.settingsLabel}>{t('ui.permission.autoApprove.setting')}</span>
               <Select
@@ -1652,7 +1592,6 @@ class AppHeader extends React.Component {
                 <div className={styles.settingsItem}>
                   <span className={styles.settingsLabel}>{t('ui.approval.settings.modalEnabled')}</span>
                   <Switch
-                    size="small"
                     checked={this.props.approvalPrefs.modalEnabled !== false}
                     onChange={(checked) => this.props.onApprovalPrefsChange({ modalEnabled: checked })}
                   />
@@ -1660,7 +1599,6 @@ class AppHeader extends React.Component {
                 <div className={styles.settingsItem}>
                   <span className={styles.settingsLabel}>{t('ui.approval.settings.soundEnabled')}</span>
                   <Switch
-                    size="small"
                     checked={!!this.props.approvalPrefs.soundEnabled}
                     onChange={(checked) => this.props.onApprovalPrefsChange({ soundEnabled: checked })}
                   />
@@ -1671,7 +1609,6 @@ class AppHeader extends React.Component {
                   <div className={styles.settingsItem}>
                     <span className={styles.settingsLabel}>{t('ui.approval.settings.notifyOnlyWhenHidden')}</span>
                     <Switch
-                      size="small"
                       checked={this.props.approvalPrefs.notifyOnlyWhenHidden !== false}
                       onChange={(checked) => this.props.onApprovalPrefsChange({ notifyOnlyWhenHidden: checked })}
                     />
@@ -1679,8 +1616,54 @@ class AppHeader extends React.Component {
                 )}
               </>
             )}
+            <div className={styles.settingsItem}>
+              <span className={styles.settingsLabel}>{t('ui.expandThinking')}</span>
+              <Switch
+                checked={!!expandThinking}
+                onChange={(checked) => onExpandThinkingChange && onExpandThinkingChange(checked)}
+              />
+            </div>
+            <div className={styles.settingsItem}>
+              <span className={styles.settingsLabel}>{t('ui.showFullToolContent')}</span>
+              <Switch
+                checked={!!showFullToolContent}
+                onChange={(checked) => onShowFullToolContentChange && onShowFullToolContentChange(checked)}
+              />
+            </div>
+            {showFullToolContent && (
+              <div className={styles.settingsItem}>
+                <span className={styles.settingsLabel}>{t('ui.collapseToolResults')}</span>
+                <Switch
+                  checked={!!collapseToolResults}
+                  onChange={(checked) => onCollapseToolResultsChange && onCollapseToolResultsChange(checked)}
+                />
+              </div>
+            )}
           </div>
           <div className={styles.settingsGroupBox}>
+            <div className={styles.settingsGroupTitle}>{t('ui.logSettings')}</div>
+            <div className={styles.settingsItem}>
+              <span className={styles.settingsLabel}>{t('ui.resumeAutoChoice')}</span>
+              <Switch
+                checked={!!resumeAutoChoice}
+                onChange={(checked) => onResumeAutoChoiceToggle && onResumeAutoChoiceToggle(checked)}
+              />
+            </div>
+            {resumeAutoChoice && (
+              <div className={styles.settingsItem}>
+                <Radio.Group
+                  value={resumeAutoChoice}
+                  onChange={(e) => onResumeAutoChoiceChange && onResumeAutoChoiceChange(e.target.value)}
+                  size="small"
+                >
+                  <Radio value="continue">{t('ui.resumeAutoChoice.continue')}</Radio>
+                  <Radio value="new">{t('ui.resumeAutoChoice.new')}</Radio>
+                </Radio.Group>
+              </div>
+            )}
+          </div>
+          <div className={styles.settingsGroupBox}>
+            <div className={styles.settingsGroupTitle}>{t('ui.themeStyle')}</div>
             <div className={styles.settingsItem}>
               <span className={styles.settingsLabel}>{t('ui.themeColor')}</span>
               <Select
@@ -1694,8 +1677,6 @@ class AppHeader extends React.Component {
                 style={{ width: 140 }}
               />
             </div>
-          </div>
-          <div className={styles.settingsGroupBox}>
             <div className={styles.settingsItem}>
               <span className={styles.settingsLabel}>{t('ui.languageSettings')}</span>
               <Select
@@ -1976,10 +1957,7 @@ class AppHeader extends React.Component {
         }
         return;
       }
-      message.success(enable
-        ? t('ui.skillEnabled', { name: skill.name })
-        : t('ui.skillDisabled', { name: skill.name })
-      );
+      // 切换成功不弹 toast：Switch 状态本身已反馈，再加 toast 显得吵
       // 乐观翻 _fsSkills 里这条的 enabled —— 如果后面 reloadFsSkills 失败，chip 也能立即反映用户动作，
       // 不会退化到历史解析让用户以为操作没生效。reload 成功会用权威数据覆盖。
       this.setState(prev => ({
@@ -1988,11 +1966,22 @@ class AppHeader extends React.Component {
           : prev._fsSkills,
       }));
       // 重拉让 popover chip 和管理弹窗用权威数据一次性对齐。拉失败保留乐观值。
+      // 关键：保持当前 modal 显示顺序，避免服务器返回顺序变化时用户看到 card 跳来跳去；
+      // 新增的 entries（modal 之前没见过的）追加到末尾。
       const result = await this.reloadFsSkills();
       if (result.ok) {
-        this.setState(prev => ({
-          _skillsModal: { ...prev._skillsModal, skills: result.skills },
-        }));
+        this.setState(prev => {
+          const orderMap = new Map(prev._skillsModal.skills.map((s, i) => [`${s.source}-${s.name}`, i]));
+          const merged = [...result.skills].sort((a, b) => {
+            const ai = orderMap.get(`${a.source}-${a.name}`);
+            const bi = orderMap.get(`${b.source}-${b.name}`);
+            if (ai === undefined && bi === undefined) return 0;
+            if (ai === undefined) return 1;
+            if (bi === undefined) return -1;
+            return ai - bi;
+          });
+          return { _skillsModal: { ...prev._skillsModal, skills: merged } };
+        });
       }
     } catch (e) {
       // 网络异常也回滚
@@ -2013,83 +2002,16 @@ class AppHeader extends React.Component {
 
   renderSkillsManagerModal() {
     const modal = this.state._skillsModal || {};
-    const { open = false, loading = false, skills = [], error = null, toggling = new Set() } = modal;
     return (
-      <Modal
-        title={t('ui.skillManagerTitle')}
-        open={open}
-        onCancel={() => this.setState(prev => ({ _skillsModal: { ...prev._skillsModal, open: false } }))}
-        footer={null}
-        width="min(1200px, calc(100vw - 80px))"
-        zIndex={1100}
-        styles={{ body: { maxHeight: '70vh', overflowY: 'auto', padding: '16px 20px' } }}
-      >
-        {loading ? (
-          <div className={styles.skillsEmpty}><Spin /></div>
-        ) : error ? (
-          <div className={styles.skillsEmpty}>{t('ui.skillsLoadFailed', { reason: this.getSkillsLoadErrorLabel(error) || error })}</div>
-        ) : skills.length === 0 ? (
-          <div className={styles.skillsEmpty}>{t('ui.noSkillsLoaded')}</div>
-        ) : (
-          <>
-            {/* 只把 user / project（可切换）放 card 列表；plugin + builtin 折叠到底部 chip 行 */}
-            {skills.filter(s => s.source === 'user' || s.source === 'project').length > 0 && (
-              <div className={styles.skillsList}>
-                {skills.filter(s => s.source === 'user' || s.source === 'project').map((s, i) => {
-                  const key = `${s.source}-${s.name}`;
-                  const isToggling = toggling.has(key);
-                  return (
-                    <div key={`${key}-${i}`} className={`${styles.skillCard} ${!s.enabled ? styles.skillCardDisabled : ''}`}>
-                      <div className={styles.skillCardHeader}>
-                        <div className={styles.skillCardTitleRow}>
-                          <span className={`${styles.skillSourceBadge} ${styles['skillSource_' + s.source]}`}>
-                            {t('ui.skillSource.' + s.source)}
-                          </span>
-                          <div className={styles.skillCardName}>{s.name}</div>
-                        </div>
-                        <div className={styles.skillCardActions}>
-                          <Switch size="small" checked={s.enabled} loading={isToggling} onChange={() => this.handleToggleSkill(s)} />
-                        </div>
-                      </div>
-                      {s.description && <div className={styles.skillCardDesc}>{s.description}</div>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {/* Plugin：不可单独禁用（要走 `claude plugin disable <name>` CLI），折叠成 chip 行；每 chip tooltip 带 plugin 名 */}
-            {skills.filter(s => s.source === 'plugin').length > 0 && (
-              <div className={styles.skillsReadonlySection}>
-                <div className={styles.skillsReadonlyLabel}>{t('ui.skillsPluginLabel')}</div>
-                <div className={styles.toolChipGrid}>
-                  {skills.filter(s => s.source === 'plugin').map((s, i) => {
-                    // pluginName 现在返 "name@marketplace"（pluginKey），tooltip 显示时剥后缀
-                    const pluginDisplay = (s.pluginName || '').split('@')[0];
-                    return (
-                      <Tooltip key={`plugin-${s.name}-${i}`} title={t('ui.skillCannotDisablePlugin', { plugin: pluginDisplay })}>
-                        <span className={styles.cacheToolChip}>{s.name}</span>
-                      </Tooltip>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {/* Builtin：同样折叠为 chip 行，tooltip 解释"硬编码无法禁用" */}
-            {skills.filter(s => s.source === 'builtin').length > 0 && (
-              <div className={styles.skillsReadonlySection}>
-                <div className={styles.skillsReadonlyLabel}>{t('ui.skillsBuiltinLabel')}</div>
-                <div className={styles.toolChipGrid}>
-                  {skills.filter(s => s.source === 'builtin').map(s => (
-                    <Tooltip key={s.name} title={t('ui.skillCannotDisableBuiltin')}>
-                      <span className={styles.cacheToolChip}>{s.name}</span>
-                    </Tooltip>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </Modal>
+      <SkillsManagerModal
+        open={modal.open || false}
+        loading={modal.loading || false}
+        error={modal.error || null}
+        skills={modal.skills || []}
+        toggling={modal.toggling}
+        onToggle={(s) => this.handleToggleSkill(s)}
+        onClose={() => this.setState(prev => ({ _skillsModal: { ...prev._skillsModal, open: false } }))}
+      />
     );
   }
 
