@@ -8379,6 +8379,27 @@ export function setLang(lang) {
   currentLang = locales[lang] ? lang : 'en';
 }
 
+export const LANG_OPTIONS = [
+  { value: 'zh', label: '简体中文' },
+  { value: 'en', label: 'English' },
+  { value: 'zh-TW', label: '繁體中文' },
+  { value: 'ko', label: '한국어' },
+  { value: 'ja', label: '日本語' },
+  { value: 'de', label: 'Deutsch' },
+  { value: 'es', label: 'Español' },
+  { value: 'fr', label: 'Français' },
+  { value: 'it', label: 'Italiano' },
+  { value: 'da', label: 'Dansk' },
+  { value: 'pl', label: 'Polski' },
+  { value: 'ru', label: 'Русский' },
+  { value: 'ar', label: 'العربية' },
+  { value: 'no', label: 'Norsk' },
+  { value: 'pt-BR', label: 'Português (Brasil)' },
+  { value: 'th', label: 'ไทย' },
+  { value: 'tr', label: 'Türkçe' },
+  { value: 'uk', label: 'Українська' },
+];
+
 export function getLang() {
   return currentLang;
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ConfigProvider, Spin, Button, Badge, Switch, Select, Modal, message } from 'antd';
+import { ConfigProvider, Spin, Button, Badge, Switch, Select, Modal, message, Radio } from 'antd';
 import { BranchesOutlined, DownloadOutlined, DeleteOutlined, RollbackOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import AppBase, { styles, OPTIMISTIC_CLEAR_PERCENT } from './AppBase';
 import { isIOS, isPad, setViewMode } from './env';
@@ -18,7 +18,7 @@ import MemoryDetailModal from './components/MemoryDetailModal';
 import SkillsManagerModal from './components/SkillsManagerModal';
 import OpenFolderIcon from './components/OpenFolderIcon';
 import appConfig from './config.json';
-import { t } from './i18n';
+import { t, getLang, setLang, LANG_OPTIONS } from './i18n';
 import { apiUrl } from './utils/apiUrl';
 
 const CALIBRATION_MODELS = appConfig.calibrationModels;
@@ -1004,79 +1004,130 @@ class Mobile extends AppBase {
               </button>
             </div>
             <div className={styles.mobileSettingsBody}>
-              <div className={styles.mobileSettingsSectionTitle}>{t('ui.chatDisplay')}</div>
-              <div className={styles.mobileSettingsRow}>
-                <span className={styles.mobileSettingsLabel}>{t('ui.permission.autoApprove.setting')}</span>
-                <Select
-                  size="small"
-                  value={this.state.autoApproveSeconds || 0}
-                  onChange={this.handleAutoApproveChange}
-                  options={[
-                    { label: t('ui.permission.autoApprove.off'), value: 0 },
-                    { label: '3s', value: 3 },
-                    { label: '5s', value: 5 },
-                    { label: '10s', value: 10 },
-                    { label: '15s', value: 15 },
-                    { label: '20s', value: 20 },
-                    { label: '30s', value: 30 },
-                    { label: '60s', value: 60 },
-                  ]}
-                  style={{ width: 100 }}
-                />
-              </div>
-              {isPad && this.state.approvalPrefs && (
-                <>
-                  <div className={styles.mobileSettingsRow}>
-                    <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.modalEnabled')}</span>
-                    <Switch
-                      checked={this.state.approvalPrefs.modalEnabled !== false}
-                      onChange={(checked) => this.handleApprovalPrefsChange({ modalEnabled: checked })}
-                    />
-                  </div>
-                  <div className={styles.mobileSettingsRow}>
-                    <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.soundEnabled')}</span>
-                    <Switch
-                      checked={!!this.state.approvalPrefs.soundEnabled}
-                      onChange={(checked) => this.handleApprovalPrefsChange({ soundEnabled: checked })}
-                    />
-                  </div>
-                </>
-              )}
-              <div className={styles.mobileSettingsRow}>
-                <span className={styles.mobileSettingsLabel}>{t('ui.expandThinking')}</span>
-                <Switch
-                  checked={!!this.state.expandThinking}
-                  onChange={this.handleExpandThinkingChange}
-                />
-              </div>
-              <div className={styles.mobileSettingsRow}>
-                <span className={styles.mobileSettingsLabel}>{t('ui.showFullToolContent')}</span>
-                <Switch
-                  checked={!!this.state.showFullToolContent}
-                  onChange={this.handleShowFullToolContentChange}
-                />
-              </div>
-              {this.state.showFullToolContent && (
+              <div className={styles.mobileSettingsGroup}>
+                <div className={styles.mobileSettingsSectionTitle}>{t('ui.chatDisplay')}</div>
                 <div className={styles.mobileSettingsRow}>
-                  <span className={styles.mobileSettingsLabel}>{t('ui.collapseToolResults')}</span>
-                  <Switch
-                    checked={!!this.state.collapseToolResults}
-                    onChange={this.handleCollapseToolResultsChange}
+                  <span className={styles.mobileSettingsLabel}>{t('ui.permission.autoApprove.setting')}</span>
+                  <Select
+                    size="small"
+                    value={this.state.autoApproveSeconds || 0}
+                    onChange={this.handleAutoApproveChange}
+                    options={[
+                      { label: t('ui.permission.autoApprove.off'), value: 0 },
+                      { label: '3s', value: 3 },
+                      { label: '5s', value: 5 },
+                      { label: '10s', value: 10 },
+                      { label: '15s', value: 15 },
+                      { label: '20s', value: 20 },
+                      { label: '30s', value: 30 },
+                      { label: '60s', value: 60 },
+                    ]}
+                    style={{ width: 100 }}
                   />
                 </div>
-              )}
-              <div className={styles.mobileSettingsSectionTitle}>{t('ui.themeColor')}</div>
-              <div className={styles.mobileSettingsRow}>
-                <Select
-                  size="small"
-                  value={this.state.themeColor || 'dark'}
-                  onChange={this.handleThemeColorChange}
-                  options={[
-                    { label: t('ui.themeColor.dark'), value: 'dark' },
-                    { label: t('ui.themeColor.light'), value: 'light' },
-                  ]}
-                  style={{ width: 140 }}
-                />
+                {isPad && this.state.approvalPrefs && (
+                  <>
+                    <div className={styles.mobileSettingsRow}>
+                      <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.modalEnabled')}</span>
+                      <Switch
+                        checked={this.state.approvalPrefs.modalEnabled !== false}
+                        onChange={(checked) => this.handleApprovalPrefsChange({ modalEnabled: checked })}
+                      />
+                    </div>
+                    <div className={styles.mobileSettingsRow}>
+                      <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.soundEnabled')}</span>
+                      <Switch
+                        checked={!!this.state.approvalPrefs.soundEnabled}
+                        onChange={(checked) => this.handleApprovalPrefsChange({ soundEnabled: checked })}
+                      />
+                    </div>
+                    {/* notifyOnlyWhenHidden 依赖 electron main 进程的 OS Notification + 窗口聚焦判断,
+                        纯 web 模式下 main.js 路径不存在,开关无效果 → 仅 electron 启动模式显示。 */}
+                    {typeof window !== 'undefined' && window.tabBridge && (
+                      <div className={styles.mobileSettingsRow}>
+                        <span className={styles.mobileSettingsLabel}>{t('ui.approval.settings.notifyOnlyWhenHidden')}</span>
+                        <Switch
+                          checked={this.state.approvalPrefs.notifyOnlyWhenHidden !== false}
+                          onChange={(checked) => this.handleApprovalPrefsChange({ notifyOnlyWhenHidden: checked })}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+                <div className={styles.mobileSettingsRow}>
+                  <span className={styles.mobileSettingsLabel}>{t('ui.expandThinking')}</span>
+                  <Switch
+                    checked={!!this.state.expandThinking}
+                    onChange={this.handleExpandThinkingChange}
+                  />
+                </div>
+                <div className={styles.mobileSettingsRow}>
+                  <span className={styles.mobileSettingsLabel}>{t('ui.showFullToolContent')}</span>
+                  <Switch
+                    checked={!!this.state.showFullToolContent}
+                    onChange={this.handleShowFullToolContentChange}
+                  />
+                </div>
+                {this.state.showFullToolContent && (
+                  <div className={styles.mobileSettingsRow}>
+                    <span className={styles.mobileSettingsLabel}>{t('ui.collapseToolResults')}</span>
+                    <Switch
+                      checked={!!this.state.collapseToolResults}
+                      onChange={this.handleCollapseToolResultsChange}
+                    />
+                  </div>
+                )}
+              </div>
+              <div className={styles.mobileSettingsGroup}>
+                <div className={styles.mobileSettingsSectionTitle}>{t('ui.logSettings')}</div>
+                <div className={styles.mobileSettingsRow}>
+                  <span className={styles.mobileSettingsLabel}>{t('ui.resumeAutoChoice')}</span>
+                  <Switch
+                    checked={!!this.state.resumeAutoChoice}
+                    onChange={this.handleResumeAutoChoiceToggle}
+                  />
+                </div>
+                {this.state.resumeAutoChoice && (
+                  <div className={styles.mobileSettingsRow}>
+                    <Radio.Group
+                      value={this.state.resumeAutoChoice}
+                      onChange={(e) => this.handleResumeAutoChoiceChange(e.target.value)}
+                      size="small"
+                    >
+                      <Radio value="continue">{t('ui.resumeAutoChoice.continue')}</Radio>
+                      <Radio value="new">{t('ui.resumeAutoChoice.new')}</Radio>
+                    </Radio.Group>
+                  </div>
+                )}
+              </div>
+              <div className={styles.mobileSettingsGroup}>
+                <div className={styles.mobileSettingsSectionTitle}>{t('ui.themeStyle')}</div>
+                <div className={styles.mobileSettingsRow}>
+                  <span className={styles.mobileSettingsLabel}>{t('ui.themeColor')}</span>
+                  <Select
+                    size="small"
+                    value={this.state.themeColor || 'dark'}
+                    onChange={this.handleThemeColorChange}
+                    options={[
+                      { label: t('ui.themeColor.dark'), value: 'dark' },
+                      { label: t('ui.themeColor.light'), value: 'light' },
+                    ]}
+                    style={{ width: 140 }}
+                  />
+                </div>
+                <div className={styles.mobileSettingsRow}>
+                  <span className={styles.mobileSettingsLabel}>{t('ui.languageSettings')}</span>
+                  <Select
+                    size="small"
+                    value={getLang()}
+                    onChange={(value) => {
+                      setLang(value);
+                      this.handleLangChange();
+                    }}
+                    options={LANG_OPTIONS.map(o => ({ label: o.label, value: o.value }))}
+                    style={{ width: 140 }}
+                  />
+                </div>
               </div>
             </div>
           </div>

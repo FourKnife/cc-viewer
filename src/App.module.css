@@ -891,26 +891,41 @@
 /* Mobile settings panel */
 .mobileSettingsBody {
   padding: 12px 16px;
+  overflow-y: auto;
+}
+
+.mobileSettingsGroup + .mobileSettingsGroup {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-secondary);
+}
+
+.mobileSettingsGroup .mobileSettingsRow:last-child {
+  border-bottom: none;
 }
 
 .mobileSettingsSectionTitle {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  font-weight: 500;
-  margin-bottom: 12px;
+  font-size: 15px;
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 4px;
+  letter-spacing: 0.2px;
 }
 
 .mobileSettingsRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 0;
+  gap: 12px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border-primary);
 }
 
 .mobileSettingsLabel {
   color: var(--text-secondary);
   font-size: 14px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* Mobile prompt panel */

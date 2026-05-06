@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.6.245 (2026-05-06)
+
+- fix(server): macOS 粘贴图片上传后预览 403 修复（合并 PR #81）
+  - macOS `/tmp` realpath 后是 `/private/tmp`，若启动时 `/tmp/cc-viewer-uploads` 还不存在，`computeRoots()` 的 `realpathSync` 会 throw → fallback 到 raw `/tmp/cc-viewer-uploads`
+  - 之后 upload 写文件、`/api/file-raw` 又把同一路径 realpath 成 `/private/tmp/...`，不命中 allowlist → 403 outside-allowlist
+  - 双保险修复：① `lib/file-access-policy.js` 在 darwin 平台显式追加 `/private/tmp/cc-viewer-uploads` 到 allowlist；② `server.js` 在 mkdir upload 目录后调用 `bumpWorkspacesVersion()` 刷新 root 缓存
+  - 新增 darwin-only 回归断言验证 allowlist 含 `/private/tmp` 上传根
+- feat(mobile): 偏好设置与 PC 端能力对齐
+  - 新增「仅窗口失焦时通知」开关（沿用桌面 `window.tabBridge` 守卫，纯 web 模式下不渲染）
+  - 新增「日志设置」分组：`resumeAutoChoice` 开关 + 继承/新开 Radio
+  - 「主题色」分组重命名为「主题风格」，`themeColor` 行补回左侧 label，新增「语言设置」选择器（18 语言，与 PC 完全一致）
+  - 复用 AppBase 既有 handler（`handleResumeAutoChoiceToggle/Change`、`handleLangChange`、`handleApprovalPrefsChange`），无新增持久化通道
+- style(mobile): 偏好设置区块分割与标题区分度优化
+  - `.mobileSettingsSectionTitle` 从 13px/500/text-tertiary → 15px/600/text-primary + letter-spacing 0.2px，标题与行 label 立刻拉开档次
+  - 新增 `.mobileSettingsGroup` 包裹层 + `.mobileSettingsGroup + .mobileSettingsGroup` adjacency selector：分组之间 24px margin-top + 16px padding-top + 一条细分割线
+  - `.mobileSettingsGroup .mobileSettingsRow:last-child` 去掉每组最后一行的下边框，避免与新分割线重叠
+  - `.mobileSettingsRow` 加 `gap: 12px`，padding 10→12px；`.mobileSettingsLabel` 加 `flex: 1 1 auto; min-width: 0` 防窄屏挤压
+  - `.mobileSettingsBody` 加 `overflow-y: auto` 防内容溢出
+- refactor(i18n): `LANG_OPTIONS` 提取到 `src/i18n.js` 作为单一源
+  - 原 `src/components/AppHeader.jsx` (line 39) 与新加的 `src/Mobile.jsx` 同名常量重复，未来必 drift
+  - 统一 export，`AppHeader.jsx` 与 `Mobile.jsx` 改为 `import { LANG_OPTIONS } from '../i18n' / './i18n'`
+  - 顺手删除 AppHeader 旧版未被引用的 `short` 字段
+- 1591/1591 pass
+
 ## 1.6.244 (2026-05-06)
 
 - feat(ui): PC 端血条迁出 AppHeader，按场景就近显示

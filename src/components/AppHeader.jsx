@@ -7,7 +7,7 @@ import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeT
 import { isSystemText, classifyUserContent, isMainAgent } from '../utils/contentFilter';
 import { classifyRequest } from '../utils/requestType';
 import { resolveTeammateNames } from '../utils/contentFilter';
-import { t, getLang, setLang } from '../i18n';
+import { t, getLang, setLang, LANG_OPTIONS } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
 import { SettingsContext } from '../contexts/SettingsContext';
 import ConceptHelp from './ConceptHelp';
@@ -35,27 +35,6 @@ function readCalibrationModel() {
   return CALIBRATION_MODELS.some(m => m.value === migrated) ? migrated : 'auto';
 }
 import styles from './AppHeader.module.css';
-
-const LANG_OPTIONS = [
-  { value: 'zh', short: 'zh', label: '简体中文' },
-  { value: 'en', short: 'en', label: 'English' },
-  { value: 'zh-TW', short: 'zh-TW', label: '繁體中文' },
-  { value: 'ko', short: 'ko', label: '한국어' },
-  { value: 'ja', short: 'ja', label: '日本語' },
-  { value: 'de', short: 'de', label: 'Deutsch' },
-  { value: 'es', short: 'es', label: 'Español' },
-  { value: 'fr', short: 'fr', label: 'Français' },
-  { value: 'it', short: 'it', label: 'Italiano' },
-  { value: 'da', short: 'da', label: 'Dansk' },
-  { value: 'pl', short: 'pl', label: 'Polski' },
-  { value: 'ru', short: 'ru', label: 'Русский' },
-  { value: 'ar', short: 'ar', label: 'العربية' },
-  { value: 'no', short: 'no', label: 'Norsk' },
-  { value: 'pt-BR', short: 'pt-BR', label: 'Português (Brasil)' },
-  { value: 'th', short: 'th', label: 'ไทย' },
-  { value: 'tr', short: 'tr', label: 'Türkçe' },
-  { value: 'uk', short: 'uk', label: 'Українська' },
-];
 
 
 // countryToFlag 已随地理位置控件一起迁到 src/components/CountryFlag.jsx
