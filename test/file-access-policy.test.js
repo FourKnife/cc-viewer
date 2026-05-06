@@ -77,7 +77,7 @@ process.env.CCV_PROJECT_DIR = PROJECT;
 
 // dynamic import:env 设置后再加载 policy
 const policy = await import('../lib/file-access-policy.js');
-const { isReadAllowed, _resetCacheForTests } = policy;
+const { isReadAllowed, getAllowedRoots, _resetCacheForTests } = policy;
 _resetCacheForTests();
 
 after(() => {
@@ -136,6 +136,15 @@ describe('file-access-policy: allowlist 命中', () => {
         || r.real === '/tmp/cc-viewer-uploads/foo-test-policy.png',
         `unexpected real: ${r.real}`);
     }
+  });
+
+  it('macOS 显式包含 /private/tmp 上传目录,覆盖 upload dir 启动后才创建的场景', { skip: process.platform !== 'darwin' }, () => {
+    _resetCacheForTests();
+    const roots = getAllowedRoots();
+    assert.ok(
+      roots.some(r => r.raw === '/private/tmp/cc-viewer-uploads'),
+      JSON.stringify(roots)
+    );
   });
 });
 

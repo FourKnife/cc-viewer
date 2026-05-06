@@ -10,7 +10,7 @@ import { execFile, exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
 import { isPathContained, ERROR_STATUS_MAP, validateImportDir } from './lib/file-api.js';
-import { isReadAllowed, reasonToStatus } from './lib/file-access-policy.js';
+import { isReadAllowed, reasonToStatus, bumpWorkspacesVersion } from './lib/file-access-policy.js';
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -415,6 +415,7 @@ async function handleRequest(req, res) {
         const fileData = bodyEnd !== -1 ? buf.slice(bodyStart, bodyEnd) : buf.slice(bodyStart);
         const uploadDir = '/tmp/cc-viewer-uploads';
         mkdirSync(uploadDir, { recursive: true });
+        bumpWorkspacesVersion();
         // Unique filename: prepend timestamp to avoid silent overwrite
         const ts = Date.now();
         const dotIdx = originalName.lastIndexOf('.');
