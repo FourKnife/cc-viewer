@@ -56,10 +56,25 @@ function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, 
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el) return;
+    // 折算祖先 zoom：Android WebView 在 zoom 容器内 getBoundingClientRect() 给的是 zoom 前 layout
+    // 坐标，乘 parentZoom 才是视觉坐标；Chrome/Safari/iPad（zoom=1 或 pad-mode 覆盖回 1）天然
+    // parentZoom=1，乘 1 等价于不动。每次 setVar 重读，支持运行时 mobile↔pad 切换。
+    const findParentZoom = () => {
+      let p = el.parentElement;
+      while (p) {
+        const z = parseFloat(getComputedStyle(p).zoom);
+        if (z && z > 0 && z !== 1) return z;
+        p = p.parentElement;
+      }
+      return 1;
+    };
     const setVar = () => {
       const rect = el.getBoundingClientRect();
       const vh = window.visualViewport?.height ?? window.innerHeight;
-      const distFromBottom = Math.max(0, vh - rect.top);
+      const visualTop = rect.top * findParentZoom();
+      const distFromBottom = vh - visualTop;
+      // 拒绝异常量测（rect.top ≥ vh 让 distFromBottom ≤ 0）；正常小输入栏 ≥ 50px 远高于阈值。
+      if (distFromBottom < 5) return;
       document.documentElement.style.setProperty('--chat-input-bar-height', distFromBottom + 'px');
     };
     setVar();
@@ -239,21 +254,23 @@ function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, 
               })}
             </div>
           )}
-          <textarea
-            ref={inputRef}
-            className={styles.chatTextarea}
-            placeholder={inputSuggestion ? '' : t('ui.chatInput.placeholder')}
-            rows={1}
-            onKeyDown={onKeyDown}
-            onInput={handleTextareaInput}
-            onPaste={handlePaste}
-          />
-          {inputSuggestion && inputEmpty && (
-            <div className={styles.ghostText}>{inputSuggestion}</div>
-          )}
-          {recording && interimText && (
-            <div className={styles.interimPreview}>{interimText}</div>
-          )}
+          <div className={styles.textareaWithGhost}>
+            <textarea
+              ref={inputRef}
+              className={styles.chatTextarea}
+              placeholder={inputSuggestion ? '' : t('ui.chatInput.placeholder')}
+              rows={1}
+              onKeyDown={onKeyDown}
+              onInput={handleTextareaInput}
+              onPaste={handlePaste}
+            />
+            {inputSuggestion && inputEmpty && (
+              <div className={styles.ghostText}>{inputSuggestion}</div>
+            )}
+            {recording && interimText && (
+              <div className={styles.interimPreview}>{interimText}</div>
+            )}
+          </div>
         </div>
         <div className={styles.chatInputBottom}>
           <div className={styles.chatInputBottomLeft}>

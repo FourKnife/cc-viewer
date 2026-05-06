@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.6.246 (2026-05-07)
+
+- feat(chat): 流式 spinner 升级为 Claude 官方 SVG 动画（从 claude.ai webpack chunk 抠出 8 个 sprite-sheet）
+  - 新增 `src/img/claude/{thinking,waiting,tickle,orbiting,writing,shimmer,entrance,exit}.svg`，每个用 SMIL `<animate attributeName="viewBox" calcMode="discrete">` 在嵌套 `<svg>` 上做精灵图逐帧滚动
+  - 8 个文件外层 `<svg>` 统一上品牌橙 `#D97757`，与原 ModelAvatar logo 颜色保持一致
+  - `ChatView` 流式 spinner（mobile Virtuoso footer + desktop 两处）由原内联 `<svg><circle><animateTransform/>` 替换为 `<img>` + 50/50 在 shimmer / orbiting 间随机；roll 移到 `componentDidUpdate` 检测 `isStreaming` rising-edge 一次性写入 instance ref，避免 render 内 `Math.random()` 副作用；spinner JSX 抽 `spinnerNode` 复用，去重两份复制粘贴
+- feat(file-viewer): `ImageViewer` 现支持 SMIL 动画 SVG
+  - `DOMPurify.sanitize` 默认的 `USE_PROFILES: { svg: true }` 会 strip `<animate>` / `<set>` 等 SMIL 节点，导致预览本仓库 / 任意 SVG 都冻在第 0 帧
+  - 抽 `src/utils/svgSanitize.js` 集中：放行 SMIL 元素 + 必需属性，并加 `uponSanitizeAttribute` hook 拒绝 `<set>/<animate*>` 把 `attributeName` 指向 `^on` / `href` / `xlink:href` / `style`（defense-in-depth：现代浏览器 SMIL 引擎本身已挡 event-handler 注入，hook 是兜底）
+  - 新增 `test/svg-sanitize.test.js` 14 case 覆盖 hook 字符串规则 + config 形状（hook 真实 sanitize 行为依赖 jsdom，未引入新 dep）
+- refactor(model-avatar): `helpers.js` 的 `svgAnimated` 数据源替换
+  - 删除旧 `src/img/model-claude-animated.svg`（1024×1024 CSS path-morph 触手 logo）
+  - 改 import `src/img/claude/writing.svg?raw`（100×100 sprite-sheet 8 帧 / 0.72s loop）
+  - `ChatMessage.module.css` 删除针对旧 pulse 触手"破圆"效果的注释
+- i18n: `ui.lastResponse` 从英文占位翻译到 18 语
+  - zh "最新回复" / zh-TW "最新回覆" / ko "최신 응답" / ja "最新の回答" / de "Letzte Antwort" / es "Última respuesta" / fr "Dernière réponse" / it "Ultima risposta" / da "Seneste svar" / pl "Ostatnia odpowiedź" / ru "Последний ответ" / ar "آخر رد" / no "Siste svar" / pt-BR "Última resposta" / th "คำตอบล่าสุด" / tr "Son yanıt" / uk "Остання відповідь"；en 保留 "Last Response"
+- fix(mobile): `ToolApprovalPanel` 全局浮层在 zoom polyfill 容器下被推到屏底盖输入栏
+  - 双保险：`ChatInputBar.jsx setVar` 加守卫拒绝 `distFromBottom < 5` 异常量测；`.panelGlobal` `bottom: max(calc(var(--chat-input-bar-height, 200px) + 12px), 56px)` 兜底最小避位
+  - `ChatInputBar.jsx` 新增 `parentZoom` 折算：祖先 `zoom !== 1` 且 `getBoundingClientRect()` 未反映 zoom 时（Android WebView），`rect.top * parentZoom` 折算回视口坐标，避免审批面板被推得过高
+- fix(mobile): 移动端血条抽屉 / 记忆 / Skill 详情 antd Modal 不适配暗主题
+  - `Mobile.jsx` 在 `mobileCLIRoot` 外层加单一 `<ConfigProvider theme={this.themeConfig}>` 包裹，所有内嵌 antd Modal 通过 React Context 继承 `themeConfig`（Modal portal 仍走 React 树，Context 正确传递）
+- fix(chat-input): `ghostText` 推荐文本盖在 `imagePreviewStrip` 缩略图上
+  - `.ghostText` 原 `position: absolute; top: 0`，锚到 `.chatTextareaWrap`，有图片预览 strip 时直接漂到 strip 顶部
+  - 修：包一层 `.textareaWithGhost` (`position: relative`) 仅围 textarea + ghostText + interimPreview，让两个 absolute 元素锚到 textarea 自身，避免与 strip 几何重叠
+- fix(chat-view): "保持吸底"未真正贴 `.container`，依赖 `mainAgentSessions` props 变化驱动
+  - 新增 `_followToTargetIfSticky(scroller)` helper：`stickyBottom && !_stickyScrollLock` 时直接 `scroller.scrollTop = _followTarget`
+  - `_stickyResizeObserver`（桌面）+ `_virtuosoResizeObserver`（移动）callback 都 wire 进来，吸底改为容器尺寸驱动；任何让内容长高的事件（teammate / sub-agent / plan 文件异步到达 / 字体加载完）都自动吸底，不再依赖 props 变化是否经过 mainAgent 路径
+
 ## 1.6.245 (2026-05-06)
 
 - fix(server): macOS 粘贴图片上传后预览 403 修复（合并 PR #81）

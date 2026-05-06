@@ -23,6 +23,12 @@
   flex: 1;
 }
 
+/* 包住 textarea + ghostText + interimPreview，让 absolute 子元素锚到 textarea 顶部，
+   而不是 chatTextareaWrap 顶（否则有 imagePreviewStrip 时会被 ghostText 覆盖）。 */
+.textareaWithGhost {
+  position: relative;
+}
+
 .chatTextarea {
   width: 100%;
   min-height: 22px;

@@ -36,6 +36,11 @@ import { tryOpenWithSystem } from '../utils/fileOpen';
 import { BUILTIN_PRESETS } from '../utils/builtinPresets';
 import defaultAvatarUrl from '../img/default-avatar.svg';
 import loadingPetUrl from '../img/loading-pet.gif';
+// 用 <object type="image/svg+xml"> 替代 <img>：WeChat / Android WebView 在 <img> 的 image 路径
+// 下经常把 SMIL <animate> 当 raster 处理只渲染第 0 帧；<object> 走 SVG document 路径，所有 WebView
+// 正确播放，且不依赖 dangerouslySetInnerHTML。
+import shimmerUrl from '../img/claude/shimmer.svg';
+import orbitingUrl from '../img/claude/orbiting.svg';
 import styles from './ChatView.module.css';
 
 const { Text } = Typography;
@@ -217,6 +222,9 @@ class ChatView extends React.Component {
     this._lastObservedLpid = null;
     // Plan V2 文件型 plan 的异步内容缓存（input.planFilePath → 文件正文）
     this._planFileFetches = new Set();
+    this._streamSpinnerUrl = props.isStreaming
+      ? (Math.random() < 0.5 ? orbitingUrl : shimmerUrl)
+      : null;
     this._unmounted = false;
   }
 
@@ -337,6 +345,13 @@ class ChatView extends React.Component {
       this.setState({ agentTeamEnabled: true });
     }
     if (!useVirtuoso) this._bindStickyScroll();
+    // touch 守卫：用户手指在屏上时（含 momentum 前的握持），不让 RO 触发的 scrollTop 写入打断
+    this._userTouching = false;
+    this._onTouchStart = () => { this._userTouching = true; };
+    this._onTouchEnd = () => { this._userTouching = false; };
+    document.addEventListener('touchstart', this._onTouchStart, { passive: true });
+    document.addEventListener('touchend', this._onTouchEnd, { passive: true });
+    document.addEventListener('touchcancel', this._onTouchEnd, { passive: true });
     // 初始化时吸附到 60cols
     if (this.state.needsInitialSnap && this.props.cliMode && this.props.terminalVisible) {
       this._snapToInitialPosition();
@@ -374,6 +389,11 @@ class ChatView extends React.Component {
   }
 
   componentDidUpdate(prevProps, prevState) {
+    if (prevProps.isStreaming !== this.props.isStreaming) {
+      this._streamSpinnerUrl = this.props.isStreaming
+        ? (Math.random() < 0.5 ? orbitingUrl : shimmerUrl)
+        : null;
+    }
     // SettingsContext 异步 fetch 完成后,props.claudeSettings / props.preferences 才到达;
     // 同步派生的 agentTeamEnabled 与 _loadPresets 都需在这里接力。
     if (prevProps.claudeSettings !== this.props.claudeSettings) {
@@ -671,6 +691,12 @@ class ChatView extends React.Component {
     if (this._hookWaitTimer) clearTimeout(this._hookWaitTimer);
     this._pendingHookAnswers = null;
     this._unbindScrollFade();
+    if (this._onTouchStart) {
+      document.removeEventListener('touchstart', this._onTouchStart);
+      document.removeEventListener('touchend', this._onTouchEnd);
+      document.removeEventListener('touchcancel', this._onTouchEnd);
+      this._onTouchStart = this._onTouchEnd = null;
+    }
     if (!useVirtuoso) this._unbindStickyScroll();
     if (this._virtuosoResizeObserver) {
       try { this._virtuosoResizeObserver.disconnect(); } catch {}
@@ -784,6 +810,29 @@ class ChatView extends React.Component {
     this._followTarget = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
   };
 
+  // 容器尺寸驱动的吸底：只看 .container（或 Virtuoso scroller）尺寸变化，与 props 解耦——
+  // 任何让内容长高的事件（teammate / sub-agent / plan 文件异步到达 / 字体加载完）都会自动跟。
+  // 锁期间不做：startRender 自己会管 scrollToBottom；stickyBottom=false 时不做：尊重用户主动滚走。
+  _followToTargetIfSticky = (scroller) => {
+    if (!scroller) return;
+    if (this._stickyScrollLock) return;
+    if (!this.state.stickyBottom) return;
+    if (this._userTouching) return;
+    if (typeof scroller.scrollTop === 'number') {
+      // 镜像 _startSmoothStickyFollow 的 lock 模式：阻止 RO 触发的强制 scrollTop 写入引起
+      // _onStickyScroll 翻转 stickyBottom，也避免与 Virtuoso 的 atBottomStateChange 防抖打架。
+      this._stickyScrollLock = true;
+      scroller.scrollTop = this._followTarget;
+      requestAnimationFrame(() => { this._stickyScrollLock = false; });
+    }
+  };
+
+  // 共享 RO 回调：尺寸变 → 刷新 _followTarget 缓存 → 必要时拉到底。
+  _onScrollerResize = (el) => {
+    this._refreshFollowTarget(el);
+    this._followToTargetIfSticky(el);
+  };
+
   // Virtuoso 模式下也对 scroller 接 ResizeObserver。修复:移动端键盘弹起 / 横竖屏切换 /
   // window resize 后 _followTarget 缓存失准（原本只在 _startSmoothStickyFollow 入口刷一次）。
   // scrollerRef 会被 Virtuoso 多次回调（mount=el / unmount=null），需对应切换。
@@ -796,7 +845,7 @@ class ChatView extends React.Component {
     this._virtuosoBoundEl = el;
     if (!el || typeof ResizeObserver === 'undefined') return;
     try {
-      this._virtuosoResizeObserver = new ResizeObserver(() => this._refreshFollowTarget(el));
+      this._virtuosoResizeObserver = new ResizeObserver(() => this._onScrollerResize(el));
       this._virtuosoResizeObserver.observe(el);
       this._refreshFollowTarget(el);
     } catch {}
@@ -842,7 +891,7 @@ class ChatView extends React.Component {
       this._refreshFollowTarget(el);
       if (typeof ResizeObserver !== 'undefined') {
         try {
-          this._stickyResizeObserver = new ResizeObserver(() => this._refreshFollowTarget(el));
+          this._stickyResizeObserver = new ResizeObserver(() => this._onScrollerResize(el));
           this._stickyResizeObserver.observe(el);
         } catch {}
       }
@@ -3514,6 +3563,7 @@ class ChatView extends React.Component {
   render() {
     const { mainAgentSessions, cliMode, terminalVisible, onToggleTerminal } = this.props;
     const { allItems, visibleCount, loading, terminalWidth, sidebarWidth, lastResponseItems } = this.state;
+    const streamSpinnerUrl = this._streamSpinnerUrl || shimmerUrl;
 
     // 计算 SnapLineOverlay 的 currentLeft（侧栏拖拽时用侧栏宽度，终端拖拽时用终端位置）
     let snapCurrentLeft = 0;
@@ -3648,6 +3698,15 @@ class ChatView extends React.Component {
       }
     }
 
+    // 仅在 streaming 或淡出期间挂 <img>，避免 ChatView 冷加载就 fetch 76KB 的 shimmer + orbiting。
+    // streamingFading 由 isStreaming true→false 时拉起 500ms（line ~551），覆盖淡出动画窗口。
+    const showSpinner = this.props.isStreaming || this.state.streamingFading;
+    const spinnerNode = showSpinner ? (
+      <div className={`${styles.streamingSpinnerWrap}${(!this.props.isStreaming || streamingLiveItem) ? ' ' + styles.streamingSpinnerHidden : ''}`}>
+        <object type="image/svg+xml" data={streamSpinnerUrl} width="20" height="20" aria-hidden="true" tabIndex={-1} />
+      </div>
+    ) : null;
+
     const targetIdx = this._scrollTargetIdx;
     const { highlightTs, highlightFading, highlightVisibleIdx } = this.state;
     const visible = filteredItems.slice(0, _isFiltering ? filteredItems.length : visibleCount);
@@ -3711,22 +3770,7 @@ class ChatView extends React.Component {
         {useVirtuoso ? (
           this._virtuosoHeader = loadMoreBtn,
           this._virtuosoFooter = <>
-            <div className={`${styles.streamingSpinnerWrap}${(!this.props.isStreaming || streamingLiveItem) ? ' ' + styles.streamingSpinnerHidden : ''}`}>
-              <svg width="20" height="20" viewBox="0 0 20 20">
-                <defs>
-                  <linearGradient id="ccv-spinnerGrad" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
-                    <stop offset="100%" stopColor="currentColor" stopOpacity="0.1" />
-                  </linearGradient>
-                </defs>
-                <circle cx="10" cy="10" r="7.5" fill="none" strokeWidth="2"
-                  stroke="url(#ccv-spinnerGrad)" strokeLinecap="round"
-                  pathLength="100" strokeDasharray="75 25">
-                  <animateTransform attributeName="transform" type="rotate"
-                    from="0 10 10" to="360 10 10" dur="0.8s" repeatCount="indefinite" />
-                </circle>
-              </svg>
-            </div>
+            {spinnerNode}
           {filteredLastResponseItems && (
             <div className={streamingLiveItem ? styles.hideLastResponseDivider : undefined}>
               {filteredLastResponseItems}
@@ -3787,22 +3831,7 @@ class ChatView extends React.Component {
                 ? <div key={item.key + '-anchor'} ref={this._scrollTargetRef}>{el}</div>
                 : el;
             })}
-            <div className={`${styles.streamingSpinnerWrap}${(!this.props.isStreaming || streamingLiveItem) ? ' ' + styles.streamingSpinnerHidden : ''}`}>
-              <svg width="20" height="20" viewBox="0 0 20 20">
-                <defs>
-                  <linearGradient id="ccv-spinnerGrad-desktop" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
-                    <stop offset="100%" stopColor="currentColor" stopOpacity="0.1" />
-                  </linearGradient>
-                </defs>
-                <circle cx="10" cy="10" r="7.5" fill="none" strokeWidth="2"
-                  stroke="url(#ccv-spinnerGrad-desktop)" strokeLinecap="round"
-                  pathLength="100" strokeDasharray="75 25">
-                  <animateTransform attributeName="transform" type="rotate"
-                    from="0 10 10" to="360 10 10" dur="0.8s" repeatCount="indefinite" />
-                </circle>
-              </svg>
-            </div>
+            {spinnerNode}
             {filteredLastResponseItems && (
               <div className={streamingLiveItem ? styles.hideLastResponseDivider : undefined}>
                 {targetIdx != null && targetIdx >= visible.length

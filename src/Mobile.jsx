@@ -631,6 +631,7 @@ class Mobile extends AppBase {
         onJumpTab={this.handleApprovalJumpTab}
         otherTabs={this.state.approvalOtherTabs}
       >
+      <ConfigProvider theme={this.themeConfig}>
       <div className={styles.mobileCLIRoot} ref={this._layoutRef} onDragOver={this._onDragOver} onDragLeave={this._onDragLeave} onDrop={this._onDrop}>
         {this.state.isDragging && (
           <div className={styles.dragOverlay}>
@@ -806,7 +807,6 @@ class Mobile extends AppBase {
                   <div className={styles.mobileLoadingLabel}>{t('ui.loadingChat')}{fileLoadingCount > 0 ? ` (${fileLoadingCount})` : ''}</div>
                 </div>
               )}
-              <ConfigProvider theme={this.themeConfig}>
                 <div className={styles.mobileChatInner}>
                   <ChatView
                     {...this._settingsProps()}
@@ -845,7 +845,6 @@ class Mobile extends AppBase {
                     onClearContextOptimistic={this.handleClearContextOptimistic}
                   />
                 </div>
-              </ConfigProvider>
             </>
           )}
           {!mobileIsLocalLog && (
@@ -984,11 +983,9 @@ class Mobile extends AppBase {
                   );
                 }
                 return (
-                  <ConfigProvider theme={this.themeConfig}>
                   <div className={styles.logListContainer}>
                     {this.renderLogTable(currentLogs, true)}
                   </div>
-                  </ConfigProvider>
                 );
               })()}
             </div>
@@ -1211,6 +1208,7 @@ class Mobile extends AppBase {
           />
         )}
       </div>
+      </ConfigProvider>
       </ApprovalModal>
       </TerminalWsProvider>
     );

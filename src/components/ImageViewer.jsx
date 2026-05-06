@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import DOMPurify from 'dompurify';
 import { t as i18n } from '../i18n';
 import { apiUrl } from '../utils/apiUrl';
+import { sanitizeSvg } from '../utils/svgSanitize';
 import styles from './ImageViewer.module.css';
 
 function formatFileSize(bytes) {
@@ -33,7 +33,7 @@ export default function ImageViewer({ filePath, onClose, editorSession }) {
     if (!isSvg) { setSvgContent(null); return; }
     setLoading(true);
     fetch(imgSrc).then(r => r.text()).then(text => {
-      setSvgContent(DOMPurify.sanitize(text, { USE_PROFILES: { svg: true } }));
+      setSvgContent(sanitizeSvg(text));
       // SVG viewBox 通常很小（如 24x24），用合理的渲染基准尺寸避免 fitToWindow 过度放大
       const vb = text.match(/viewBox=["']([^"']+)["']/);
       const vbW = vb ? (vb[1].split(/[\s,]+/).map(Number)[2] || 24) : 24;

@@ -9,7 +9,7 @@ import modelKimiUrl from '../img/model-kimi.svg';
 import modelGlmUrl from '../img/model-glm.svg';
 import modelMinimaxUrl from '../img/model-minimax.svg';
 import modelDeepseekUrl from '../img/model-deepseek.svg';
-import modelClaudeAnimatedSvg from '../img/model-claude-animated.svg?raw';
+import modelClaudeAnimatedSvg from '../img/claude/writing.svg?raw';
 
 const MODEL_CONTEXT_SIZES = [
   // Explicit 1M context annotation: [1m] suffix in model descriptor
