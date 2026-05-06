@@ -67,7 +67,7 @@ function LiveTagPopover({
         />
       ) : <div className={styles.cachePopoverPlaceholder} />}
       trigger="hover"
-      placement="bottomLeft"
+      placement="topRight"
       overlayInnerStyle={POPOVER_OVERLAY_STYLE}
       onOpenChange={onOpenChange}
     >
@@ -75,7 +75,9 @@ function LiveTagPopover({
         <span className={styles.liveTagFill} />
         <span className={styles.liveTagContent}>
           <span className={styles.liveTagText}>
-            {t('ui.liveMonitoring')}{projectName ? `:${projectName}` : ''}
+            {contextTokens > 0
+              ? `${(contextTokens / 1000).toFixed(1)}K (${contextPercent}%)`
+              : `${contextPercent}%`}
           </span>
         </span>
       </span>

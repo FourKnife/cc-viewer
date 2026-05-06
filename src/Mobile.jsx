@@ -4,7 +4,7 @@ import { BranchesOutlined, DownloadOutlined, DeleteOutlined, RollbackOutlined, R
 import AppBase, { styles, OPTIMISTIC_CLEAR_PERCENT } from './AppBase';
 import { isIOS, isPad, setViewMode } from './env';
 import { isMainAgent, isSystemText, classifyUserContent } from './utils/contentFilter';
-import { getModelMaxTokens, getEffectiveModel } from './utils/helpers';
+import { getModelMaxTokens, getEffectiveModel, AUTO_COMPACT_USABLE_RATIO } from './utils/helpers';
 import ChatView from './components/ChatView';
 import TerminalPanel, { uploadFileAndGetPath } from './components/TerminalPanel';
 import { TerminalWsProvider } from './components/TerminalWsContext';
@@ -605,10 +605,10 @@ class Mobile extends AppBase {
         }
       }
       if (contextWindow?.used_percentage != null) {
-        mobileContextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / 83.5 * 100)));
+        mobileContextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / AUTO_COMPACT_USABLE_RATIO)));
       } else if (lastMainAgent) {
         const maxTokens = contextWindow?.context_window_size || getModelMaxTokens(getEffectiveModel(lastMainAgent) || this.state.settingsModel);
-        const usable = maxTokens * 0.835;
+        const usable = maxTokens * AUTO_COMPACT_USABLE_RATIO;
         if (usable > 0 && mobileContextTokens > 0) mobileContextPercent = Math.min(100, Math.max(0, Math.round(mobileContextTokens / usable * 100)));
       }
       if (mobileContextPercent === 0 && this._lastContextPercent > 0) mobileContextPercent = this._lastContextPercent;

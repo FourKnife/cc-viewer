@@ -70,23 +70,34 @@
   line-height: 0;
 }
 
-/* Live monitoring tag */
+/* Live monitoring tag：仅在 portal slot 中渲染，高度跟 slot 走（terminalToolbar 26px / chatInputBottom 28px），
+   line-height 用 1，文本由 inline-flex 在垂直方向居中、水平方向左对齐（紧贴胶囊左边缘内 padding）。
+   border-radius 999 保证胶囊外形。 */
 .liveTag {
   position: relative;
   display: inline-flex;
   align-items: center;
-  border-radius: 12px;
+  justify-content: flex-start;
+  border-radius: 999px;
   border: 1px solid;
   border-color: var(--ctx-color);
   color: var(--ctx-color);
   padding: 0 10px;
-  height: 22px;
+  height: 100%;
   font-size: 12px;
-  line-height: 22px;
+  line-height: 1;
   overflow: hidden;
   transition: border-color 0.3s, color 0.3s;
   white-space: nowrap;
   background: var(--bg-base-pure);
+}
+
+/* 头部"当前项目:xxx"纯文本（血条迁移到 TerminalPanel/ChatInputBar 后留在原位的项目标识）：
+   无边框无背景，颜色继承默认文字色。 */
+.headerProjectName {
+  font-size: 12px;
+  color: inherit;
+  white-space: nowrap;
 }
 
 .liveTagFill {
@@ -116,6 +127,7 @@
 
 .liveTagText {
   margin-left: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Cache countdown */
@@ -677,7 +689,7 @@
 }
 
 .cacheSectionTitle {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 2px;
   font-size: 12px;
@@ -689,7 +701,7 @@
   border: none;
   cursor: pointer;
   user-select: none;
-  flex: 1;
+  flex: 0 0 auto;
   text-align: left;
 }
 
@@ -902,9 +914,9 @@
   white-space: nowrap;
 }
 
-/* Calibration model select */
+/* Calibration model select：选项简化为 auto/1M/200K 后内容很短，宽度从 160 砍半到 80 */
 .calibrationSelect {
-  width: 160px;
+  width: 80px;
   flex-shrink: 0;
 }
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.6.244 (2026-05-06)
+
+- feat(ui): PC 端血条迁出 AppHeader，按场景就近显示
+  - **终端开启** → 血条放在 TerminalPanel 工具栏中段（左按钮组与 ScratchBtn 之间），`flex: 0 1 200px` 自适应
+  - **终端关闭** → 血条放在 ChatInputBar 底部按钮区中段（左 +/mic 与 hint+send 之间），同样 200px 上限
+  - "当前项目:xxx" 留在 AppHeader 原位但变纯文本（无背景 / 无 popover / 不可点击）
+  - 血条内文本改为 `213K (21%)` Context 数 + 百分比，左对齐，文字内嵌彩色填充之上
+  - popover placement `bottomLeft → topRight`，trigger 现在在屏幕底部、popover 向上展开
+  - 工具栏 / 输入区改为 3 段式（左 / slot / 右）flex 布局，slot 高度对齐相邻按钮（terminal 26px / chat 28px）
+  - 实现：`ReactDOM.createPortal` + slot ref（App.jsx 持 contextBarSlot state，TerminalPanel/ChatInputBar 通过 ref callback 注册），AppHeader 仍持有数据所有权与 popover 状态，仅 DOM 位置外移
+  - 移动端 (`Mobile.jsx` + `mobileCtxTag*`) 不动；raw / 网络报文等无终端无输入区模式下血条隐藏
+- feat(calibration): 校准下拉从 7 个具体型号简化为 3 个上下文窗口尺寸：`auto` / `1M` / `200K`
+  - **AUTO 自检测**：按最近一条 MainAgent 请求的 model 名匹配 `opus-4-7|opus-4.7|opus 4.7`（大小写不敏感）→ 1M；含 `1m` 子串（如 `deepseek-v3-1m`）→ 1M；否则 → 200K；冷启动（无 lastMainAgent）默认 1M
+  - 老用户 localStorage 残留旧型号字符串显式迁移：`opus-4.7-1m → 1m`，`sonnet-4.6 / glm5 / kimi-k2.5 / minimax-2.1 / Qwen 3.5 → 200k`，保留校准语义而非降级到 auto
+  - i18n label 从"Calibrate model:"语义跃迁到"Context window size:"，18 语种统一加 "context/上下文/контекст" 等消歧词避免误读为 UI 窗口尺寸
+  - 校准 Select 宽度 `160px → 80px`（选项简化后内容很短）
+  - 新 helper `resolveCalibrationTokens(calibrationModel, lastMainAgent)` + `CALIBRATION_TOKEN_MAP` 集中映射；不变量"永远返回 1000000 或 200000"让 AppHeader 简化掉一段不再可达的中间分支
+- chore(constants): 抽 `AUTO_COMPACT_USABLE_RATIO = 0.835`（auto-compact 在 ~83.5% 触发，扣 16.5% buffer），AppHeader.jsx + Mobile.jsx 共 5 处替换硬编码；公式 `/ 83.5 * 100` 简化为 `/ AUTO_COMPACT_USABLE_RATIO`
+- ux(popover): 折叠分组标题点击区从 `flex: 1` 占满整行收窄到 `flex: 0 0 auto + display: inline-flex`，避免误触
+- ux(input-bar): ChatInputBar 中段血条与左侧 mic 按钮的间距从 4px 翻倍到 ~8px（`margin-left: 4` 叠加 `gap: 4`）
+- chore(cleanup):
+  - 删除 AppHeader.module.css 重复的 `.liveTagText` 规则
+  - 删除 TerminalPanel.module.css 中 ScratchBtn 改用 `.toolbarRight` 包裹后已不被引用的 `.toolbarBtnRight`
+  - `resolveCalibrationTokens` 加 `typeof raw !== 'string'` 防御守卫（proxy 异常返回 number/object 时不抛错）
+  - AppHeader.jsx 清理已不使用的 `getModelMaxTokens` / `getEffectiveModel` 导入
+- chore(test): `test/helpers.test.js` 新增 8 个 `resolveCalibrationTokens` case 覆盖直接查表 / auto + opus-4-7 / 大小写不敏感 / 1m 子串 / sonnet 走 200K / 冷启动 / legacy 值兜底；1590/1590 pass
+
 ## 1.6.243 (2026-05-06)
 
 - feat(skills): 新增 `/api/skills/import` 上传接口 + 移动端 cache popover 抽屉「添加 skill / 管理」入口。前端三入口（文件夹 / .zip / SKILL.md）：PC 走 antd Dropdown，移动端（含 iPad）去 dropdown 直接 onClick → `.zip,.md` 文件选择器（webkitdirectory 在移动端浏览器普遍不支持，已 feature detect 隐藏文件夹项）。文件夹入口前端 JSZip 打包后复用 zip 通道。新组件 `SkillsManagerModal.jsx` + 独立 css module 解除对 AppHeader.module.css 的硬耦合；AppHeader / Mobile 共用，状态机（_skillsModal: open/loading/skills/error/toggling）与 toggle 乐观更新 + 失败回滚同构（短期接受重复，与既有 reloadFsSkills 一致）。新增 i18n key `ui.skills.add/addFolder/addZip/addMd/folderMissingSkillMd/uploadSuccess/uploadFailed/invalidType/zipMissingSkillMd` 全 18 语言；移除已弃用的 `ui.skillEnabled` / `ui.skillDisabled`（toggle 成功不再弹 toast，Switch 状态本身已反馈）；handleToggleSkill reload 后用 orderMap 保留 modal 显示顺序避免 card 跳位

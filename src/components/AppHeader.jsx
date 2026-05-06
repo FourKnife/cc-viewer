@@ -1,8 +1,9 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { Space, Tag, Button, Dropdown, Popover, Modal, Collapse, Drawer, Switch, Radio, Tabs, Spin, Input, Table, Select, message } from 'antd';
 import { MessageOutlined, FileTextOutlined, ImportOutlined, DashboardOutlined, ExportOutlined, DownloadOutlined, SettingOutlined, BarChartOutlined, CodeOutlined, CopyOutlined, ApiOutlined, DeleteOutlined, ReloadOutlined, PlusOutlined, CloudDownloadOutlined, SwapOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { QRCodeCanvas } from 'qrcode.react';
-import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeToolUsageStats, computeSkillUsageStats, getModelMaxTokens, getEffectiveModel } from '../utils/helpers';
+import { formatTokenCount, computeTokenStats, computeCacheRebuildStats, computeToolUsageStats, computeSkillUsageStats, resolveCalibrationTokens, AUTO_COMPACT_USABLE_RATIO } from '../utils/helpers';
 import { isSystemText, classifyUserContent, isMainAgent } from '../utils/contentFilter';
 import { classifyRequest } from '../utils/requestType';
 import { resolveTeammateNames } from '../utils/contentFilter';
@@ -18,6 +19,21 @@ import SkillsManagerModal from './SkillsManagerModal';
 import appConfig from '../config.json';
 import { OPTIMISTIC_CLEAR_PERCENT } from '../AppBase';
 const CALIBRATION_MODELS = appConfig.calibrationModels;
+// 1.6.243 之前的旧值（按具体型号校准）→ 新的尺寸维度；让升级用户保留校准语义而不是降级到 'auto'
+// （若 localStorage 残留值在此 map 与 CALIBRATION_MODELS 都没命中，再 fallback 到 'auto'）
+const LEGACY_CALIBRATION_MIGRATION = {
+  'opus-4.7-1m': '1m',
+  'sonnet-4.6': '200k',
+  'glm5': '200k',
+  'kimi-k2.5': '200k',
+  'minimax-2.1': '200k',
+  'Qwen 3.5': '200k',
+};
+function readCalibrationModel() {
+  const raw = localStorage.getItem('ccv_calibrationModel') || 'auto';
+  const migrated = LEGACY_CALIBRATION_MIGRATION[raw] || raw;
+  return CALIBRATION_MODELS.some(m => m.value === migrated) ? migrated : 'auto';
+}
 import styles from './AppHeader.module.css';
 
 const LANG_OPTIONS = [
@@ -49,7 +65,7 @@ class AppHeader extends React.Component {
 
   constructor(props) {
     super(props);
-    this.state = { countdownText: '', promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false, cacheHighlightIdx: null, cacheHighlightFading: false, cdnModalVisible: false, cdnUrl: '', cdnLoading: false, calibrationModel: (v => CALIBRATION_MODELS.some(m => m.value === v) ? v : 'auto')(localStorage.getItem('ccv_calibrationModel') || 'auto'), proxyModalVisible: false, editingProxy: null, editForm: { name: '', baseURL: '', apiKey: '', models: '', activeModel: '' }, logDirDraft: null, qrPopoverOpen: false, _skillsModal: { open: false, loading: false, skills: [], error: null, toggling: new Set() },
+    this.state = { countdownText: '', promptModalVisible: false, promptData: [], promptViewMode: 'original', settingsDrawerVisible: false, globalSettingsVisible: false, projectStatsVisible: false, projectStats: null, projectStatsLoading: false, localUrl: '', pluginModalVisible: false, pluginsList: [], pluginsDir: '', deleteConfirmVisible: false, deleteTarget: null, processModalVisible: false, processList: [], processLoading: false, logoDropdownOpen: false, cacheHighlightIdx: null, cacheHighlightFading: false, cdnModalVisible: false, cdnUrl: '', cdnLoading: false, calibrationModel: readCalibrationModel(), proxyModalVisible: false, editingProxy: null, editForm: { name: '', baseURL: '', apiKey: '', models: '', activeModel: '' }, logDirDraft: null, qrPopoverOpen: false, _skillsModal: { open: false, loading: false, skills: [], error: null, toggling: new Set() },
       // 文件系统权威的 skill 列表（/api/skills 返回）；live-tail 下作为 popover chip 和管理弹窗的共享数据源。
       // null=未加载 / false=失败 / [] 或 Array=加载结果。workspace 切换由 componentDidUpdate + seq 控制。
       _fsSkills: null,
@@ -226,6 +242,7 @@ class AppHeader extends React.Component {
       nextProps.terminalVisible !== this.props.terminalVisible ||
       nextProps.contextWindow !== this.props.contextWindow ||
       nextProps.contextBarOptimistic !== this.props.contextBarOptimistic ||
+      nextProps.contextBarSlot !== this.props.contextBarSlot ||
       nextProps.serverCachedContent !== this.props.serverCachedContent ||
       nextProps.resumeAutoChoice !== this.props.resumeAutoChoice ||
       nextProps.themeColor !== this.props.themeColor ||
@@ -1186,6 +1203,86 @@ class AppHeader extends React.Component {
     );
   }
 
+  // 把 LiveTagPopover（血条 + popover trigger）通过 createPortal 渲染到
+  // TerminalPanel 工具栏（终端开启时）或 ChatInputBar 底部按钮区（终端关闭时）
+  // 提供的 slot DOM 节点。slot 由 App.jsx 集中持有；缺席时返回 null（raw 模式等）。
+  // 状态/数据所有权仍在 AppHeader（_cachePopoverOpen / _fsSkills / _memory /
+  // _lastContextPercent），portal 仅迁移 DOM 位置，不影响 React 子树重建。
+  renderContextBarPortal() {
+    const slot = this.props.contextBarSlot;
+    if (!slot) return null;
+
+    const { requests = [], isLocalLog, localLogFile, projectName, contextWindow, contextBarOptimistic, serverCachedContent } = this.props;
+
+    // 计算上下文使用率：距离 auto-compact 触发点的进度
+    // auto-compact 在 ~83.5% 时触发（扣除 16.5% buffer）
+    // 将 used_percentage 映射到 0~83.5% → 0~100%
+    let contextPercent = 0;
+    // 反向找最后一条带 usage 的 MainAgent 一次，contextPercent 与 contextTokens 共用
+    // AUTO 校准也依赖它的 model 名，所以必须在 calibrationTokens 求值之前完成
+    let lastMainAgent = null;
+    let lastTotalTokens = 0;
+    if (!isLocalLog && requests.length > 0) {
+      for (let i = requests.length - 1; i >= 0; i--) {
+        if (isMainAgent(requests[i]) && requests[i].response?.body?.usage) {
+          lastMainAgent = requests[i];
+          const u = lastMainAgent.response.body.usage;
+          lastTotalTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+          break;
+        }
+      }
+    }
+    // resolveCalibrationTokens 不变量保证返回 1000000 或 200000，永不为 0/null
+    const calibrationTokens = resolveCalibrationTokens(this.state.calibrationModel, lastMainAgent);
+    if (!isLocalLog) {
+      if (contextWindow?.used_percentage != null) {
+        if (lastTotalTokens > 0) {
+          const usable = calibrationTokens * AUTO_COMPACT_USABLE_RATIO;
+          contextPercent = Math.min(100, Math.max(0, Math.round(lastTotalTokens / usable * 100)));
+        } else {
+          const origMax = contextWindow.context_window_size || 200000;
+          contextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage * origMax / calibrationTokens / AUTO_COMPACT_USABLE_RATIO)));
+        }
+      } else if (lastMainAgent && lastTotalTokens > 0) {
+        const usable = calibrationTokens * AUTO_COMPACT_USABLE_RATIO;
+        contextPercent = Math.min(100, Math.max(0, Math.round(lastTotalTokens / usable * 100)));
+      }
+    }
+    if (contextPercent > 0) this._lastContextPercent = contextPercent;
+    if (contextPercent === 0 && this._lastContextPercent > 0) {
+      contextPercent = this._lastContextPercent;
+    }
+    // /clear 后立即把血条压到乐观水位；下一次 SSE context_window 推送会取消这个覆盖
+    if (contextBarOptimistic) contextPercent = OPTIMISTIC_CLEAR_PERCENT;
+    const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
+    const contextTokens = lastTotalTokens;
+
+    return createPortal(
+      <LiveTagPopover
+        isLocalLog={isLocalLog}
+        localLogFile={localLogFile}
+        cachePopoverOpen={this.state._cachePopoverOpen}
+        onOpenChange={this.handleCachePopoverOpenChange}
+        requests={requests}
+        serverCachedContent={serverCachedContent}
+        contextPercent={contextPercent}
+        contextTokens={contextTokens}
+        ctxColor={ctxColor}
+        onSkillImported={this.reloadFsSkills}
+        fsSkills={this.state._fsSkills}
+        memory={this.state._memory}
+        memoryRefreshing={this.state._memoryRefreshing}
+        calibrationModel={this.state.calibrationModel}
+        onCalibrationModelChange={this.handleCalibrationModelChange}
+        onOpenMemoryDetail={this.loadMemoryDetail}
+        onOpenSkillsModal={this.handleOpenSkillsModal}
+        onRefreshMemory={this.handleRefreshMemory}
+        projectName={projectName}
+      />,
+      slot
+    );
+  }
+
   render() {
     const { requestCount, requests = [], viewMode, cacheType, onToggleViewMode, onImportLocalLogs, onLangChange, isLocalLog, localLogFile, projectName, collapseToolResults, onCollapseToolResultsChange, expandThinking, onExpandThinkingChange, showFullToolContent, onShowFullToolContentChange, expandDiff, onExpandDiffChange, filterIrrelevant, onFilterIrrelevantChange, logDir, onLogDirChange, updateInfo, onDismissUpdate, cliMode, terminalVisible, onToggleTerminal, onReturnToWorkspaces, contextWindow, contextBarOptimistic, serverCachedContent, resumeAutoChoice, onResumeAutoChoiceToggle, onResumeAutoChoiceChange, themeColor, onThemeColorChange, autoApproveSeconds, onAutoApproveChange } = this.props;
     const { countdownText } = this.state;
@@ -1259,95 +1356,10 @@ class AppHeader extends React.Component {
               </Tag>
             ) : null;
           })()}
-          {(() => {
-            // 计算上下文使用率：距离 auto-compact 触发点的进度
-            // auto-compact 在 ~83.5% 时触发（扣除 16.5% buffer）
-            // 将 used_percentage 映射到 0~83.5% → 0~100%
-            let contextPercent = 0;
-            const calibration = CALIBRATION_MODELS.find(m => m.value === this.state.calibrationModel);
-            const calibrationTokens = calibration?.tokens; // undefined for 'auto'
-            // 反向找最后一条带 usage 的 MainAgent 一次，contextPercent 与 contextTokens 共用
-            // （以前 calibration / fallback / contextTokens 三个分支各扫一次，是 3*O(N)）
-            let lastMainAgent = null;
-            let lastTotalTokens = 0;
-            if (!isLocalLog && requests.length > 0) {
-              for (let i = requests.length - 1; i >= 0; i--) {
-                if (isMainAgent(requests[i]) && requests[i].response?.body?.usage) {
-                  lastMainAgent = requests[i];
-                  const u = lastMainAgent.response.body.usage;
-                  lastTotalTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-                  break;
-                }
-              }
-            }
-            if (!isLocalLog) {
-              if (calibrationTokens && contextWindow?.used_percentage != null) {
-                // 校准模式 + 精确数据：用实际 token 数重新计算百分比
-                if (lastTotalTokens > 0) {
-                  const usable = calibrationTokens * 0.835;
-                  contextPercent = Math.min(100, Math.max(0, Math.round(lastTotalTokens / usable * 100)));
-                } else {
-                  // 无 token 数据时，按比例缩放 used_percentage
-                  const origMax = contextWindow.context_window_size || 200000;
-                  contextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage * origMax / calibrationTokens / 83.5 * 100)));
-                }
-              } else if (contextWindow?.used_percentage != null) {
-                // 精确模式：statusLine 推送的 used_percentage
-                // 如果 settings.json 指定了模型且上下文大小与 statusLine 检测的不同，按比例修正
-                const settingsTokens = this.state.settingsModel ? getModelMaxTokens(this.state.settingsModel) : 0;
-                const detectedMax = contextWindow.context_window_size || 200000;
-                if (settingsTokens && settingsTokens !== detectedMax) {
-                  contextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage * detectedMax / settingsTokens / 83.5 * 100)));
-                } else {
-                  contextPercent = Math.min(100, Math.max(0, Math.round(contextWindow.used_percentage / 83.5 * 100)));
-                }
-              } else if (lastMainAgent) {
-                // fallback：用最后一个 MainAgent 的 total input 估算
-                const maxTokens = calibrationTokens || contextWindow?.context_window_size || getModelMaxTokens(getEffectiveModel(lastMainAgent) || this.state.settingsModel);
-                const usable = maxTokens * 0.835;
-                if (usable > 0 && lastTotalTokens > 0) {
-                  contextPercent = Math.min(100, Math.max(0, Math.round(lastTotalTokens / usable * 100)));
-                }
-              }
-            }
-            // 记录最后一次有效值（>0），供下次渲染回退时使用。
-            // 抽出 CachePopoverContent 后此 side effect 从子组件挪到父级 IIFE，行为不变。
-            if (contextPercent > 0) this._lastContextPercent = contextPercent;
-            // 回退到最后一次有效值，避免闪烁
-            if (contextPercent === 0 && this._lastContextPercent > 0) {
-              contextPercent = this._lastContextPercent;
-            }
-            // /clear 后立即把血条压到乐观水位；下一次 SSE context_window 推送会取消这个覆盖
-            if (contextBarOptimistic) contextPercent = OPTIMISTIC_CLEAR_PERCENT;
-            const ctxColor = contextPercent >= 80 ? 'var(--color-error-light)' : contextPercent >= 60 ? 'var(--color-warning-light)' : 'var(--color-success)';
-
-            // 上下文绝对值（独立于 contextPercent 的 calibration/precise 分支），给 cache popover "29.5K (11%)" 的 K 用
-            const contextTokens = lastTotalTokens;
-
-            return (
-              <LiveTagPopover
-                isLocalLog={isLocalLog}
-                localLogFile={localLogFile}
-                cachePopoverOpen={this.state._cachePopoverOpen}
-                onOpenChange={this.handleCachePopoverOpenChange}
-                requests={requests}
-                serverCachedContent={serverCachedContent}
-                contextPercent={contextPercent}
-                contextTokens={contextTokens}
-                ctxColor={ctxColor}
-                onSkillImported={this.reloadFsSkills}
-                fsSkills={this.state._fsSkills}
-                memory={this.state._memory}
-                memoryRefreshing={this.state._memoryRefreshing}
-                calibrationModel={this.state.calibrationModel}
-                onCalibrationModelChange={this.handleCalibrationModelChange}
-                onOpenMemoryDetail={this.loadMemoryDetail}
-                onOpenSkillsModal={this.handleOpenSkillsModal}
-                onRefreshMemory={this.handleRefreshMemory}
-                projectName={projectName}
-              />
-            );
-          })()}
+          <span className={styles.headerProjectName}>
+            {t('ui.liveMonitoring')}{projectName ? `:${projectName}` : ''}
+          </span>
+          {this.renderContextBarPortal()}
           {updateInfo && (
             <Tag
               color="orange"

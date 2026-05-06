@@ -19,7 +19,7 @@ const SPEECH_LANG_MAP = {
   tr: 'tr-TR', uk: 'uk-UA',
 };
 
-function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, onKeyDown, onChange, onSend, onStop, onSuggestionClick, onUploadPath, presetItems, onPresetSend, onOpenPresetModal, onOpenUltraPlan, onClearContext, isStreaming, streamingFading, pendingImages, onRemovePendingImage }) {
+function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, onKeyDown, onChange, onSend, onStop, onSuggestionClick, onUploadPath, presetItems, onPresetSend, onOpenPresetModal, onOpenUltraPlan, onClearContext, isStreaming, streamingFading, pendingImages, onRemovePendingImage, setContextBarSlot }) {
   const [plusOpen, setPlusOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [interimText, setInterimText] = useState('');
@@ -256,6 +256,7 @@ function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, 
           )}
         </div>
         <div className={styles.chatInputBottom}>
+          <div className={styles.chatInputBottomLeft}>
           <div className={styles.plusArea}>
             <button className={`${styles.plusBtn}${plusOpen ? ` ${styles.plusBtnOpen}` : ''}`} onClick={() => setPlusOpen(p => !p)} title={t('ui.chatInput.more')}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -354,6 +355,13 @@ function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, 
               </svg>
             </button>
           )}
+          </div>
+          {/* 中段：血条 portal slot；终端关闭 + 非纯移动端时挂在左/右控件之间，
+              flex-basis 200 + flex-shrink 1 自适应填充至 200px 上限；AppHeader 通过 createPortal 把 LiveTagPopover 渲染进来 */}
+          {!(isMobile && !isPad) && !terminalVisible && setContextBarSlot && (
+            <div className={styles.ctxBarSlot} ref={setContextBarSlot} />
+          )}
+          <div className={styles.chatInputBottomRight}>
           <div className={styles.chatInputHint}>
             {(isMobile && !isPad)
               ? null
@@ -401,6 +409,7 @@ function ChatInputBar({ inputRef, inputEmpty, inputSuggestion, terminalVisible, 
                 </svg>
               </button>
             )}
+          </div>
           </div>
         </div>
       </div>

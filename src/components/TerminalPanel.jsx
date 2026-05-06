@@ -1444,6 +1444,7 @@ class TerminalPanel extends React.Component {
         <input type="file" ref={this.fileInputRef} className={styles.hiddenFileInput} onChange={this.handleFileUpload} />
         {(!isMobile || isPad) && (
           <div className={styles.terminalToolbar}>
+            <div className={styles.toolbarLeft}>
             {this.state.agentTeamEnabled ? (
               <Popover
                 trigger="hover"
@@ -1669,8 +1670,13 @@ class TerminalPanel extends React.Component {
                 </Popconfirm>
               );
             })()}
+            </div>
+            {/* 中段：血条 portal slot；左/右两端控件分别由 toolbarLeft / toolbarRight 包裹，
+                slot 在中间用 flex-basis 200 + flex-shrink 1 自适应左右控件之间的空间，封顶 200px */}
+            <div className={styles.ctxBarSlot} ref={this.props.setContextBarSlot} />
+            <div className={styles.toolbarRight}>
             <button
-              className={`${styles.toolbarBtn} ${styles.toolbarBtnRight}${this.state.scratchOpen ? ` ${styles.toolbarBtnActive}` : ''}`}
+              className={`${styles.toolbarBtn}${this.state.scratchOpen ? ` ${styles.toolbarBtnActive}` : ''}`}
               onClick={this.toggleScratch}
               aria-pressed={this.state.scratchOpen}
               aria-label={this.state.scratchOpen ? t('ui.terminal.scratchTerminalClose') : t('ui.terminal.scratchTerminalOpen')}
@@ -1678,6 +1684,7 @@ class TerminalPanel extends React.Component {
             >
               <ScratchTerminalIcon />
             </button>
+            </div>
           </div>
         )}
         {(!isMobile || isPad) && this.state.scratchOpen && (

@@ -449,8 +449,32 @@
   margin-bottom: 10px;
 }
 
-.toolbarBtnRight {
+/* 终端工具栏 3 段式：
+   - .toolbarLeft 紧贴左边界，按内容宽度
+   - .ctxBarSlot 中段，flex-basis 200 + flex-shrink 1：左右两端控件之间剩余空间都让给 slot，封顶 200px
+   - .toolbarRight 用 margin-left:auto 抢占 slot 之后的剩余空间贴右边界
+   slot 内 `> *` 让 LiveTagPopover 的 .liveTag 撑满整个 slot 宽度（否则血条只显示成内容宽度的小段） */
+.toolbarLeft,
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.toolbarRight {
   margin-left: auto;
+}
+.ctxBarSlot {
+  flex: 0 1 200px;
+  max-width: 200px;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  height: 26px;
+}
+.ctxBarSlot > * {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .toolbarBtnActive {

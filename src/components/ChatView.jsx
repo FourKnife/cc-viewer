@@ -4029,6 +4029,7 @@ class ChatView extends React.Component {
               streamingFading={this.state.streamingFading}
               pendingImages={this.state.pendingImages}
               onRemovePendingImage={this._removePendingImage}
+              setContextBarSlot={this.props.setContextBarSlot}
             />
             </div>
             <UltraPlanModal
@@ -4093,6 +4094,7 @@ class ChatView extends React.Component {
                 modelName={this._reqScanCache?.modelName}
                 getChatScroller={() => this._getScrollContainer()}
                 onClearContextOptimistic={this.props.onClearContextOptimistic}
+                setContextBarSlot={this.props.setContextBarSlot}
                 />
               </div>
             </>
